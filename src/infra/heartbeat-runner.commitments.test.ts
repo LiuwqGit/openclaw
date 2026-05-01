@@ -192,7 +192,7 @@ describe("runHeartbeatOnce commitments", () => {
           path.join(tmpDir, "HEARTBEAT.md"),
           `tasks:
   - name: deployment-status
-    interval: 5m
+    interval: 0
     prompt: Check deployment status with the normal tools
 `,
           "utf-8",
