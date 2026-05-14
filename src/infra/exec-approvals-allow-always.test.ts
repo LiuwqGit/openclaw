@@ -612,7 +612,7 @@ describe("resolveAllowAlwaysPatterns", () => {
     }
   });
 
-  it("rejects shell-wrapper positional argv carriers", async () => {
+  it("persists shell-wrapper positional argv carrier executables", async () => {
     if (process.platform === "win32") {
       return;
     }
@@ -622,7 +622,7 @@ describe("resolveAllowAlwaysPatterns", () => {
     });
   });
 
-  it("rejects exec positional argv carriers", async () => {
+  it("persists exec positional argv carrier executables", async () => {
     if (process.platform === "win32") {
       return;
     }
