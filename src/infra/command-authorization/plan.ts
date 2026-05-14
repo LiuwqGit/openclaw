@@ -713,6 +713,7 @@ function promptOnlyReasonsFromRisks(risks: readonly CommandRisk[]): CommandPromp
       risk.kind === "alias" ||
       risk.kind === "eval" ||
       risk.kind === "source" ||
+      risk.kind === "shell-state-mutation" ||
       risk.kind === "function-definition" ||
       risk.kind === "line-continuation" ||
       risk.kind === "process-substitution" ||
@@ -784,6 +785,7 @@ function promptOnlyReasonsFromUnsupportedRender(
         risk.kind === "alias" ||
         risk.kind === "eval" ||
         risk.kind === "source" ||
+        risk.kind === "shell-state-mutation" ||
         risk.kind === "function-definition" ||
         risk.kind === "line-continuation" ||
         risk.kind === "process-substitution" ||

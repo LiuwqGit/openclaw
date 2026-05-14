@@ -61,6 +61,7 @@ export type CommandRisk =
   | { kind: "eval"; text: string; span: SourceSpan }
   | { kind: "source"; command: string; text: string; span: SourceSpan }
   | { kind: "alias"; text: string; span: SourceSpan }
+  | { kind: "shell-state-mutation"; command: string; text: string; span: SourceSpan }
   | { kind: "function-definition"; name: string; text: string; span: SourceSpan }
   | { kind: "line-continuation"; text: string; span: SourceSpan }
   | { kind: "heredoc"; text: string; span: SourceSpan }

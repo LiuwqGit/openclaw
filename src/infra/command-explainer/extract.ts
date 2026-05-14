@@ -33,6 +33,17 @@ type MutableExplanation = {
   hasParseError: boolean;
 };
 
+const SHELL_STATE_MUTATING_BUILTINS = new Set([
+  "cd",
+  "export",
+  "unset",
+  "set",
+  "hash",
+  "ulimit",
+  "umask",
+  "trap",
+]);
+
 type DynamicArgument = {
   index: number;
   text: string;
@@ -723,9 +734,37 @@ function argvFromTestCommand(node: TreeSitterNode, state: WalkState): CommandArg
   return { argv, arguments: argumentsList, dynamicArguments };
 }
 
+function argvFromNamedBuiltinCommand(node: TreeSitterNode, state: WalkState): CommandArgv | null {
+  const executable = firstShellToken(node.text);
+  if (!executable) {
+    return null;
+  }
+  const argv = [executable];
+  const argumentsList: CommandArgument[] = [];
+  const dynamicArguments: DynamicArgument[] = [];
+  for (const child of namedChildren(node)) {
+    const value = shellWordValue(child);
+    const argument = argumentFromNode(argv.length, child, value, state.spanBase);
+    argumentsList.push(argument);
+    if (value.kind === "dynamic") {
+      dynamicArguments.push({
+        index: argument.index,
+        text: argument.text,
+        value: argument.value,
+        span: argument.span,
+      });
+    }
+    argv.push(value.value);
+  }
+  return { argv, arguments: argumentsList, dynamicArguments };
+}
+
 function isCommandLikeNode(node: TreeSitterNode): boolean {
   return (
-    node.type === "command" || node.type === "declaration_command" || node.type === "test_command"
+    node.type === "command" ||
+    node.type === "declaration_command" ||
+    node.type === "test_command" ||
+    node.type === "unset_command"
   );
 }
 
@@ -993,6 +1032,9 @@ function recordCommandRisks(
   if (normalizedExecutable === "alias") {
     output.risks.push({ kind: "alias", text, span });
   }
+  if (SHELL_STATE_MUTATING_BUILTINS.has(normalizedExecutable)) {
+    output.risks.push({ kind: "shell-state-mutation", command: normalizedExecutable, text, span });
+  }
   const carrierShellWrapper = !shellWrapper.isWrapper
     ? detectShellWrapperThroughCarrierArgv(argv, shellCommandFlag)
     : null;
@@ -1060,7 +1102,8 @@ async function walk(
   if (
     node.type === "command" ||
     node.type === "declaration_command" ||
-    node.type === "test_command"
+    node.type === "test_command" ||
+    node.type === "unset_command"
   ) {
     const nameNode = node.type === "command" ? commandNameNode(node) : null;
     const parsed =
@@ -1070,7 +1113,9 @@ async function walk(
           : null
         : node.type === "declaration_command"
           ? argvFromDeclarationCommand(node, state)
-          : argvFromTestCommand(node, state);
+          : node.type === "test_command"
+            ? argvFromTestCommand(node, state)
+            : argvFromNamedBuiltinCommand(node, state);
     if (node.type === "command" && nameNode && !parsed) {
       output.risks.push({
         kind: "dynamic-executable",

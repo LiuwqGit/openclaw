@@ -22,6 +22,8 @@ function riskLabel(risk: CommandRisk): string {
       return `${risk.command} dynamic argument`;
     case "source":
       return risk.command;
+    case "shell-state-mutation":
+      return risk.command;
     case "function-definition":
       return risk.name;
     default:

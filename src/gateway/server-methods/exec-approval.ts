@@ -371,8 +371,7 @@ export function createExecApprovalHandlers(
       record.requestedByDeviceId = client?.connect?.device?.id ?? null;
       record.requestedByClientId = client?.connect?.client?.id ?? null;
       record.requestedByDeviceTokenAuth = client?.isDeviceTokenAuth === true;
-      // Use register() to synchronously add to pending map before sending any response.
-      // This ensures the approval ID is valid immediately after the "accepted" response.
+      // Register before analysis so explicit IDs can be resolved while command analysis runs.
       let decisionPromise: Promise<
         import("../../infra/exec-approvals.js").ExecApprovalDecision | null
       >;
@@ -390,7 +389,20 @@ export function createExecApprovalHandlers(
         commandAnalysisPromise,
         timeoutMs,
       );
-      manager.startTimeout(record.id, timeoutMs);
+      if (!manager.startTimeout(record.id, timeoutMs)) {
+        const decision = await decisionPromise;
+        respond(
+          true,
+          {
+            id: record.id,
+            decision,
+            createdAtMs: record.createdAtMs,
+            expiresAtMs: record.expiresAtMs,
+          },
+          undefined,
+        );
+        return;
+      }
       const requestEvent: ExecApprovalRequest = {
         id: record.id,
         request: record.request,

@@ -421,6 +421,46 @@ describe("resolveAllowAlwaysPatterns", () => {
     ).toBe(true);
   });
 
+  it("does not satisfy allowlist or persist allow-always for shell state builtins", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const tool = makeExecutable(dir, "tool");
+    const bash = makeExecutable(dir, "bash");
+    const ls = makeExecutable(dir, "ls");
+    const env = makePathEnv(dir);
+    const safeBins = resolveSafeBins(undefined);
+
+    for (const command of [
+      "cd /tmp; ./tool",
+      "export BASH_ENV=/tmp/payload; bash -c 'echo ok'",
+      "unset PATH; ls",
+      "set -a; SECRET=value; ./tool",
+      "hash -p /tmp/evil ls; ls",
+      "trap 'id > /tmp/pwned' EXIT; echo ok",
+    ]) {
+      const { analysis, persisted } = await resolvePersistedPatterns({
+        command,
+        dir,
+        env,
+        safeBins,
+      });
+      expect(analysis.analysisOk).toBe(false);
+      expect(persisted).toStrictEqual([]);
+
+      const result = await evaluateShellAllowlist({
+        command,
+        allowlist: [{ pattern: tool }, { pattern: bash }, { pattern: ls }],
+        safeBins,
+        cwd: dir,
+        env,
+        platform: process.platform,
+      });
+      expect(result.allowlistSatisfied).toBe(false);
+    }
+  });
+
   it("unwraps shell wrappers and persists the inner executable instead", async () => {
     if (process.platform === "win32") {
       return;

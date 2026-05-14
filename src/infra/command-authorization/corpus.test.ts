@@ -431,6 +431,14 @@ describe("command authorization planner corpus", () => {
     ". ./profile; ls",
     "source ./profile; ls",
     "eval ls",
+    "cd /tmp; ./tool",
+    "export BASH_ENV=/tmp/payload; bash -c 'echo ok'",
+    "unset PATH; ls",
+    "set -a; SECRET=value; ./tool",
+    "hash -p /tmp/evil ls; ls",
+    "trap 'id > /tmp/pwned' EXIT; echo ok",
+    "umask 000; touch file",
+    "ulimit -f 1; ./tool",
   ])("makes shell state mutation prompt-only: %s", async (command) => {
     const plan = await planCommandForAuthorization({
       dialect: "posix-shell",

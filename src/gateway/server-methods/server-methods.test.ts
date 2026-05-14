@@ -1263,6 +1263,61 @@ describe("exec approval handlers", () => {
     }
   });
 
+  it("does not broadcast a stale approval request when resolved during command analysis", async () => {
+    const { manager, handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    let resolveAnalysis:
+      | ((value: Awaited<ReturnType<ResolveCommandAnalysisSummaryForDisplay>>) => void)
+      | undefined;
+    const analysisPromise = new Promise<
+      Awaited<ReturnType<ResolveCommandAnalysisSummaryForDisplay>>
+    >((resolve) => {
+      resolveAnalysis = resolve;
+    });
+    commandAnalysisMocks.resolveOverride = () => analysisPromise;
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        id: "approval-analysis-race",
+        twoPhase: true,
+        host: "gateway",
+        command: "python3 -c 'print(1)'",
+        commandArgv: ["python3", "script.py"],
+        systemRunPlan: undefined,
+        nodeId: undefined,
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(manager.getSnapshot("approval-analysis-race")?.resolvedAtMs).toBeUndefined();
+    });
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: "approval-analysis-race",
+      respond: resolveRespond,
+      context,
+    });
+    expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+
+    if (!resolveAnalysis) {
+      throw new Error("command analysis resolver was not installed");
+    }
+    resolveAnalysis(null);
+    await requestPromise;
+
+    expect(broadcasts.some((entry) => entry.event === "exec.approval.resolved")).toBe(true);
+    expect(broadcasts.some((entry) => entry.event === "exec.approval.requested")).toBe(false);
+    expect(lastMockCallArg(respond)).toBe(true);
+    expectRecordFields(lastMockCallArg(respond, 1), {
+      id: "approval-analysis-race",
+      decision: "allow-once",
+    });
+  });
+
   it("lists pending exec approvals", async () => {
     const { handlers, respond, context } = createExecApprovalFixture();
     const requestPromise = requestExecApproval({
