@@ -1306,29 +1306,15 @@ describe("exec approval handlers", () => {
       respond: resolveRespond,
       context,
     });
-    expect(mockCallArg(resolveRespond)).toBe(false);
+    expect(mockCallArg(resolveRespond)).toBe(true);
 
     if (!resolveAnalysis) {
       throw new Error("command analysis resolver was not installed");
     }
     resolveAnalysis(null);
-    const { id } = await waitForRequestedExecApprovalPayload(broadcasts);
-
-    const visibleGetRespond = vi.fn();
-    await getExecApproval({ handlers, id, respond: visibleGetRespond });
-    expect(mockCallArg(visibleGetRespond)).toBe(true);
-
-    const visibleResolveRespond = vi.fn();
-    await resolveExecApproval({
-      handlers,
-      id,
-      respond: visibleResolveRespond,
-      context,
-    });
     await requestPromise;
 
     expect(broadcasts.some((entry) => entry.event === "exec.approval.resolved")).toBe(true);
-    expect(mockCallArg(visibleResolveRespond)).toBe(true);
   });
 
   it("rejects duplicate explicit approval ids while command analysis is pending", async () => {

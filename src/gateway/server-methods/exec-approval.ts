@@ -124,6 +124,7 @@ export function createExecApprovalHandlers(
   opts?: { forwarder?: ExecApprovalForwarder; iosPushDelivery?: ExecApprovalIosPushDelivery },
 ): GatewayRequestHandlers {
   const pendingExplicitApprovalIds = new Set<string>();
+  const pendingAnalysisApprovalIds = new Set<string>();
 
   return {
     "exec.approval.get": async ({ params, respond, client }) => {
@@ -151,6 +152,10 @@ export function createExecApprovalHandlers(
         respondPendingApprovalLookupError({ respond, response: resolved.response });
         return;
       }
+      if (pendingAnalysisApprovalIds.has(resolved.approvalId)) {
+        respondPendingApprovalLookupError({ respond, response: "missing" });
+        return;
+      }
       const { commandText, commandPreview } = resolveExecApprovalCommandDisplay(
         resolved.snapshot.request,
       );
@@ -175,6 +180,7 @@ export function createExecApprovalHandlers(
         manager
           .listPendingRecords()
           .filter((record) => isApprovalRecordVisibleToClient({ record, client }))
+          .filter((record) => !pendingAnalysisApprovalIds.has(record.id))
           .map((record) => ({
             id: record.id,
             request: record.request,
@@ -379,25 +385,7 @@ export function createExecApprovalHandlers(
       record.requestedByDeviceId = client?.connect?.device?.id ?? null;
       record.requestedByClientId = client?.connect?.client?.id ?? null;
       record.requestedByDeviceTokenAuth = client?.isDeviceTokenAuth === true;
-      try {
-        record.request.commandAnalysis = await resolveCommandAnalysisBeforeApprovalRequest(
-          commandAnalysisPromise,
-          timeoutMs,
-        );
-      } catch (err) {
-        if (explicitId) {
-          pendingExplicitApprovalIds.delete(explicitId);
-        }
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `command analysis failed: ${String(err)}`),
-        );
-        return;
-      }
-      let decisionPromise: Promise<
-        import("../../infra/exec-approvals.js").ExecApprovalDecision | null
-      >;
+      let decisionPromise: Promise<ExecApprovalDecision | null>;
       try {
         decisionPromise = manager.register(record, timeoutMs, { startTimer: false });
       } catch (err) {
@@ -414,6 +402,26 @@ export function createExecApprovalHandlers(
       if (explicitId) {
         pendingExplicitApprovalIds.delete(explicitId);
       }
+      pendingAnalysisApprovalIds.add(record.id);
+      try {
+        record.request.commandAnalysis = await resolveCommandAnalysisBeforeApprovalRequest(
+          commandAnalysisPromise,
+          timeoutMs,
+        );
+      } catch (err) {
+        pendingAnalysisApprovalIds.delete(record.id);
+        if (explicitId) {
+          pendingExplicitApprovalIds.delete(explicitId);
+        }
+        manager.expire(record.id, "command-analysis-failed");
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, `command analysis failed: ${String(err)}`),
+        );
+        return;
+      }
+      pendingAnalysisApprovalIds.delete(record.id);
       if (!manager.startTimeout(record.id, timeoutMs)) {
         const decision = await decisionPromise;
         respond(
