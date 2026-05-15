@@ -456,6 +456,20 @@ describeNonWin("exec script preflight", () => {
     expect(text).toBe("ok");
   });
 
+  it("falls back to raw control-command scanning for oversized commands", async () => {
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      allowBackground: false,
+    });
+    const result = await tool.execute("call-large-shell-command", {
+      command: `true # ${"x".repeat(140 * 1024)}`,
+    });
+
+    expect((result.details as { status?: string }).status).toBe("completed");
+  });
+
   it("skips preflight file reads for script paths outside the workdir", async () => {
     await withTempDir("openclaw-exec-preflight-parent-", async (parent) => {
       const outsidePath = path.join(parent, "outside.js");

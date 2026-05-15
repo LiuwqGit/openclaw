@@ -527,4 +527,34 @@ describe("processGatewayAllowlist", () => {
     expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledTimes(1);
     expect(runExecProcessMock).not.toHaveBeenCalled();
   });
+
+  it("denies allowlist timeout fallback when enforcement is unavailable", async () => {
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "allowlist",
+      hostAsk: "always",
+      askFallback: "allowlist",
+    });
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue(null);
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: true },
+      approvedByAsk: false,
+      deniedReason: null,
+    });
+
+    const result = await runGatewayAllowlist({
+      command: "sh -c 'timeout 1 sleep 100'",
+      ask: "always",
+    });
+
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+    await vi.waitFor(() => {
+      expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledWith(
+        null,
+        "Exec denied (gateway id=req-1, approval-timeout (allowlist-plan-unavailable)): sh -c 'timeout 1 sleep 100'",
+      );
+    });
+    expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledTimes(1);
+    expect(runExecProcessMock).not.toHaveBeenCalled();
+  });
 });

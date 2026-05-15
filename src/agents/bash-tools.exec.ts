@@ -1191,17 +1191,26 @@ function parseOpenClawChannelsLoginShellCommand(raw: string): boolean {
 
 async function rejectUnsafeControlShellCommand(command: string): Promise<void> {
   const rawCommand = command.trim();
-  const plan = await planCommandForAuthorization({ dialect: "posix-shell", command: rawCommand });
-  const analysis = createExecCommandAnalysisFromAuthorizationPlan({ plan });
-  const candidates = analysis?.ok
-    ? analysis.segments.flatMap((segment) => buildCommandPayloadCandidates(segment.argv))
-    : buildRawShellCommandCandidates(rawCommand);
-  const explanation = await explainShellCommand(rawCommand);
-  if (explanation.ok) {
-    for (const nestedCommand of explanation.nestedCommands) {
-      candidates.push(nestedCommand.text);
-      candidates.push(...buildCommandPayloadCandidates(nestedCommand.argv));
+  let candidates: string[];
+  try {
+    const plan = await planCommandForAuthorization({ dialect: "posix-shell", command: rawCommand });
+    const analysis = createExecCommandAnalysisFromAuthorizationPlan({ plan });
+    candidates = analysis?.ok
+      ? analysis.segments.flatMap((segment) => buildCommandPayloadCandidates(segment.argv))
+      : buildRawShellCommandCandidates(rawCommand);
+  } catch {
+    candidates = buildRawShellCommandCandidates(rawCommand);
+  }
+  try {
+    const explanation = await explainShellCommand(rawCommand);
+    if (explanation.ok) {
+      for (const nestedCommand of explanation.nestedCommands) {
+        candidates.push(nestedCommand.text);
+        candidates.push(...buildCommandPayloadCandidates(nestedCommand.argv));
+      }
     }
+  } catch {
+    // Raw candidates above preserve the legacy guard when rich parsing is unavailable.
   }
   for (const candidate of candidates) {
     if (parseExecApprovalShellCommand(candidate)) {

@@ -501,7 +501,9 @@ export async function processGatewayAllowlist(
       let deniedReason = initialDeniedReason;
 
       if (baseDecision.timedOut && askFallback === "allowlist") {
-        if (!analysisOk || !allowlistSatisfied) {
+        if (requiresAllowlistPlanApproval) {
+          deniedReason = "approval-timeout (allowlist-plan-unavailable)";
+        } else if (!analysisOk || !allowlistSatisfied) {
           deniedReason = "approval-timeout (allowlist-miss)";
         } else {
           approvedByAsk = true;
