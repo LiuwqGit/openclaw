@@ -228,6 +228,10 @@ export function createSlackMessageHandler(params: {
     return true;
   };
 
+  void loadSlackMessagePipeline().catch((err) => {
+    ctx.runtime.error?.(`slack message pipeline preload failed: ${formatErrorMessage(err)}`);
+  });
+
   return async (message, opts) => {
     recordSlackQaTrace("inbound.event", {
       hasFiles: Boolean(message.files && message.files.length > 0),
