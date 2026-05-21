@@ -153,12 +153,13 @@ Control UI: the Nodes tab includes a small "Exec node binding" panel for the sam
 
 ## Session overrides (`/exec`)
 
-Use `/exec` to set **per-session** defaults for `host`, `security`, `ask`, and `node`.
+Use `/exec` to set **per-session** defaults for `mode`, `host`, `security`, `ask`, and `node`.
 Send `/exec` with no arguments to show the current values.
 
 Example:
 
 ```
+/exec mode=auto host=gateway
 /exec host=auto security=allowlist ask=on-miss node=mac-1
 ```
 

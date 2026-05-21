@@ -456,6 +456,12 @@ export async function applySessionsPatchToStore(params: {
 
   const patchSetsExecMode =
     "execMode" in patch && patch.execMode !== null && patch.execMode !== undefined;
+  const patchSetsLegacyExecPolicy =
+    ("execSecurity" in patch && patch.execSecurity !== null && patch.execSecurity !== undefined) ||
+    ("execAsk" in patch && patch.execAsk !== null && patch.execAsk !== undefined);
+  if (patchSetsExecMode && patchSetsLegacyExecPolicy) {
+    return invalid("Use either execMode or legacy execSecurity/execAsk, not both.");
+  }
   const inheritedExecMode = normalizeExecMode(next.execMode);
   const inheritedExecModePolicy =
     inheritedExecMode !== null ? resolveExecPolicyForMode(inheritedExecMode) : undefined;

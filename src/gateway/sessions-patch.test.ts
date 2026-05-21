@@ -771,6 +771,18 @@ describe("gateway sessions patch", () => {
     expect(entry.execAsk).toBeUndefined();
   });
 
+  test("rejects mixed execMode and legacy exec policy patches", async () => {
+    const result = await runPatch({
+      patch: {
+        key: MAIN_SESSION_KEY,
+        execMode: "auto",
+        execSecurity: "deny",
+        execAsk: "off",
+      },
+    });
+    expectPatchError(result, "Use either execMode or legacy execSecurity/execAsk");
+  });
+
   test("legacy exec policy patches clear stale execMode", async () => {
     const entry = expectPatchOk(
       await runPatch({
