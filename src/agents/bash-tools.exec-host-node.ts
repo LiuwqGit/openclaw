@@ -23,7 +23,6 @@ import {
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
 import * as execHostShared from "./bash-tools.exec-host-shared.js";
 import {
-  DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS,
   DEFAULT_NOTIFY_TAIL_CHARS,
   createApprovalSlug,
   normalizeNotifyOutput,
@@ -35,45 +34,6 @@ import { callGatewayTool } from "./tools/gateway.js";
 export type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
 
 const APPROVED_NODE_INVOKE_SCOPES = [WRITE_SCOPE, APPROVALS_SCOPE];
-
-async function registerResolvedNodeAutoReviewApproval(params: {
-  approvalId: string;
-  request: ExecuteNodeHostCommandParams;
-  target: Awaited<ReturnType<typeof resolveNodeExecutionTarget>>;
-  prepared: Awaited<ReturnType<typeof prepareNodeSystemRun>>;
-  hostSecurity: ReturnType<typeof execHostShared.resolveExecHostApprovalContext>["hostSecurity"];
-  hostAsk: ReturnType<typeof execHostShared.resolveExecHostApprovalContext>["hostAsk"];
-}): Promise<boolean> {
-  try {
-    await registerExecApprovalRequestForHostOrThrow({
-      approvalId: params.approvalId,
-      systemRunPlan: params.prepared.plan,
-      env: params.target.env,
-      workdir: params.prepared.cwd,
-      host: "node",
-      nodeId: params.target.nodeId,
-      security: params.hostSecurity,
-      ask: params.hostAsk,
-      requireDeliveryRoute: false,
-      warningText: params.request.warnings.join("\n").trim() || undefined,
-      commandHighlighting: params.request.commandHighlighting,
-      ...buildExecApprovalRequesterContext({
-        agentId: params.prepared.agentId,
-        sessionKey: params.prepared.sessionKey,
-      }),
-      ...buildExecApprovalTurnSourceContext(params.request),
-    });
-    await callGatewayTool(
-      "exec.approval.resolve",
-      { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
-      { id: params.approvalId, decision: "allow-once" },
-      { scopes: [APPROVALS_SCOPE] },
-    );
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 export async function executeNodeHostCommand(
   params: ExecuteNodeHostCommandParams,
@@ -144,21 +104,9 @@ export async function executeNodeHostCommand(
         },
       });
       if (decision.decision === "allow-once") {
-        const approvalId = crypto.randomUUID();
-        if (
-          await registerResolvedNodeAutoReviewApproval({
-            approvalId,
-            request: params,
-            target,
-            prepared,
-            hostSecurity,
-            hostAsk,
-          })
-        ) {
-          inlineApprovedByAsk = true;
-          inlineApprovalDecision = "allow-once";
-          inlineApprovalId = approvalId;
-        }
+        inlineApprovedByAsk = true;
+        inlineApprovalDecision = "allow-once";
+        inlineApprovalId = crypto.randomUUID();
       }
       if (decision.decision === "deny") {
         return failedTextResult(`exec auto-review denied command: ${decision.rationale}`, {

@@ -1075,6 +1075,24 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     },
   );
 
+  it("fails closed when legacy full exec with ask cannot use full Codex sandbox", () => {
+    const config = {
+      tools: {
+        exec: {
+          security: "full",
+          ask: "on-miss",
+        },
+      },
+    };
+
+    expect(() =>
+      resolveRuntimeForTest({
+        execPolicy: resolveOpenClawExecPolicyForCodexAppServer({ config }),
+        requirementsToml: 'allowed_sandbox_modes = ["read-only", "workspace-write"]\n',
+      }),
+    ).toThrow("legacy full exec security with ask requires Codex app-server danger-full-access");
+  });
+
   it("treats ask-only legacy overrides as normalized mode overrides", () => {
     const config = {
       tools: {

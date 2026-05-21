@@ -27,6 +27,7 @@ type CodexAppServerDefaultPolicy = {
   approvalPolicy?: CodexAppServerApprovalPolicy;
   approvalsReviewer?: CodexAppServerApprovalsReviewer;
   sandbox?: CodexAppServerSandboxMode;
+  dangerFullAccessAllowed?: boolean;
 };
 export type CodexAppServerApprovalPolicy = "never" | "on-request" | "on-failure" | "untrusted";
 export type CodexAppServerEffectiveApprovalPolicy =
@@ -436,7 +437,7 @@ export function resolveCodexAppServerRuntimeOptions(
       ? {
           approvalPolicy: defaultPolicy?.approvalPolicy ?? "on-request",
           sandbox: forceDangerFullAccessSandbox
-            ? "danger-full-access"
+            ? selectForcedDangerFullAccessSandbox(defaultPolicy)
             : selectForcedUserApprovalSandbox({
                 configuredSandbox,
                 defaultSandbox: defaultPolicy?.sandbox,
@@ -667,15 +668,16 @@ function resolveDefaultCodexAppServerPolicy(params: {
   hostName?: string;
 }): CodexAppServerDefaultPolicy {
   if (params.transport !== "stdio") {
-    return { mode: "yolo" };
+    return { mode: "yolo", dangerFullAccessAllowed: true };
   }
   const content = readCodexRequirementsToml(params);
   if (content === undefined) {
     if (!params.forceGuardian) {
-      return { mode: "yolo" };
+      return { mode: "yolo", dangerFullAccessAllowed: true };
     }
     return {
       mode: "guardian",
+      dangerFullAccessAllowed: true,
       approvalPolicy: selectGuardianApprovalPolicy(
         undefined,
         params.execModeRequiringPromptingApprovals,
@@ -699,10 +701,11 @@ function resolveDefaultCodexAppServerPolicy(params: {
   const yoloReviewerAllowed =
     allowedApprovalsReviewers === undefined || allowedApprovalsReviewers.has("user");
   if (!params.forceGuardian && yoloSandboxAllowed && yoloApprovalAllowed && yoloReviewerAllowed) {
-    return { mode: "yolo" };
+    return { mode: "yolo", dangerFullAccessAllowed: true };
   }
   return {
     mode: "guardian",
+    dangerFullAccessAllowed: yoloSandboxAllowed,
     approvalPolicy: selectGuardianApprovalPolicy(
       allowedApprovalPolicies,
       params.execModeRequiringPromptingApprovals,
@@ -1010,6 +1013,17 @@ function selectForcedUserApprovalSandbox(params: {
     return "read-only";
   }
   return params.defaultSandbox ?? "workspace-write";
+}
+
+function selectForcedDangerFullAccessSandbox(
+  defaultPolicy: CodexAppServerDefaultPolicy | undefined,
+): CodexAppServerSandboxMode {
+  if (defaultPolicy?.dangerFullAccessAllowed === false) {
+    throw new Error(
+      "legacy full exec security with ask requires Codex app-server danger-full-access",
+    );
+  }
+  return "danger-full-access";
 }
 
 function selectGuardianSandbox(

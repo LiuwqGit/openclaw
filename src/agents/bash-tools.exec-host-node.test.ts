@@ -457,38 +457,19 @@ describe("executeNodeHostCommand", () => {
         host: "node",
       }),
     );
-    expect(registerExecApprovalRequestForHostOrThrowMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        approvalId: expect.any(String),
-        host: "node",
-        nodeId: "node-1",
-        requireDeliveryRoute: false,
-        systemRunPlan: expect.objectContaining({
-          commandPreview: "pwd",
-        }),
-      }),
-    );
+    expect(registerExecApprovalRequestForHostOrThrowMock).not.toHaveBeenCalled();
     expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
     expect(result.details?.status).toBe("completed");
-    const resolveCall = callGatewayToolMock.mock.calls.find(
-      ([method]) => method === "exec.approval.resolve",
-    );
-    expect(resolveCall).toEqual([
-      "exec.approval.resolve",
-      { timeoutMs: 70_000 },
-      {
-        id: expect.any(String),
-        decision: "allow-once",
-      },
-      { scopes: ["operator.approvals"] },
-    ]);
+    expect(
+      callGatewayToolMock.mock.calls.some(([method]) => method === "exec.approval.resolve"),
+    ).toBe(false);
     const runParams = requireRunParams(requireGatewayCommand("system.run"));
     expect(runParams.approved).toBe(true);
     expect(runParams.approvalDecision).toBe("allow-once");
-    expect(runParams.runId).toBe(resolveCall?.[2].id);
+    expect(runParams.runId).toEqual(expect.any(String));
   });
 
-  it("falls back to human approval when node auto-review approval registration fails", async () => {
+  it("does not consult human approval registration for node auto-review allows", async () => {
     resolveExecHostApprovalContextMock.mockReturnValue({
       approvals: { allowlist: [], file: { version: 1, agents: {} } },
       hostSecurity: "allowlist",
@@ -519,8 +500,9 @@ describe("executeNodeHostCommand", () => {
     });
 
     expect(defaultExecAutoReviewerMock).toHaveBeenCalled();
-    expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
-    expect(result.details?.status).toBe("approval-pending");
+    expect(registerExecApprovalRequestForHostOrThrowMock).not.toHaveBeenCalled();
+    expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
+    expect(result.details?.status).toBe("completed");
   });
 
   it("keeps strict inline-eval node commands on explicit approval", async () => {
