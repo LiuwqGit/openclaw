@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
+import { hasJsonOutputFlag } from "./json-output-mode.js";
 
 const COOL_OFF_FILENAME = "legacy-oauth-sidecar-migration-declined";
 const COOL_OFF_TTL_MS = 24 * 60 * 60 * 1000;
@@ -54,6 +55,13 @@ function shouldSkip(params: {
     return true;
   }
   if (invocation.primary && SKIPPED_PRIMARIES.has(invocation.primary)) {
+    return true;
+  }
+  // `runCli` invokes this hook before `tryRouteCli` enables `suppressDoctorStdout`
+  // for `--json` commands, so doctor notes / clack prompt frames would otherwise
+  // land in the JSON payload on stdout. Skip and let the user run
+  // `openclaw doctor --fix` (or any non-JSON command) to trigger the migration.
+  if (hasJsonOutputFlag(params.argv)) {
     return true;
   }
   if (!hasSidecarFiles(env)) {

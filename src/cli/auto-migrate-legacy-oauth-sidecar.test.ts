@@ -252,6 +252,37 @@ describe("maybeAutoMigrateLegacyOAuthSidecarOnInteractiveCli", () => {
     },
   );
 
+  it.each([
+    { name: "--json on a routed primary", argv: ["node", "openclaw", "status", "--json"] },
+    { name: "--json=pretty", argv: ["node", "openclaw", "agent", "--json=pretty"] },
+    { name: "--json before subcommand", argv: ["node", "openclaw", "--json", "status"] },
+  ])("does not prompt for JSON-output invocations: $name", async ({ argv }) => {
+    const { state, sidecarPath } = await makeStateWithLegacyOauthRef("seed");
+    const confirm = vi.fn();
+    await maybeAutoMigrateLegacyOAuthSidecarOnInteractiveCli({
+      argv,
+      env: state.env,
+      isInteractiveTty: () => true,
+      prompter: { confirm },
+    });
+    expect(confirm).not.toHaveBeenCalled();
+    // Migration must not run as a side effect of the JSON command either.
+    expect(fs.existsSync(sidecarPath)).toBe(true);
+    expect(fs.existsSync(declineMarkerPath(state))).toBe(false);
+  });
+
+  it("still prompts when --json appears after a `--` argv terminator", async () => {
+    const { state } = await makeStateWithLegacyOauthRef("seed");
+    const confirm = vi.fn(async () => false);
+    await maybeAutoMigrateLegacyOAuthSidecarOnInteractiveCli({
+      argv: ["node", "openclaw", "status", "--", "--json"],
+      env: state.env,
+      isInteractiveTty: () => true,
+      prompter: { confirm },
+    });
+    expect(confirm).toHaveBeenCalledTimes(1);
+  });
+
   it("migrates legacy oauthRef profiles when the user accepts", async () => {
     const { state, authPath, sidecarPath, profileId } =
       await makeStateWithLegacyOauthRef("legacy-oauth-seed");
