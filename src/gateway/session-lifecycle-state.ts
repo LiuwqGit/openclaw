@@ -11,15 +11,16 @@ import type { GatewaySessionRow, SessionRunStatus } from "./session-utils.types.
 
 type LifecyclePhase = "start" | "end" | "error";
 
-type LifecycleEventLike = Pick<AgentEventPayload, "ts"> & {
-  data?: {
-    phase?: unknown;
-    startedAt?: unknown;
-    endedAt?: unknown;
-    aborted?: unknown;
-    stopReason?: unknown;
+type LifecycleEventLike = Pick<AgentEventPayload, "ts"> &
+  Partial<Pick<AgentEventPayload, "runId">> & {
+    data?: {
+      phase?: unknown;
+      startedAt?: unknown;
+      endedAt?: unknown;
+      aborted?: unknown;
+      stopReason?: unknown;
+    };
   };
-};
 
 type LifecycleSessionShape = Pick<
   GatewaySessionRow,
@@ -28,10 +29,17 @@ type LifecycleSessionShape = Pick<
 
 type PersistedLifecycleSessionShape = Pick<
   SessionEntry,
-  "updatedAt" | "status" | "startedAt" | "endedAt" | "runtimeMs" | "abortedLastRun"
+  | "updatedAt"
+  | "status"
+  | "startedAt"
+  | "endedAt"
+  | "runtimeMs"
+  | "abortedLastRun"
+  | "lifecycleRunId"
 >;
 
 type GatewaySessionLifecycleSnapshot = Partial<LifecycleSessionShape>;
+type LifecycleStoreTargetCandidate = { sessionKey: string; updatedAt: number };
 
 function isFiniteTimestamp(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
@@ -40,6 +48,11 @@ function isFiniteTimestamp(value: unknown): value is number {
 function resolveLifecyclePhase(event: LifecycleEventLike): LifecyclePhase | null {
   const phase = typeof event.data?.phase === "string" ? event.data.phase : "";
   return phase === "start" || phase === "end" || phase === "error" ? phase : null;
+}
+
+function resolveLifecycleRunId(event: LifecycleEventLike): string | undefined {
+  const runId = typeof event.runId === "string" ? event.runId.trim() : "";
+  return runId || undefined;
 }
 
 function resolveTerminalStatus(event: LifecycleEventLike): SessionRunStatus {
@@ -74,6 +87,65 @@ function resolveLifecycleEndedAt(event: LifecycleEventLike): number | undefined 
     return event.data.endedAt;
   }
   return isFiniteTimestamp(event.ts) ? event.ts : undefined;
+}
+
+function isTerminalSessionStatus(status: unknown): boolean {
+  return status === "done" || status === "failed" || status === "killed" || status === "timeout";
+}
+
+function resolveStoredTerminalAt(
+  entry?: Partial<PersistedLifecycleSessionShape> | null,
+): number | undefined {
+  if (!entry || !isTerminalSessionStatus(entry.status)) {
+    return undefined;
+  }
+  if (isFiniteTimestamp(entry.endedAt)) {
+    return entry.endedAt;
+  }
+  return isFiniteTimestamp(entry.updatedAt) ? entry.updatedAt : undefined;
+}
+
+function terminalEventPredatesStoredRun(params: {
+  entry?: Partial<PersistedLifecycleSessionShape> | null;
+  event: LifecycleEventLike;
+}): boolean {
+  const phase = resolveLifecyclePhase(params.event);
+  if (phase !== "end" && phase !== "error") {
+    return false;
+  }
+  const entryRunId = params.entry?.lifecycleRunId?.trim();
+  const eventRunId = resolveLifecycleRunId(params.event);
+  const entryStartedAt = isFiniteTimestamp(params.entry?.startedAt)
+    ? params.entry.startedAt
+    : undefined;
+  const eventStartedAt = isFiniteTimestamp(params.event.data?.startedAt)
+    ? params.event.data.startedAt
+    : undefined;
+  if (entryRunId && eventRunId && entryRunId !== eventRunId) {
+    return (
+      eventStartedAt === undefined ||
+      entryStartedAt === undefined ||
+      eventStartedAt <= entryStartedAt
+    );
+  }
+  const eventEndedAt = resolveLifecycleEndedAt(params.event);
+  if (entryRunId && eventRunId && entryRunId === eventRunId) {
+    const entryTerminalAt = resolveStoredTerminalAt(params.entry);
+    if (
+      entryTerminalAt !== undefined &&
+      eventEndedAt !== undefined &&
+      eventEndedAt < entryTerminalAt
+    ) {
+      return true;
+    }
+  }
+  if (entryStartedAt === undefined) {
+    return false;
+  }
+  if (eventStartedAt !== undefined) {
+    return eventStartedAt < entryStartedAt;
+  }
+  return eventEndedAt !== undefined && eventEndedAt < entryStartedAt;
 }
 
 function resolveRuntimeMs(params: {
@@ -139,21 +211,27 @@ export function derivePersistedSessionLifecyclePatch(params: {
   entry?: Partial<PersistedLifecycleSessionShape> | null;
   event: LifecycleEventLike;
 }): Partial<PersistedLifecycleSessionShape> {
+  const phase = resolveLifecyclePhase(params.event);
+  if (terminalEventPredatesStoredRun(params)) {
+    return {};
+  }
   const snapshot = deriveGatewaySessionLifecycleSnapshot({
     session: params.entry ?? undefined,
     event: params.event,
   });
+  const lifecycleRunId = resolveLifecycleRunId(params.event);
   return {
     ...snapshot,
     updatedAt: typeof snapshot.updatedAt === "number" ? snapshot.updatedAt : undefined,
+    ...(phase && lifecycleRunId ? { lifecycleRunId } : {}),
   };
 }
 
-function resolveLegacyMainLifecycleStoreKey(params: {
+function resolveLegacyMainLifecycleStoreTarget(params: {
   canonicalKey: string;
   cfg: ReturnType<typeof loadSessionEntry>["cfg"];
   store: ReturnType<typeof loadSessionEntry>["store"];
-}): string | undefined {
+}): LifecycleStoreTargetCandidate | undefined {
   const parsed = parseAgentSessionKey(params.canonicalKey);
   if (!parsed) {
     return undefined;
@@ -177,7 +255,7 @@ function resolveLegacyMainLifecycleStoreKey(params: {
     candidates.add(`agent:${DEFAULT_AGENT_ID}:main`);
     candidates.add(`agent:${DEFAULT_AGENT_ID}:${parsed.rest}`);
   }
-  let freshest: { key: string; updatedAt: number } | undefined;
+  let freshest: LifecycleStoreTargetCandidate | undefined;
   const consider = (key: string) => {
     const entry = params.store[key];
     if (!entry) {
@@ -185,7 +263,7 @@ function resolveLegacyMainLifecycleStoreKey(params: {
     }
     const updatedAt = entry.updatedAt ?? 0;
     if (!freshest || updatedAt > freshest.updatedAt) {
-      freshest = { key, updatedAt };
+      freshest = { sessionKey: key, updatedAt };
     }
   };
 
@@ -198,47 +276,63 @@ function resolveLegacyMainLifecycleStoreKey(params: {
       }
     }
   }
-  return freshest?.key;
+  return freshest;
 }
 
 export function resolveGatewaySessionLifecycleStoreTarget(params: {
   sessionKey: string;
 }): { storePath: string; sessionKey: string } | undefined {
   const sessionEntry = loadSessionEntry(params.sessionKey);
-  const sessionKey = sessionEntry.entry
-    ? (sessionEntry.legacyKey ?? sessionEntry.canonicalKey)
-    : resolveLegacyMainLifecycleStoreKey({
-        canonicalKey: sessionEntry.canonicalKey,
-        cfg: sessionEntry.cfg,
-        store: sessionEntry.store,
-      });
-  if (!sessionKey) {
+  const matchedTarget = sessionEntry.entry
+    ? {
+        sessionKey: sessionEntry.legacyKey ?? sessionEntry.canonicalKey,
+        updatedAt: sessionEntry.entry.updatedAt ?? 0,
+      }
+    : undefined;
+  const legacyMainTarget = resolveLegacyMainLifecycleStoreTarget({
+    canonicalKey: sessionEntry.canonicalKey,
+    cfg: sessionEntry.cfg,
+    store: sessionEntry.store,
+  });
+  const target =
+    legacyMainTarget && (!matchedTarget || legacyMainTarget.updatedAt > matchedTarget.updatedAt)
+      ? legacyMainTarget
+      : matchedTarget;
+  if (!target) {
     return undefined;
   }
-  return { storePath: sessionEntry.storePath, sessionKey };
+  return { storePath: sessionEntry.storePath, sessionKey: target.sessionKey };
 }
 
 export async function persistGatewaySessionLifecycleEvent(params: {
   sessionKey: string;
   event: LifecycleEventLike;
-}): Promise<void> {
+}): Promise<boolean> {
   const phase = resolveLifecyclePhase(params.event);
   if (!phase) {
-    return;
+    return false;
   }
 
   const target = resolveGatewaySessionLifecycleStoreTarget({ sessionKey: params.sessionKey });
   if (!target) {
-    return;
+    return false;
   }
 
+  let applied = false;
   await updateSessionStoreEntry({
     storePath: target.storePath,
     sessionKey: target.sessionKey,
-    update: async (entry) =>
-      derivePersistedSessionLifecyclePatch({
+    update: async (entry) => {
+      const patch = derivePersistedSessionLifecyclePatch({
         entry,
         event: params.event,
-      }),
+      });
+      if (Object.keys(patch).length === 0) {
+        return null;
+      }
+      applied = true;
+      return patch;
+    },
   });
+  return applied;
 }

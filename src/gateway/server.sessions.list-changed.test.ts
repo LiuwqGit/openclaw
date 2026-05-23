@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
+import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
@@ -77,6 +78,20 @@ function expectChangedBroadcast(
   const payloadRecord = requireRecord(payload, "broadcast payload");
   expectFields(payloadRecord, expected);
   return payloadRecord;
+}
+
+function createActiveRun(params: {
+  sessionKey: string;
+  sessionId?: string;
+  startedAtMs: number;
+}): ChatAbortControllerEntry {
+  return {
+    controller: new AbortController(),
+    sessionId: params.sessionId ?? "sess-active-run",
+    sessionKey: params.sessionKey,
+    startedAtMs: params.startedAtMs,
+    expiresAtMs: params.startedAtMs + 60_000,
+  };
 }
 
 test("sessions.list keeps bulk rows lightweight and uses persisted model fields", async () => {
@@ -245,13 +260,89 @@ test("sessions.list marks sessions with active abortable runs", async () => {
     context: {
       getRuntimeConfig,
       loadGatewayModelCatalog: async () => [],
-      chatAbortControllers: new Map([["run-1", { sessionKey: "agent:main:main" }]]),
+      chatAbortControllers: new Map([
+        [
+          "run-1",
+          createActiveRun({
+            sessionKey: "agent:main:main",
+            sessionId: "sess-main",
+            startedAtMs: Date.now(),
+          }),
+        ],
+      ]),
     } as never,
   });
 
   const payload = expectRespondPayload(respond);
   const session = findSession(payload, "agent:main:main");
   expect(session.hasActiveRun).toBe(true);
+});
+
+test("sessions.list sorts active runs before applying the response limit", async () => {
+  await createSessionStoreDir();
+  const activeStartedAtMs = Date.now();
+  const inactiveUpdatedAt = activeStartedAtMs - 1_000;
+  const staleActiveUpdatedAt = activeStartedAtMs - 10_000;
+  await writeSessionStore({
+    entries: {
+      "old-active": sessionStoreEntry("sess-old-active", {
+        updatedAt: staleActiveUpdatedAt,
+        status: "done",
+        startedAt: staleActiveUpdatedAt - 500,
+        endedAt: staleActiveUpdatedAt,
+        runtimeMs: 500,
+        abortedLastRun: true,
+      }),
+      "newer-inactive": sessionStoreEntry("sess-newer-inactive", {
+        updatedAt: inactiveUpdatedAt,
+      }),
+    },
+  });
+
+  const respond = vi.fn();
+  const sessionsHandlers = await getSessionsHandlers();
+  const { getRuntimeConfig } = await getGatewayConfigModule();
+  await sessionsHandlers["sessions.list"]({
+    req: {
+      type: "req",
+      id: "req-sessions-list-active-run-limit",
+      method: "sessions.list",
+      params: { limit: 1 },
+    },
+    params: { limit: 1 },
+    respond,
+    client: null,
+    isWebchatConnect: () => false,
+    context: {
+      getRuntimeConfig,
+      loadGatewayModelCatalog: async () => [],
+      chatAbortControllers: new Map([
+        [
+          "run-active",
+          createActiveRun({
+            sessionKey: "agent:main:old-active",
+            sessionId: "sess-old-active",
+            startedAtMs: activeStartedAtMs,
+          }),
+        ],
+      ]),
+    } as never,
+  });
+
+  const payload = expectRespondPayload(respond);
+  const sessions = requireArray(payload.sessions, "response sessions");
+  expect(sessions).toHaveLength(1);
+  const session = requireRecord(sessions[0], "limited session");
+  expectFields(session, {
+    key: "agent:main:old-active",
+    hasActiveRun: true,
+    status: "running",
+    startedAt: activeStartedAtMs,
+    updatedAt: activeStartedAtMs,
+    endedAt: undefined,
+    runtimeMs: undefined,
+    abortedLastRun: false,
+  });
 });
 
 test("sessions.list yields before responding during bulk transcript hydration", async () => {

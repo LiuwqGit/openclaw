@@ -20,7 +20,10 @@ import type {
   ToolEventRecipientRegistry,
 } from "./server-chat-state.js";
 import { loadGatewaySessionRow } from "./server-chat.load-gateway-session-row.runtime.js";
-import { persistGatewaySessionLifecycleEvent } from "./server-chat.persist-session-lifecycle.runtime.js";
+import {
+  persistGatewaySessionLifecycleEvent,
+  resolveGatewaySessionLifecycleStoreTarget,
+} from "./server-chat.persist-session-lifecycle.runtime.js";
 import { deriveGatewaySessionLifecycleSnapshot } from "./session-lifecycle-state.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
@@ -362,6 +365,41 @@ export function createAgentEventHandler({
     };
   };
 
+  const broadcastLifecycleSessionChanged = (params: {
+    sessionKey: string;
+    lifecyclePhase: string;
+    event: AgentEventPayload;
+    eventRunId: string;
+    dropIfSlow: boolean;
+  }) => {
+    const sessionEventConnIds = sessionEventSubscribers.getAll();
+    if (sessionEventConnIds.size === 0) {
+      return;
+    }
+    const snapshot = buildSessionEventSnapshot(
+      resolveGatewaySessionLifecycleStoreTarget({ sessionKey: params.sessionKey })?.sessionKey ??
+        params.sessionKey,
+      params.event,
+    );
+    const broadcastSessionKey =
+      snapshot.session?.key && typeof snapshot.session.key === "string"
+        ? snapshot.session.key
+        : params.sessionKey;
+    broadcastToConnIds(
+      "sessions.changed",
+      {
+        sessionKey: broadcastSessionKey,
+        phase: params.lifecyclePhase,
+        runId: params.event.runId,
+        ...(params.eventRunId !== params.event.runId ? { clientRunId: params.eventRunId } : {}),
+        ts: params.event.ts,
+        ...snapshot,
+      },
+      sessionEventConnIds,
+      params.dropIfSlow ? { dropIfSlow: true } : undefined,
+    );
+  };
+
   const finalizeLifecycleEvent = (
     evt: AgentEventPayload,
     opts?: { skipChatErrorFinal?: boolean },
@@ -436,23 +474,20 @@ export function createAgentEventHandler({
     agentRunSeq.delete(clientRunId);
 
     if (sessionKey) {
-      void persistGatewaySessionLifecycleEvent({ sessionKey, event: evt }).catch(() => undefined);
-      const sessionEventConnIds = sessionEventSubscribers.getAll();
-      if (sessionEventConnIds.size > 0) {
-        broadcastToConnIds(
-          "sessions.changed",
-          {
+      void persistGatewaySessionLifecycleEvent({ sessionKey, event: evt })
+        .catch(() => false)
+        .then((lifecycleApplied) => {
+          if (!lifecycleApplied) {
+            return;
+          }
+          broadcastLifecycleSessionChanged({
             sessionKey,
-            phase: lifecyclePhase,
-            runId: evt.runId,
-            ...(eventRunId !== evt.runId ? { clientRunId: eventRunId } : {}),
-            ts: evt.ts,
-            ...buildSessionEventSnapshot(sessionKey, evt),
-          },
-          sessionEventConnIds,
-          { dropIfSlow: true },
-        );
-      }
+            lifecyclePhase,
+            event: evt,
+            eventRunId,
+            dropIfSlow: false,
+          });
+        });
     }
   };
 
@@ -991,22 +1026,13 @@ export function createAgentEventHandler({
 
     if (sessionKey && lifecyclePhase === "start") {
       void persistGatewaySessionLifecycleEvent({ sessionKey, event: evt }).catch(() => undefined);
-      const sessionEventConnIds = sessionEventSubscribers.getAll();
-      if (sessionEventConnIds.size > 0) {
-        broadcastToConnIds(
-          "sessions.changed",
-          {
-            sessionKey,
-            phase: lifecyclePhase,
-            runId: evt.runId,
-            ...(eventRunId !== evt.runId ? { clientRunId: eventRunId } : {}),
-            ts: evt.ts,
-            ...buildSessionEventSnapshot(sessionKey, evt),
-          },
-          sessionEventConnIds,
-          { dropIfSlow: true },
-        );
-      }
+      broadcastLifecycleSessionChanged({
+        sessionKey,
+        lifecyclePhase,
+        event: evt,
+        eventRunId,
+        dropIfSlow: true,
+      });
     }
   };
 }

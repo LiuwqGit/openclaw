@@ -3,10 +3,13 @@ import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/a
 import { formatChannelProgressDraftLine } from "../plugin-sdk/channel-streaming.js";
 
 const persistGatewaySessionLifecycleEventMock = vi.fn();
+const resolveGatewaySessionLifecycleStoreTargetMock = vi.fn();
 
 vi.mock("./server-chat.persist-session-lifecycle.runtime.js", () => ({
   persistGatewaySessionLifecycleEvent: (...args: unknown[]) =>
     persistGatewaySessionLifecycleEventMock(...args),
+  resolveGatewaySessionLifecycleStoreTarget: (...args: unknown[]) =>
+    resolveGatewaySessionLifecycleStoreTargetMock(...args),
 }));
 
 vi.mock("../config/io.js", () => ({
@@ -64,7 +67,8 @@ describe("agent event handler", () => {
       legacyKey: undefined,
     });
     vi.mocked(loadGatewaySessionRow).mockReset().mockReturnValue(null);
-    persistGatewaySessionLifecycleEventMock.mockReset().mockResolvedValue(undefined);
+    persistGatewaySessionLifecycleEventMock.mockReset().mockResolvedValue(true);
+    resolveGatewaySessionLifecycleStoreTargetMock.mockReset().mockReturnValue(undefined);
     resetAgentRunContextForTest();
   });
 
@@ -1740,7 +1744,7 @@ describe("agent event handler", () => {
     resetAgentRunContextForTest();
   });
 
-  it("broadcasts terminal session status to session subscribers on lifecycle end", () => {
+  it("broadcasts terminal session status to session subscribers on lifecycle end", async () => {
     const { broadcastToConnIds, sessionEventSubscribers, handler } = createHarness({
       resolveSessionKeyForRun: () => "session-finished",
     });
@@ -1773,10 +1777,15 @@ describe("agent event handler", () => {
       },
     });
 
+    await vi.waitFor(() => {
+      const sessionsChangedCalls = broadcastToConnIds.mock.calls.filter(
+        ([event]) => event === "sessions.changed",
+      );
+      expect(sessionsChangedCalls).toHaveLength(2);
+    });
     const sessionsChangedCalls = broadcastToConnIds.mock.calls.filter(
       ([event]) => event === "sessions.changed",
     );
-    expect(sessionsChangedCalls).toHaveLength(2);
     expectPayloadFields(sessionsChangedCalls[1]?.[1], {
       sessionKey: "session-finished",
       phase: "end",
@@ -1803,6 +1812,159 @@ describe("agent event handler", () => {
     resetAgentRunContextForTest();
   });
 
+  it("waits for terminal lifecycle persistence before broadcasting session status", async () => {
+    let resolvePersist!: (value: boolean) => void;
+    persistGatewaySessionLifecycleEventMock.mockReturnValueOnce(
+      new Promise<boolean>((resolve) => {
+        resolvePersist = resolve;
+      }),
+    );
+    const { broadcastToConnIds, sessionEventSubscribers, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-finished",
+    });
+    sessionEventSubscribers.subscribe("conn-session");
+    registerAgentRunContext("run-finished", { sessionKey: "session-finished" });
+
+    handler({
+      runId: "run-finished",
+      seq: 1,
+      stream: "lifecycle",
+      ts: 1_700,
+      data: {
+        phase: "end",
+        startedAt: 900,
+        endedAt: 1_700,
+      },
+    });
+
+    expect(broadcastToConnIds.mock.calls.some(([event]) => event === "sessions.changed")).toBe(
+      false,
+    );
+
+    resolvePersist(true);
+    await vi.waitFor(() => {
+      expect(broadcastToConnIds.mock.calls.some(([event]) => event === "sessions.changed")).toBe(
+        true,
+      );
+    });
+    expect(requireMockArg(broadcastToConnIds, 0, 3, "sessions changed options")).toBeUndefined();
+    resetAgentRunContextForTest();
+  });
+
+  it("does not broadcast terminal session status when persistence skips the event", async () => {
+    persistGatewaySessionLifecycleEventMock.mockResolvedValueOnce(false);
+    const { broadcastToConnIds, sessionEventSubscribers, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-finished",
+    });
+    sessionEventSubscribers.subscribe("conn-session");
+    registerAgentRunContext("run-finished", { sessionKey: "session-finished" });
+
+    handler({
+      runId: "run-finished",
+      seq: 1,
+      stream: "lifecycle",
+      ts: 1_700,
+      data: {
+        phase: "end",
+        startedAt: 900,
+        endedAt: 1_700,
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(persistGatewaySessionLifecycleEventMock).toHaveBeenCalled();
+    });
+    await Promise.resolve();
+
+    expect(broadcastToConnIds.mock.calls.some(([event]) => event === "sessions.changed")).toBe(
+      false,
+    );
+    resetAgentRunContextForTest();
+  });
+
+  it("does not broadcast terminal session status when persistence rejects", async () => {
+    persistGatewaySessionLifecycleEventMock.mockRejectedValueOnce(new Error("store write failed"));
+    const { broadcastToConnIds, sessionEventSubscribers, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-finished",
+    });
+    sessionEventSubscribers.subscribe("conn-session");
+    registerAgentRunContext("run-finished", { sessionKey: "session-finished" });
+
+    handler({
+      runId: "run-finished",
+      seq: 1,
+      stream: "lifecycle",
+      ts: 1_700,
+      data: {
+        phase: "end",
+        startedAt: 900,
+        endedAt: 1_700,
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(persistGatewaySessionLifecycleEventMock).toHaveBeenCalled();
+    });
+    await Promise.resolve();
+
+    expect(broadcastToConnIds.mock.calls.some(([event]) => event === "sessions.changed")).toBe(
+      false,
+    );
+    resetAgentRunContextForTest();
+  });
+
+  it("builds lifecycle broadcasts from the persisted legacy row", async () => {
+    resolveGatewaySessionLifecycleStoreTargetMock.mockReturnValue({
+      storePath: "/tmp/sessions.json",
+      sessionKey: "agent:main:work",
+    });
+    vi.mocked(loadGatewaySessionRow).mockImplementation((sessionKey) =>
+      sessionKey === "agent:main:work"
+        ? {
+            key: "agent:ops:work",
+            kind: "direct",
+            updatedAt: 900,
+            sessionId: "sess-legacy",
+            status: "running",
+            hasActiveRun: true,
+          }
+        : null,
+    );
+    const { broadcastToConnIds, sessionEventSubscribers, handler } = createHarness({
+      resolveSessionKeyForRun: () => "agent:ops:work",
+    });
+    sessionEventSubscribers.subscribe("conn-session");
+    registerAgentRunContext("run-legacy", { sessionKey: "agent:ops:work" });
+
+    handler({
+      runId: "run-legacy",
+      seq: 1,
+      stream: "lifecycle",
+      ts: 1_700,
+      data: {
+        phase: "end",
+        startedAt: 900,
+        endedAt: 1_700,
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(broadcastToConnIds.mock.calls.some(([event]) => event === "sessions.changed")).toBe(
+        true,
+      );
+    });
+    const payload = requireRecord(
+      broadcastToConnIds.mock.calls.find(([event]) => event === "sessions.changed")?.[1],
+      "sessions.changed payload",
+    );
+    expect(payload.sessionKey).toBe("agent:ops:work");
+    expect(requireRecord(payload.session, "session row").key).toBe("agent:ops:work");
+    expect(payload.sessionId).toBe("sess-legacy");
+    expect(payload.status).toBe("done");
+    expect(loadGatewaySessionRow).toHaveBeenCalledWith("agent:main:work");
+    resetAgentRunContextForTest();
+  });
+
   it("keeps aborted chat run markers through terminal lifecycle cleanup", () => {
     const { broadcast, chatRunState, handler } = createHarness();
     chatRunState.registry.add("run-aborted", {
@@ -1824,7 +1986,7 @@ describe("agent event handler", () => {
     expect(chatBroadcastCalls(broadcast)).toHaveLength(0);
   });
 
-  it("keeps live session setting metadata at the top level for lifecycle updates", () => {
+  it("keeps live session setting metadata at the top level for lifecycle updates", async () => {
     vi.mocked(loadGatewaySessionRow).mockReturnValue({
       key: "session-finished",
       kind: "direct",
@@ -1872,9 +2034,11 @@ describe("agent event handler", () => {
       },
     });
 
-    expect(requireMockArg(broadcastToConnIds, 0, 0, "sessions changed event")).toBe(
-      "sessions.changed",
-    );
+    await vi.waitFor(() => {
+      expect(requireMockArg(broadcastToConnIds, 0, 0, "sessions changed event")).toBe(
+        "sessions.changed",
+      );
+    });
     expectPayloadFields(requireMockArg(broadcastToConnIds, 0, 1, "sessions changed payload"), {
       sessionKey: "session-finished",
       phase: "end",
@@ -1897,9 +2061,7 @@ describe("agent event handler", () => {
     expect(requireMockArg(broadcastToConnIds, 0, 2, "sessions changed recipients")).toEqual(
       new Set(["conn-session"]),
     );
-    expect(requireMockArg(broadcastToConnIds, 0, 3, "sessions changed options")).toEqual({
-      dropIfSlow: true,
-    });
+    expect(requireMockArg(broadcastToConnIds, 0, 3, "sessions changed options")).toBeUndefined();
   });
 
   it("keeps tool output for Control UI recipients when verbose is on", () => {
