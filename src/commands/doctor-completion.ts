@@ -66,6 +66,17 @@ export type ShellCompletionStatus = {
   usesSlowPattern: boolean;
 };
 
+type ShellCompletionDoctorOptions = {
+  nonInteractive?: boolean;
+};
+
+type ShellCompletionRepairDeps = {
+  status?: ShellCompletionStatus;
+  generateCompletionCache?: () => Promise<boolean>;
+  installCompletion?: typeof installCompletion;
+  confirm?: (params: { message: string; initialValue?: boolean }) => Promise<boolean>;
+};
+
 /** Check the status of shell completion for the current shell. */
 export async function checkShellCompletionStatus(
   binName = "openclaw",
@@ -85,6 +96,128 @@ export async function checkShellCompletionStatus(
   };
 }
 
+export function shellCompletionStatusToHealthFindings(status: ShellCompletionStatus) {
+  const checkId = "core/doctor/shell-completion";
+  const path = `shellCompletion.${status.shell}`;
+  if (status.usesSlowPattern) {
+    return [
+      {
+        checkId,
+        severity: "warning" as const,
+        message: `Your ${status.shell} profile uses slow dynamic completion (source <(...)).`,
+        path,
+        fixHint: "Run `openclaw doctor --fix` to upgrade to cached completion.",
+      },
+    ];
+  }
+  if (status.profileInstalled && !status.cacheExists) {
+    return [
+      {
+        checkId,
+        severity: "warning" as const,
+        message: `Shell completion is configured in your ${status.shell} profile but the cache is missing.`,
+        path,
+        fixHint: `Run \`openclaw completion --write-state\` or \`openclaw doctor --fix\` to regenerate ${status.cachePath}.`,
+      },
+    ];
+  }
+  return [];
+}
+
+export async function runShellCompletionHealth(params: {
+  repair: boolean;
+  previewRepair?: boolean;
+  options?: ShellCompletionDoctorOptions;
+  deps?: ShellCompletionRepairDeps;
+}): Promise<{
+  findings: ReturnType<typeof shellCompletionStatusToHealthFindings>;
+  status?: "repairable" | "repaired" | "skipped" | "failed";
+  changes: string[];
+  warnings: string[];
+}> {
+  const cliName = resolveCliName();
+  const status = params.deps?.status ?? (await checkShellCompletionStatus(cliName));
+  const findings = shellCompletionStatusToHealthFindings(status);
+  const generateCache = params.deps?.generateCompletionCache ?? generateCompletionCache;
+  const install = params.deps?.installCompletion ?? installCompletion;
+  const confirmInstall = params.deps?.confirm;
+  const changes: string[] = [];
+  const warnings: string[] = [];
+
+  if (findings.length > 0 && !params.repair) {
+    return {
+      findings,
+      status: params.previewRepair ? "repairable" : undefined,
+      changes: params.previewRepair
+        ? [`Would repair ${status.shell} shell completion configuration.`]
+        : [],
+      warnings,
+    };
+  }
+  if (!params.repair) {
+    return { findings, changes, warnings };
+  }
+
+  if (status.usesSlowPattern) {
+    if (!status.cacheExists && !(await generateCache())) {
+      return {
+        findings,
+        status: "failed",
+        changes,
+        warnings: [
+          `Failed to generate completion cache. Run \`${cliName} completion --write-state\` manually.`,
+        ],
+      };
+    }
+    await install(status.shell, true, cliName);
+    changes.push(formatCompletionReloadNote(status.shell, "upgraded"));
+    return { findings, status: "repaired", changes, warnings };
+  }
+
+  if (status.profileInstalled && !status.cacheExists) {
+    if (await generateCache()) {
+      changes.push(`Completion cache regenerated at ${status.cachePath}`);
+      return { findings, status: "repaired", changes, warnings };
+    }
+    return {
+      findings,
+      status: "failed",
+      changes,
+      warnings: [
+        `Failed to regenerate completion cache. Run \`${cliName} completion --write-state\` manually.`,
+      ],
+    };
+  }
+
+  if (!status.profileInstalled) {
+    if (params.options?.nonInteractive === true || !confirmInstall) {
+      return { findings, changes, warnings };
+    }
+    const shouldInstall = await confirmInstall({
+      message: `Enable ${status.shell} shell completion for ${cliName}?`,
+      initialValue: true,
+    });
+    if (!shouldInstall) {
+      return { findings, status: "repaired", changes, warnings };
+    }
+    if (!(await generateCache())) {
+      return {
+        findings,
+        status: "failed",
+        changes,
+        warnings: [
+          `Failed to generate completion cache. Run \`${cliName} completion --write-state\` manually.`,
+        ],
+      };
+    }
+    await install(status.shell, true, cliName);
+    changes.push(formatCompletionReloadNote(status.shell, "installed"));
+    return { findings, status: "repaired", changes, warnings };
+  }
+
+  return { findings, changes, warnings };
+}
+
 export type DoctorCompletionOptions = {
   nonInteractive?: boolean;
 };
@@ -102,77 +235,19 @@ export async function doctorShellCompletion(
 ): Promise<void> {
   const cliName = resolveCliName();
   const status = await checkShellCompletionStatus(cliName);
-
-  // Profile uses slow dynamic pattern - upgrade to cached version
-  if (status.usesSlowPattern) {
-    note(
-      `Your ${status.shell} profile uses slow dynamic completion (source <(...)).\nUpgrading to cached completion for faster shell startup...`,
-      "Shell completion",
-    );
-
-    // Ensure cache exists first
-    if (!status.cacheExists) {
-      const generated = await generateCompletionCache();
-      if (!generated) {
-        note(
-          `Failed to generate completion cache. Run \`${cliName} completion --write-state\` manually.`,
-          "Shell completion",
-        );
-        return;
-      }
-    }
-
-    // Upgrade profile to use cached file
-    await installCompletion(status.shell, true, cliName);
-    note(formatCompletionReloadNote(status.shell, "upgraded"), "Shell completion");
-    return;
+  const result = await runShellCompletionHealth({
+    repair: true,
+    options,
+    deps: {
+      status,
+      confirm: (params) => prompter.confirm(params),
+    },
+  });
+  for (const warning of result.warnings) {
+    note(warning, "Shell completion");
   }
-
-  // Profile has completion but no cache - auto-fix
-  if (status.profileInstalled && !status.cacheExists) {
-    note(
-      `Shell completion is configured in your ${status.shell} profile but the cache is missing.\nRegenerating cache...`,
-      "Shell completion",
-    );
-    const generated = await generateCompletionCache();
-    if (generated) {
-      note(`Completion cache regenerated at ${status.cachePath}`, "Shell completion");
-    } else {
-      note(
-        `Failed to regenerate completion cache. Run \`${cliName} completion --write-state\` manually.`,
-        "Shell completion",
-      );
-    }
-    return;
-  }
-
-  // No completion at all - prompt to install
-  if (!status.profileInstalled) {
-    if (options.nonInteractive) {
-      // In non-interactive mode, just note that completion is not installed
-      return;
-    }
-
-    const shouldInstall = await prompter.confirm({
-      message: `Enable ${status.shell} shell completion for ${cliName}?`,
-      initialValue: true,
-    });
-
-    if (shouldInstall) {
-      // First generate the cache
-      const generated = await generateCompletionCache();
-      if (!generated) {
-        note(
-          `Failed to generate completion cache. Run \`${cliName} completion --write-state\` manually.`,
-          "Shell completion",
-        );
-        return;
-      }
-
-      // Then install to profile
-      await installCompletion(status.shell, true, cliName);
-      note(formatCompletionReloadNote(status.shell, "installed"), "Shell completion");
-    }
+  for (const change of result.changes) {
+    note(change, "Shell completion");
   }
 }
 

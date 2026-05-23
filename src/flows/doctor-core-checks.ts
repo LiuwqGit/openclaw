@@ -12,11 +12,27 @@ import type { ConfigValidationIssue, OpenClawConfig } from "../config/types.open
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { hasAmbiguousGatewayAuthModeConfig } from "../gateway/auth-mode-policy.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
+import { normalizeHealthCheck } from "./health-check-adapter.js";
 import { registerHealthCheck } from "./health-check-registry.js";
+import type { RegisteredHealthCheck, RunnableHealthCheck } from "./health-check-runner-types.js";
 import type { HealthCheck, HealthFinding } from "./health-checks.js";
 
 const BROWSER_CLAWD_PROFILE_RESIDUE_CHECK_ID = "core/doctor/browser-clawd-profile-residue";
 const FINAL_CONFIG_VALIDATION_CHECK_ID = "core/doctor/final-config-validation";
+const SHELL_COMPLETION_CHECK_ID = "core/doctor/shell-completion";
+
+type CoreDoctorRuntimeContext = {
+  readonly doctor?: {
+    readonly options?: {
+      readonly nonInteractive?: boolean;
+    };
+    readonly confirm?: (params: { message: string; initialValue?: boolean }) => Promise<boolean>;
+  };
+};
+
+function coreDoctorRuntimeContext<T extends object>(ctx: T): T & CoreDoctorRuntimeContext {
+  return ctx as T & CoreDoctorRuntimeContext;
+}
 
 export type CoreHealthCheckDeps = {
   readonly detectUnavailableSkills: (cfg: OpenClawConfig) => Promise<readonly SkillStatusEntry[]>;
@@ -493,6 +509,25 @@ const legacyWhatsAppCrontabCheck: HealthCheck = {
   },
 };
 
+const shellCompletionCheck: RunnableHealthCheck = {
+  id: SHELL_COMPLETION_CHECK_ID,
+  kind: "core",
+  description: "Shell completion profile and cache are ready.",
+  source: "doctor",
+  async run(ctx) {
+    const { runShellCompletionHealth } = await import("../commands/doctor-completion.js");
+    const runtimeCtx = coreDoctorRuntimeContext(ctx);
+    return runShellCompletionHealth({
+      repair: ctx.repair,
+      previewRepair: ctx.previewRepair,
+      options: runtimeCtx.doctor?.options,
+      deps: {
+        confirm: runtimeCtx.doctor?.confirm,
+      },
+    });
+  },
+};
+
 const gatewayPlatformNotesCheck: HealthCheck = {
   id: "core/doctor/gateway-services/platform-notes",
   kind: "core",
@@ -736,12 +771,15 @@ function createWorkspaceSuggestionsCheck(deps: CoreHealthCheckDeps): HealthCheck
   };
 }
 
-function createConvertedWorkflowChecks(deps: CoreHealthCheckDeps): readonly HealthCheck[] {
+function createConvertedWorkflowChecks(
+  deps: CoreHealthCheckDeps,
+): readonly RegisteredHealthCheck[] {
   return [
     claudeCliCheck,
     gatewayAuthCheck,
     legacyStateCheck,
     legacyWhatsAppCrontabCheck,
+    shellCompletionCheck,
     gatewayPlatformNotesCheck,
     createSecurityCheck(deps),
     browserCheck,
@@ -749,7 +787,7 @@ function createConvertedWorkflowChecks(deps: CoreHealthCheckDeps): readonly Heal
     hooksModelCheck,
     bootstrapSizeCheck,
     createWorkspaceSuggestionsCheck(deps),
-  ];
+  ].map(normalizeHealthCheck);
 }
 
 let registered = false;
@@ -770,7 +808,7 @@ export function resetCoreHealthChecksForTest(): void {
 
 export function createCoreHealthChecks(
   deps: CoreHealthCheckDeps = defaultCoreHealthCheckDeps,
-): readonly HealthCheck[] {
+): readonly RegisteredHealthCheck[] {
   return [
     gatewayConfigCheck,
     ...createConvertedWorkflowChecks(deps),
@@ -779,10 +817,10 @@ export function createCoreHealthChecks(
     createSkillsReadinessCheck(deps),
     browserClawdProfileResidueCheck,
     finalConfigValidationCheck,
-  ];
+  ].map(normalizeHealthCheck);
 }
 
-export const CORE_HEALTH_CHECKS: readonly HealthCheck[] = createCoreHealthChecks();
+export const CORE_HEALTH_CHECKS: readonly RegisteredHealthCheck[] = createCoreHealthChecks();
 
 function formatMissingSkillSummary(skill: SkillStatusEntry): string {
   const missing: string[] = [];

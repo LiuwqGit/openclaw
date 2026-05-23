@@ -8,6 +8,13 @@ import {
 
 const mocks = vi.hoisted(() => ({
   maybeRunConfiguredPluginInstallReleaseStep: vi.fn(),
+  registerCoreHealthChecks: vi.fn(),
+  registerBundledHealthChecks: vi.fn(),
+  runDoctorHealthRepairs: vi.fn(),
+  listHealthChecks: vi.fn(),
+  resolveAgentWorkspaceDir: vi.fn(() => "/tmp/openclaw-workspace"),
+  resolveDefaultAgentId: vi.fn(() => "default"),
+  doctorShellCompletion: vi.fn(),
   note: vi.fn(),
   replaceConfigFile: vi.fn().mockResolvedValue(undefined),
   readConfigFileSnapshot: vi.fn().mockResolvedValue({
@@ -24,6 +31,31 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../commands/doctor/shared/release-configured-plugin-installs.js", () => ({
   maybeRunConfiguredPluginInstallReleaseStep: mocks.maybeRunConfiguredPluginInstallReleaseStep,
+}));
+
+vi.mock("./doctor-core-checks.js", () => ({
+  registerCoreHealthChecks: mocks.registerCoreHealthChecks,
+}));
+
+vi.mock("./bundled-health-checks.js", () => ({
+  registerBundledHealthChecks: mocks.registerBundledHealthChecks,
+}));
+
+vi.mock("./doctor-repair-flow.js", () => ({
+  runDoctorHealthRepairs: mocks.runDoctorHealthRepairs,
+}));
+
+vi.mock("./health-check-registry.js", () => ({
+  listHealthChecks: mocks.listHealthChecks,
+}));
+
+vi.mock("../agents/agent-scope.js", () => ({
+  resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
+  resolveDefaultAgentId: mocks.resolveDefaultAgentId,
+}));
+
+vi.mock("../commands/doctor-completion.js", () => ({
+  doctorShellCompletion: mocks.doctorShellCompletion,
 }));
 
 vi.mock("../terminal/note.js", () => ({
@@ -64,7 +96,10 @@ function requireDoctorContribution(id: string) {
   return contribution;
 }
 
-function buildDoctorPrompter(shouldRepair: boolean): DoctorPrompter {
+function buildDoctorPrompter(
+  shouldRepair: boolean,
+  repairModeOverrides: Partial<DoctorPrompter["repairMode"]> = {},
+): DoctorPrompter {
   return {
     confirm: vi.fn(async () => shouldRepair),
     confirmAutoFix: vi.fn(async () => shouldRepair),
@@ -79,6 +114,7 @@ function buildDoctorPrompter(shouldRepair: boolean): DoctorPrompter {
       nonInteractive: true,
       canPrompt: false,
       updateInProgress: false,
+      ...repairModeOverrides,
     },
   };
 }
@@ -86,6 +122,31 @@ function buildDoctorPrompter(shouldRepair: boolean): DoctorPrompter {
 describe("doctor health contributions", () => {
   beforeEach(() => {
     mocks.maybeRunConfiguredPluginInstallReleaseStep.mockReset();
+    mocks.registerCoreHealthChecks.mockReset();
+    mocks.registerBundledHealthChecks.mockReset();
+    mocks.runDoctorHealthRepairs.mockReset();
+    mocks.runDoctorHealthRepairs.mockResolvedValue({
+      config: {},
+      findings: [],
+      remainingFindings: [],
+      changes: [],
+      warnings: [],
+      diffs: [],
+      effects: [],
+      checksRun: 0,
+      checksRepaired: 0,
+      checksValidated: 0,
+    });
+    mocks.listHealthChecks.mockReset();
+    mocks.listHealthChecks.mockReturnValue([
+      { id: "core/doctor/shell-completion" },
+      { id: "core/doctor/unrelated" },
+    ]);
+    mocks.resolveAgentWorkspaceDir.mockReset();
+    mocks.resolveAgentWorkspaceDir.mockReturnValue("/tmp/openclaw-workspace");
+    mocks.resolveDefaultAgentId.mockReset();
+    mocks.resolveDefaultAgentId.mockReturnValue("default");
+    mocks.doctorShellCompletion.mockReset();
     mocks.note.mockReset();
     mocks.readConfigFileSnapshot.mockReset();
     mocks.readConfigFileSnapshot.mockResolvedValue({
@@ -208,6 +269,135 @@ describe("doctor health contributions", () => {
     expect(ids.indexOf("doctor:structured-health-repairs")).toBeLessThan(
       ids.indexOf("doctor:write-config"),
     );
+  });
+
+  it("keeps positional shell completion out of the broad structured repair pass", async () => {
+    const contribution = requireDoctorContribution("doctor:structured-health-repairs");
+    const ctx = {
+      cfg: {},
+      configResult: { cfg: {} },
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+      cfgForPersistence: {},
+      configPath: "/tmp/fake-openclaw.json",
+      env: {},
+    } as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(mocks.runDoctorHealthRepairs).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cwd: "/tmp/openclaw-workspace",
+      }),
+      {
+        checks: [{ id: "core/doctor/unrelated" }],
+      },
+    );
+  });
+
+  it("runs shell completion through the structured repair runner in repair mode", async () => {
+    mocks.runDoctorHealthRepairs.mockResolvedValueOnce({
+      config: {},
+      findings: [
+        {
+          checkId: "core/doctor/shell-completion",
+          severity: "warning",
+          message: "Shell completion cache is missing.",
+        },
+      ],
+      remainingFindings: [],
+      changes: ["Completion cache regenerated at /tmp/openclaw.zsh"],
+      warnings: [],
+      diffs: [],
+      effects: [],
+      checksRun: 1,
+      checksRepaired: 1,
+      checksValidated: 1,
+    });
+    const contribution = requireDoctorContribution("doctor:shell-completion");
+    const ctx = {
+      cfg: {},
+      configResult: { cfg: {} },
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true, { nonInteractive: false, canPrompt: true }),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: { nonInteractive: false },
+      cfgForPersistence: {},
+      configPath: "/tmp/fake-openclaw.json",
+      env: {},
+    } as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(mocks.doctorShellCompletion).not.toHaveBeenCalled();
+    expect(mocks.runDoctorHealthRepairs).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: {},
+        configPath: "/tmp/fake-openclaw.json",
+        doctor: expect.objectContaining({
+          options: { nonInteractive: false },
+          confirm: expect.any(Function),
+        }),
+      }),
+      {
+        checks: [{ id: "core/doctor/shell-completion" }],
+      },
+    );
+    expect(mocks.note).toHaveBeenCalledWith(
+      "Completion cache regenerated at /tmp/openclaw.zsh",
+      "Doctor changes",
+    );
+  });
+
+  it("keeps optional shell completion quiet after structured repair handles it", async () => {
+    const contribution = requireDoctorContribution("doctor:shell-completion");
+    const ctx = {
+      cfg: {},
+      configResult: { cfg: {} },
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+      cfgForPersistence: {},
+      configPath: "/tmp/fake-openclaw.json",
+      env: {},
+    } as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(mocks.runDoctorHealthRepairs).toHaveBeenCalledWith(
+      expect.objectContaining({
+        doctor: expect.objectContaining({
+          options: { nonInteractive: undefined },
+        }),
+      }),
+      expect.any(Object),
+    );
+    expect(mocks.doctorShellCompletion).not.toHaveBeenCalled();
+  });
+
+  it("preserves legacy shell completion presentation outside repair mode", async () => {
+    const contribution = requireDoctorContribution("doctor:shell-completion");
+    const ctx = {
+      cfg: {},
+      configResult: { cfg: {} },
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(false),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: { nonInteractive: true },
+      cfgForPersistence: {},
+      configPath: "/tmp/fake-openclaw.json",
+      env: {},
+    } as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(mocks.runDoctorHealthRepairs).not.toHaveBeenCalled();
+    expect(mocks.doctorShellCompletion).toHaveBeenCalledWith(ctx.runtime, ctx.prompter, {
+      nonInteractive: true,
+    });
   });
 
   it("skips doctor config writes under legacy update parents", () => {

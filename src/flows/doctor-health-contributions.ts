@@ -50,6 +50,8 @@ type DoctorHealthContribution = FlowContribution & {
   run: (ctx: DoctorHealthFlowContext) => Promise<void>;
 };
 
+const POSITIONAL_STRUCTURED_REPAIR_CHECK_IDS = new Set(["core/doctor/shell-completion"]);
+
 function isUpdateDoctorRun(env: NodeJS.ProcessEnv | Record<string, string | undefined>): boolean {
   const value = env.OPENCLAW_UPDATE_IN_PROGRESS;
   return value === "1" || value === "true";
@@ -243,6 +245,7 @@ async function runStructuredHealthRepairs(ctx: DoctorHealthFlowContext): Promise
   }
   const { registerCoreHealthChecks } = await import("./doctor-core-checks.js");
   const { registerBundledHealthChecks } = await import("./bundled-health-checks.js");
+  const { listHealthChecks } = await import("./health-check-registry.js");
   const { runDoctorHealthRepairs } = await import("./doctor-repair-flow.js");
   const { resolveAgentWorkspaceDir, resolveDefaultAgentId } =
     await import("../agents/agent-scope.js");
@@ -251,13 +254,19 @@ async function runStructuredHealthRepairs(ctx: DoctorHealthFlowContext): Promise
   registerCoreHealthChecks();
   const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
   registerBundledHealthChecks({ cfg: ctx.cfg, cwd: workspaceDir });
-  const result = await runDoctorHealthRepairs({
-    mode: "fix",
-    runtime: ctx.runtime,
-    cfg: ctx.cfg,
-    cwd: workspaceDir,
-    configPath: ctx.configPath,
-  });
+  const checks = listHealthChecks().filter(
+    (check) => !POSITIONAL_STRUCTURED_REPAIR_CHECK_IDS.has(check.id),
+  );
+  const result = await runDoctorHealthRepairs(
+    {
+      mode: "fix",
+      runtime: ctx.runtime,
+      cfg: ctx.cfg,
+      cwd: workspaceDir,
+      configPath: ctx.configPath,
+    },
+    { checks },
+  );
   ctx.cfg = result.config;
   if (result.changes.length > 0) {
     note(result.changes.join("\n"), "Doctor changes");
@@ -576,6 +585,49 @@ async function runBootstrapSizeHealth(ctx: DoctorHealthFlowContext): Promise<voi
 }
 
 async function runShellCompletionHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  if (ctx.prompter.shouldRepair) {
+    const { registerCoreHealthChecks } = await import("./doctor-core-checks.js");
+    const { listHealthChecks } = await import("./health-check-registry.js");
+    const { runDoctorHealthRepairs } = await import("./doctor-repair-flow.js");
+    const { note } = await import("../terminal/note.js");
+    registerCoreHealthChecks();
+    const check = listHealthChecks().find((entry) => entry.id === "core/doctor/shell-completion");
+    if (!check) {
+      const { doctorShellCompletion } = await import("../commands/doctor-completion.js");
+      await doctorShellCompletion(ctx.runtime, ctx.prompter, {
+        nonInteractive: ctx.prompter.repairMode.nonInteractive,
+      });
+      return;
+    }
+    const result = await runDoctorHealthRepairs(
+      {
+        mode: "fix",
+        runtime: ctx.runtime,
+        cfg: ctx.cfg,
+        configPath: ctx.configPath,
+        doctor: {
+          options: {
+            nonInteractive: ctx.options.nonInteractive,
+          },
+          confirm: (params: Parameters<DoctorPrompter["confirm"]>[0]) =>
+            ctx.prompter.confirm(params),
+        },
+      } as Parameters<typeof runDoctorHealthRepairs>[0] & {
+        doctor: {
+          options: { nonInteractive: boolean | undefined };
+          confirm: (params: Parameters<DoctorPrompter["confirm"]>[0]) => Promise<boolean>;
+        };
+      },
+      { checks: [check] },
+    );
+    if (result.changes.length > 0) {
+      note(result.changes.join("\n"), "Doctor changes");
+    }
+    if (result.warnings.length > 0) {
+      note(result.warnings.join("\n"), "Doctor warnings");
+    }
+    return;
+  }
   const { doctorShellCompletion } = await import("../commands/doctor-completion.js");
   await doctorShellCompletion(ctx.runtime, ctx.prompter, {
     nonInteractive: ctx.options.nonInteractive,
@@ -893,6 +945,7 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:shell-completion",
       label: "Shell completion",
+      healthCheckIds: ["core/doctor/shell-completion"],
       run: runShellCompletionHealth,
     }),
     createDoctorHealthContribution({

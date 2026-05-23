@@ -1,16 +1,17 @@
-import { listHealthChecks } from "./health-check-registry.js";
 import { scrubDoctorErrorMessage } from "./doctor-error-message.js";
+import { normalizeHealthCheck } from "./health-check-adapter.js";
+import { listHealthChecks } from "./health-check-registry.js";
+import type { HealthCheckInput } from "./health-check-runner-types.js";
 import {
   HEALTH_FINDING_SEVERITY_RANK,
   healthFindingMeetsSeverity,
-  type HealthCheck,
   type HealthCheckContext,
   type HealthFinding,
   type HealthFindingSeverity,
 } from "./health-checks.js";
 
 export interface DoctorLintRunOptions {
-  readonly checks?: readonly HealthCheck[];
+  readonly checks?: readonly HealthCheckInput[];
   readonly skipIds?: ReadonlySet<string> | readonly string[];
   readonly onlyIds?: ReadonlySet<string> | readonly string[];
 }
@@ -25,7 +26,7 @@ export async function runDoctorLintChecks(
   ctx: HealthCheckContext,
   opts: DoctorLintRunOptions = {},
 ): Promise<DoctorLintRunResult> {
-  const all = opts.checks ?? listHealthChecks();
+  const all = (opts.checks ?? listHealthChecks()).map(normalizeHealthCheck);
   const skip = opts.skipIds instanceof Set ? opts.skipIds : new Set(opts.skipIds ?? []);
   const only = opts.onlyIds instanceof Set ? opts.onlyIds : new Set(opts.onlyIds ?? []);
   const allIds = new Set(all.map((check) => check.id));

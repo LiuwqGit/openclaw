@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { exitCodeFromFindings, runDoctorLintChecks } from "./doctor-lint-flow.js";
-import { normalizeHealthCheck } from "./health-check-adapter.js";
 import type { RunnableHealthCheck } from "./health-check-runner-types.js";
 import type { HealthCheck, HealthCheckContext } from "./health-checks.js";
 
@@ -59,9 +58,7 @@ describe("runDoctorLintChecks", () => {
         };
       },
     };
-    const check = normalizeHealthCheck(runnable);
-
-    const result = await runDoctorLintChecks(ctx, { checks: [check] });
+    const result = await runDoctorLintChecks(ctx, { checks: [runnable] });
 
     expect(result.findings.map((finding) => finding.checkId)).toEqual(["run-check"]);
   });
