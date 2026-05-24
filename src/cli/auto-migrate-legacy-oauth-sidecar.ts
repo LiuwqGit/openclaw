@@ -9,10 +9,6 @@ const DECLINE_MARKER_FILENAME = "legacy-oauth-sidecar-migration-declined";
 
 const SKIPPED_PRIMARIES = new Set(["doctor", "update", "help", "completion", "version"]);
 
-// Argv flags that some command documents as suppressing confirmation
-// prompts. Treat any of them as a signal that this invocation is
-// scripted/automation and must not see the migration prompt either.
-// `hasFlag` honors the `--` argv terminator for all of these.
 const NO_PROMPT_FLAGS = ["--non-interactive", "--yes", "--no-input", "--force"] as const;
 
 type AutoMigrateInteractivePrompter = {
@@ -125,10 +121,10 @@ export async function maybeAutoMigrateLegacyOAuthSidecarOnInteractiveCli(params:
       },
     });
 
-    // Write the marker for any outcome that left credentials un-migrated:
-    // explicit decline, Ctrl+C cancel, or accepted-but-decryption-failed
-    // (Keychain "Deny", wrong seed, partial migration error). Doctor remains
-    // the explicit retry path so this is not a one-way door.
+    // Any prompted-but-no-changes outcome (decline, Ctrl+C, Keychain "Deny",
+    // decryption failure) must write the marker; without it the next CLI run
+    // re-prompts and re-triggers the Keychain dialog. `openclaw doctor --fix`
+    // is the documented retry path.
     if (result.changes.length === 0) {
       const markerPath = resolveDeclineMarkerPath(env);
       fs.mkdirSync(path.dirname(markerPath), { recursive: true });

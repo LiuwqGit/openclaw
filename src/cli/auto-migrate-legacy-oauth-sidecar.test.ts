@@ -372,7 +372,6 @@ describe("maybeAutoMigrateLegacyOAuthSidecarOnInteractiveCli", () => {
         prompter: { confirm },
       });
       expect(confirm).toHaveBeenCalledTimes(1);
-      // Reset the decline marker so the next iteration also prompts.
       fs.rmSync(declineMarkerPath(state), { force: true });
     }
   });
@@ -460,10 +459,8 @@ describe("maybeAutoMigrateLegacyOAuthSidecarOnInteractiveCli", () => {
 
   it("writes the decline marker when the user accepts but decryption fails (e.g. Keychain denied)", async () => {
     const { state, sidecarPath } = await makeStateWithLegacyOauthRef("legacy-oauth-seed");
-    // Corrupt the sidecar ciphertext so decryption fails regardless of which
-    // seed source the loader tries — same observable outcome as the user
-    // hitting "Deny" on the macOS Keychain prompt after accepting the
-    // migration confirm.
+    // Simulate Keychain "Deny" after accept: corrupt the ciphertext so no
+    // seed source can decrypt.
     const sidecar = JSON.parse(fs.readFileSync(sidecarPath, "utf8")) as {
       encrypted: { ciphertext: string };
     };

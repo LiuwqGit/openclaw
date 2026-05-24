@@ -33,7 +33,6 @@ async function writeLegacySidecarThatNeedsKeychain(): Promise<{
     prefix: "openclaw-legacy-oauth-keychain-warn-",
     env: {
       OPENCLAW_AGENT_DIR: undefined,
-      // No env seed and no file seed: only a Keychain seed could decrypt.
       OPENCLAW_AUTH_PROFILE_SECRET_KEY: undefined,
     },
   });
@@ -121,7 +120,6 @@ describe("loadLegacyOAuthSidecarMaterial keychain-only headless warning", () => 
       env,
     });
     expect(secondAttempt).toBeNull();
-    // The hint is rate-limited to once per process; no extra warn calls.
     expect(warnSpy).toHaveBeenCalledTimes(1);
   });
 
