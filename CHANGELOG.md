@@ -12,6 +12,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Doctor: skip redundant Gateway restart prompts when a recent supervisor restart leaves the Gateway healthy, and default manual restart prompts to No for running services. Fixes #86518. (#86533) Thanks @liaoyl830.
+- Installer: make Alpine apk installs cover Git, verify the Node runtime floor, try `nodejs-current`, and report Alpine version guidance when repositories only provide older Node packages.
 - Plugins/perf: cache plugin package realpaths, reuse derived metadata snapshots safely, and clear metadata memo caches at lifecycle boundaries so plugin discovery hot paths avoid repeated filesystem work without reusing incomplete snapshots. (#86517)
 - Release/Docker: skip duplicate UI builds in install smoke and Docker package lanes, and dedupe Docker E2E resource planning so release validation finishes faster.
 - Memory: abort sync instead of silently degrading an existing semantic vector index to FTS-only when the configured embedding provider is temporarily unavailable. (#85704) Thanks @yaaboo-gif.
