@@ -30,6 +30,8 @@ const REQUIRED_REVIEWED_PUBLISHABLE_CRITICAL_FINDINGS = new Set([
   "@openclaw/codex:dangerous-exec:src/app-server/transport-stdio.ts",
   "@openclaw/codex:dangerous-exec:src/node-cli-sessions.ts",
   "@openclaw/discord:dangerous-exec:src/voice/audio.ts",
+  "@openclaw/diffs:dangerous-exec:scripts/build-viewer.mjs",
+  "@openclaw/diffs-language-pack:dangerous-exec:scripts/build-viewer.mjs",
   "@openclaw/google-meet:dangerous-exec:src/node-host.ts",
   "@openclaw/google-meet:dangerous-exec:src/realtime.ts",
   "@openclaw/matrix:dangerous-exec:src/matrix/deps.ts",
