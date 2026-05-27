@@ -13,8 +13,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { readConfiguredLogTail } from "../logging/log-tail.js";
 import { parseLogLine } from "../logging/parse-log-line.js";
 import { redactSensitiveLines, resolveRedactOptions } from "../logging/redact.js";
-import { formatTimestamp, isValidTimeZone } from "../logging/timestamps.js";
-import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import { formatTimestamp } from "../logging/timestamps.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { clearActiveProgressLine } from "../terminal/progress-line.js";
@@ -22,16 +21,6 @@ import { createSafeStreamWriter } from "../terminal/stream-writer.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
 import { formatCliCommand } from "./command-format.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "./gateway-rpc.js";
-
-type LogsCliRuntimeModule = typeof import("./logs-cli.runtime.js");
-
-const logsCliRuntimeLoader = createLazyImportLoader<LogsCliRuntimeModule>(
-  () => import("./logs-cli.runtime.js"),
-);
-
-async function loadLogsCliRuntime(): Promise<LogsCliRuntimeModule> {
-  return logsCliRuntimeLoader.load();
-}
 
 type LogsTailPayload = {
   file?: string;
@@ -49,6 +38,8 @@ type LogsTailPayload = {
   localFallback?: boolean;
 };
 
+type LogsCliRuntimeModule = typeof import("./logs-cli.runtime.js");
+
 type LogCursorState = {
   gateway?: number;
   journal?: string;
@@ -63,6 +54,10 @@ class JournalFallbackUnavailableError extends Error {
   }
 }
 
+async function loadLogsCliRuntime(): Promise<LogsCliRuntimeModule> {
+  return await import("./logs-cli.runtime.js");
+}
+
 type LogsCliOptions = {
   limit?: string;
   maxBytes?: string;
@@ -72,6 +67,7 @@ type LogsCliOptions = {
   plain?: boolean;
   color?: boolean;
   localTime?: boolean;
+  utc?: boolean;
   url?: string;
   token?: string;
   timeout?: string;
@@ -312,10 +308,7 @@ function parseJournalctlOutput(output: string): { lines: string[]; cursor?: stri
   return { lines, cursor };
 }
 
-function resolveLogsSystemdUnitName(
-  runtime: LogsCliRuntimeModule,
-  env: NodeJS.ProcessEnv,
-): string {
+function resolveLogsSystemdUnitName(runtime: LogsCliRuntimeModule, env: NodeJS.ProcessEnv): string {
   const override = env.OPENCLAW_SYSTEMD_UNIT?.trim();
   if (override) {
     return override.endsWith(".service") ? override : `${override}.service`;
@@ -352,7 +345,7 @@ function isTransientFollowError(error: unknown): boolean {
 export function formatLogTimestamp(
   value?: string,
   mode: "pretty" | "plain" = "plain",
-  localTime = false,
+  localTime = true,
 ) {
   if (!value) {
     return "";
@@ -445,12 +438,11 @@ async function emitGatewayError(
   emitJsonLine: (payload: Record<string, unknown>, toStdErr?: boolean) => boolean,
   errorLine: (text: string) => boolean,
 ) {
-  const runtime = await loadLogsCliRuntime();
   const message = "Gateway not reachable. Is it running and accessible?";
   const hint = `Hint: run \`${formatCliCommand("openclaw doctor")}\`.`;
   const errorText = formatErrorMessage(err);
 
-  const details = runtime.buildGatewayConnectionDetails({ url: opts.url });
+  const details = buildGatewayConnectionDetails({ url: opts.url });
   if (mode === "json") {
     if (
       !emitJsonLine(
@@ -489,7 +481,8 @@ export function registerLogsCli(program: Command) {
     .option("--json", "Emit JSON log lines", false)
     .option("--plain", "Plain text output (no ANSI styling)", false)
     .option("--no-color", "Disable ANSI colors")
-    .option("--local-time", "Display timestamps in local timezone", false)
+    .option("--local-time", "Display timestamps in local timezone (default)", false)
+    .option("--utc", "Display timestamps in UTC", false)
     .addHelpText(
       "after",
       () =>
@@ -509,8 +502,7 @@ export function registerLogsCli(program: Command) {
     const jsonMode = Boolean(opts.json);
     const pretty = !jsonMode && process.stdout.isTTY && !opts.plain;
     const rich = isRich() && opts.color !== false;
-    const localTime =
-      Boolean(opts.localTime) || (!!process.env.TZ && isValidTimeZone(process.env.TZ));
+    const localTime = !opts.utc;
 
     let followRetryAttempt = 0;
     while (true) {

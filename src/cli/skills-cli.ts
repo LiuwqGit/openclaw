@@ -27,6 +27,7 @@ import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { CONFIG_DIR } from "../utils.js";
 import { resolveOptionFromCommand } from "./cli-utils.js";
+import { parseStrictPositiveIntOption } from "./program/helpers.js";
 import { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.format.js";
 
 export type {
@@ -89,7 +90,6 @@ async function runSkillsAction(
   try {
     const report = await loadSkillsStatusReport(options);
     defaultRuntime.writeStdout(render(report));
-    defaultRuntime.exit(0);
   } catch (err) {
     defaultRuntime.error(String(err));
     defaultRuntime.exit(1);
@@ -173,7 +173,7 @@ export function registerSkillsCli(program: Command) {
     .command("search")
     .description("Search ClawHub skills")
     .argument("[query...]", "Optional search query")
-    .option("--limit <n>", "Max results", (value) => Number.parseInt(value, 10))
+    .option("--limit <n>", "Max results", (value) => parseStrictPositiveIntOption(value, "--limit"))
     .option("--json", "Output as JSON", false)
     .action(async (queryParts: string[], opts: { limit?: number; json?: boolean }) => {
       try {
