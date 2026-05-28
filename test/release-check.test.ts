@@ -556,6 +556,25 @@ describe("collectForbiddenPackPaths", () => {
       rmSync(tempRoot, { recursive: true, force: true });
     }
   });
+
+  it("blocks root plugin SDK declarations that still reference private test helpers", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "openclaw-release-private-sdk-"));
+
+    try {
+      mkdirSync(join(tempRoot, "dist", "plugin-sdk"), { recursive: true });
+      writeFileSync(
+        join(tempRoot, "dist", "plugin-sdk", "testing.d.ts"),
+        "//#region src/plugin-sdk/test-helpers/session.ts\n",
+        "utf8",
+      );
+
+      expect(collectForbiddenPackContentPaths(["dist/plugin-sdk/testing.d.ts"], tempRoot)).toEqual([
+        "dist/plugin-sdk/testing.d.ts",
+      ]);
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("collectMissingPackPaths", () => {

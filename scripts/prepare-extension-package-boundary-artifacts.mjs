@@ -69,6 +69,7 @@ const WHATSAPP_DTS_INPUTS = [
 const WHATSAPP_DTS_STAMP = "dist/plugin-sdk/extensions/whatsapp/.boundary-dts.stamp";
 const WHATSAPP_DTS_REQUIRED_OUTPUTS = ["dist/plugin-sdk/extensions/whatsapp/api.d.ts"];
 const ENTRY_SHIMS_INPUTS = [
+  "scripts/lib/plugin-sdk-private-local-only-subpaths.json",
   "scripts/write-plugin-sdk-entry-dts.ts",
   "scripts/lib/plugin-sdk-entrypoints.json",
   "scripts/lib/plugin-sdk-entries.mjs",

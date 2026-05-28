@@ -119,6 +119,12 @@ const forbiddenPrivateQaContentMarkers = [
   "qa-lab/cli.js",
   "qa-lab/runtime-api.js",
 ] as const;
+const forbiddenPrivatePluginSdkDeclarationMarkers = [
+  "//#region src/agents/test-helpers/",
+  "//#region src/plugin-sdk/test-helpers/",
+  "//#region src/test-helpers/",
+  "//#region src/test-utils/",
+] as const;
 const forbiddenPrivateQaContentScanPrefixes = ["dist/"] as const;
 const forbiddenPluginSdkRootAliasMinifiedExportPattern = /\bmod\.[A-Za-z_$]\b/u;
 const appcastPath = resolve("appcast.xml");
@@ -836,7 +842,10 @@ export function collectForbiddenPackContentPaths(
       } catch {
         return false;
       }
-      return forbiddenPrivateQaContentMarkers.some((marker) => content.includes(marker));
+      return (
+        forbiddenPrivateQaContentMarkers.some((marker) => content.includes(marker)) ||
+        forbiddenPrivatePluginSdkDeclarationMarkers.some((marker) => content.includes(marker))
+      );
     })
     .toSorted((left, right) => left.localeCompare(right));
 }
