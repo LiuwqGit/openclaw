@@ -2510,9 +2510,42 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     record: PluginRecord,
     job: PluginSessionSchedulerJobRegistration,
   ) => {
-    const jobId = normalizeHostHookString(job.id);
-    const sessionKey = normalizeHostHookString(job.sessionKey);
-    const kind = normalizeHostHookString(job.kind);
+    const idValue = readHostHookField(job, "id");
+    const sessionKeyValue = readHostHookField(job, "sessionKey");
+    const kindValue = readHostHookField(job, "kind");
+    const descriptionValue = readHostHookField(job, "description");
+    const cleanupValue = readHostHookField(job, "cleanup");
+    const pushUnreadableDiagnostic = (field: keyof PluginSessionSchedulerJobRegistration) => {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `session scheduler job registration has unreadable field: ${field}`,
+      });
+    };
+    if (!idValue.ok) {
+      pushUnreadableDiagnostic("id");
+      return undefined;
+    }
+    if (!sessionKeyValue.ok) {
+      pushUnreadableDiagnostic("sessionKey");
+      return undefined;
+    }
+    if (!kindValue.ok) {
+      pushUnreadableDiagnostic("kind");
+      return undefined;
+    }
+    if (!descriptionValue.ok) {
+      pushUnreadableDiagnostic("description");
+      return undefined;
+    }
+    if (!cleanupValue.ok) {
+      pushUnreadableDiagnostic("cleanup");
+      return undefined;
+    }
+    const jobId = normalizeHostHookString(idValue.value);
+    const sessionKey = normalizeHostHookString(sessionKeyValue.value);
+    const kind = normalizeHostHookString(kindValue.value);
     if (
       jobId &&
       (registry.sessionSchedulerJobs ?? []).some(
@@ -2536,7 +2569,18 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return undefined;
     }
-    if (job.cleanup !== undefined && typeof job.cleanup !== "function") {
+    const description = normalizeOptionalHostHookString(descriptionValue.value);
+    if (description === "") {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `session scheduler job description must be a string: ${jobId}`,
+      });
+      return undefined;
+    }
+    const cleanup = cleanupValue.value;
+    if (cleanup !== undefined && typeof cleanup !== "function") {
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
@@ -2545,11 +2589,20 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return undefined;
     }
+    const sanitizedJob: PluginSessionSchedulerJobRegistration = {
+      id: jobId,
+      sessionKey,
+      kind,
+      ...(description !== undefined ? { description } : {}),
+      ...(cleanup !== undefined
+        ? { cleanup: cleanup as PluginSessionSchedulerJobRegistration["cleanup"] }
+        : {}),
+    };
     if (registryParams.activateGlobalSideEffects === false) {
       (registry.sessionSchedulerJobs ??= []).push({
         pluginId: record.id,
         pluginName: record.name,
-        job: { ...job, id: jobId, sessionKey, kind },
+        job: sanitizedJob,
         source: record.source,
         rootDir: record.rootDir,
       });
@@ -2559,7 +2612,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginId: record.id,
       pluginName: record.name,
       ownerRegistry: registry,
-      job: { ...job, id: jobId, sessionKey, kind },
+      job: sanitizedJob,
     });
     if (!handle) {
       pushDiagnostic({
@@ -2573,7 +2626,12 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     (registry.sessionSchedulerJobs ??= []).push({
       pluginId: record.id,
       pluginName: record.name,
-      job: { ...job, id: handle.id, sessionKey: handle.sessionKey, kind: handle.kind },
+      job: {
+        ...sanitizedJob,
+        id: handle.id,
+        sessionKey: handle.sessionKey,
+        kind: handle.kind,
+      },
       generation: getPluginSessionSchedulerJobGeneration({
         pluginId: record.id,
         jobId: handle.id,
@@ -2586,15 +2644,44 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   };
 
   const registerSessionAction = (record: PluginRecord, action: PluginSessionActionRegistration) => {
-    const id = normalizeHostHookString(action.id);
-    const description = normalizeOptionalHostHookString(action.description);
-    const requiredScopes = normalizeHostHookStringList(action.requiredScopes);
-    if (
-      !id ||
-      description === "" ||
-      requiredScopes === null ||
-      typeof action.handler !== "function"
-    ) {
+    const idValue = readHostHookField(action, "id");
+    const descriptionValue = readHostHookField(action, "description");
+    const schemaValue = readHostHookField(action, "schema");
+    const requiredScopesValue = readHostHookField(action, "requiredScopes");
+    const handlerValue = readHostHookField(action, "handler");
+    const pushUnreadableDiagnostic = (field: keyof PluginSessionActionRegistration) => {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `session action registration has unreadable field: ${field}`,
+      });
+    };
+    if (!idValue.ok) {
+      pushUnreadableDiagnostic("id");
+      return;
+    }
+    if (!descriptionValue.ok) {
+      pushUnreadableDiagnostic("description");
+      return;
+    }
+    if (!schemaValue.ok) {
+      pushUnreadableDiagnostic("schema");
+      return;
+    }
+    if (!requiredScopesValue.ok) {
+      pushUnreadableDiagnostic("requiredScopes");
+      return;
+    }
+    if (!handlerValue.ok) {
+      pushUnreadableDiagnostic("handler");
+      return;
+    }
+    const id = normalizeHostHookString(idValue.value);
+    const description = normalizeOptionalHostHookString(descriptionValue.value);
+    const requiredScopes = normalizeHostHookStringList(requiredScopesValue.value);
+    const handler = handlerValue.value;
+    if (!id || description === "" || requiredScopes === null || typeof handler !== "function") {
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
@@ -2615,9 +2702,11 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         return;
       }
     }
-    if (!validateSessionActionSchema(record, id, action.schema)) {
+    const schema = schemaValue.value;
+    if (!validateSessionActionSchema(record, id, schema)) {
       return;
     }
+    const actionSchema = schema as PluginSessionActionRegistration["schema"];
     const existing = (registry.sessionActions ?? []).find(
       (entry) => entry.pluginId === record.id && entry.action.id === id,
     );
@@ -2634,12 +2723,13 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginId: record.id,
       pluginName: record.name,
       action: {
-        ...action,
         id,
         ...(description !== undefined ? { description } : {}),
+        ...(actionSchema !== undefined ? { schema: actionSchema } : {}),
         ...(requiredScopes !== undefined
           ? { requiredScopes: requiredScopes as OperatorScope[] }
           : {}),
+        handler: handler as PluginSessionActionRegistration["handler"],
       },
       source: record.source,
       rootDir: record.rootDir,

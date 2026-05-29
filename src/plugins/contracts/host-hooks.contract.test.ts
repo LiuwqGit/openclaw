@@ -263,6 +263,65 @@ describe("host-hook fixture plugin contract", () => {
     });
   });
 
+  it("fails closed on unreadable scheduler and action hooks without aborting plugin registration", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    const schedulerJob: Record<string, unknown> = {
+      id: "mockplugin-scheduler",
+      sessionKey: "agent:main:main",
+      kind: "monitor",
+      cleanup: () => undefined,
+    };
+    Object.defineProperty(schedulerJob, "description", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin scheduler description is unreadable");
+      },
+    });
+    const action: Record<string, unknown> = {
+      id: "mockplugin-action",
+      handler: () => ({ ok: true }),
+    };
+    Object.defineProperty(action, "schema", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin session action schema is unreadable");
+      },
+    });
+
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "fuzzplugin",
+        name: "Fuzz Plugin",
+        origin: "workspace",
+      }),
+      register(api) {
+        api.registerSessionSchedulerJob(schedulerJob as never);
+        api.registerSessionAction(action as never);
+        api.registerCommand({
+          name: "mockplugin-scheduler",
+          description: "Healthy command sibling",
+          handler: async () => ({ text: "ok" }),
+        });
+      },
+    });
+
+    expect(registry.registry.sessionSchedulerJobs ?? []).toHaveLength(0);
+    expect(registry.registry.sessionActions ?? []).toHaveLength(0);
+    expect(registry.registry.commands.map((entry) => entry.command.name)).toEqual([
+      "mockplugin-scheduler",
+    ]);
+    expect(diagnosticSummaries(registry.registry.diagnostics)).toContainEqual({
+      pluginId: "fuzzplugin",
+      message: "session scheduler job registration has unreadable field: description",
+    });
+    expect(diagnosticSummaries(registry.registry.diagnostics)).toContainEqual({
+      pluginId: "fuzzplugin",
+      message: "session action registration has unreadable field: schema",
+    });
+  });
+
   it("rejects external plugins from trusted policy and reserved command ownership", () => {
     const { config, registry } = createPluginRegistryFixture();
     registerTestPlugin({
