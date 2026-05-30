@@ -127,6 +127,8 @@ import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { isPluginRegistryActivated, isPluginRegistryRetired } from "./registry-lifecycle.js";
 import type {
   PluginHttpRouteRegistration as RegistryTypesPluginHttpRouteRegistration,
+  PluginChannelRegistration,
+  PluginChannelSetupRegistration,
   PluginRecord,
   PluginRegistryParams,
   PluginSessionActionRegistryRegistration,
@@ -241,6 +243,29 @@ function withStaticPluginToolName(tool: AnyAgentTool, name: string): AnyAgentToo
       return Reflect.get(target, property, receiver);
     },
   });
+}
+
+type RegisteredChannelEntry = PluginChannelRegistration | PluginChannelSetupRegistration;
+
+function readRegisteredChannelEntryId(entry: RegisteredChannelEntry): string | undefined {
+  try {
+    const id = entry.plugin.id;
+    return typeof id === "string" ? id : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function findRegisteredChannelEntryById<T extends RegisteredChannelEntry>(
+  entries: readonly T[],
+  id: string,
+): T | undefined {
+  for (const entry of entries) {
+    if (readRegisteredChannelEntryId(entry) === id) {
+      return entry;
+    }
+  }
+  return undefined;
 }
 
 export type {
@@ -1241,14 +1266,14 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       return;
     }
     const id = plugin.id;
-    const existingRuntime = registry.channels.find((entry) => entry.plugin.id === id);
+    const existingRuntime = findRegisteredChannelEntryById(registry.channels, id);
     if (registrationCapabilities.runtimeChannel && existingRuntime) {
       if (existingRuntime.pluginId === record.id) {
         existingRuntime.plugin = plugin;
         existingRuntime.pluginName = record.name;
         existingRuntime.source = record.source;
         existingRuntime.rootDir = record.rootDir;
-        const existingSetup = registry.channelSetups.find((entry) => entry.plugin.id === id);
+        const existingSetup = findRegisteredChannelEntryById(registry.channelSetups, id);
         if (existingSetup) {
           existingSetup.plugin = plugin;
           existingSetup.pluginName = record.name;
@@ -1267,7 +1292,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginsWithChannelRegistrationConflict.add(record.id);
       return;
     }
-    const existingSetup = registry.channelSetups.find((entry) => entry.plugin.id === id);
+    const existingSetup = findRegisteredChannelEntryById(registry.channelSetups, id);
     if (existingSetup) {
       if (existingSetup.pluginId === record.id) {
         existingSetup.plugin = plugin;
