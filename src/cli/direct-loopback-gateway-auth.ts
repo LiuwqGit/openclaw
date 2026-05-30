@@ -74,6 +74,18 @@ function isLoopbackGatewayUrl(url: string | undefined): boolean {
   }
 }
 
+function resolveGatewayUrlForDirectAuth(opts: DirectLoopbackGatewayAuthOpts): string | undefined {
+  const explicitUrl = normalizeStringifiedOptionalString(opts.url);
+  if (explicitUrl) {
+    return explicitUrl;
+  }
+  try {
+    return buildGatewayConnectionDetails({ config: opts.config }).url;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function shouldUseDirectLoopbackGatewayAuth(
   opts: DirectLoopbackGatewayAuthOpts,
 ): Promise<boolean> {
@@ -88,7 +100,7 @@ export async function shouldUseDirectLoopbackGatewayAuth(
   if (!token && !password && !configuredCredentials?.token && !configuredCredentials?.password) {
     return false;
   }
-  const gatewayUrl = explicitUrl ?? buildGatewayConnectionDetails({ config: opts.config }).url;
+  const gatewayUrl = resolveGatewayUrlForDirectAuth(opts);
   if (!isLoopbackGatewayUrl(gatewayUrl)) {
     return false;
   }
