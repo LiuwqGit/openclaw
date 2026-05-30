@@ -161,7 +161,8 @@ describe("runCliAgent bundle MCP e2e", () => {
         });
 
         expect(result.payloads?.[0]?.text).toContain("BUNDLE MCP OK FROM-BUNDLE");
-        expect(result.meta.agentMeta?.sessionId.length ?? 0).toBeGreaterThan(0);
+        expect(result.meta.agentMeta?.provider).toBe("claude-cli");
+        expect(result.meta.agentMeta?.model).toBe("test-bundle");
       } finally {
         await closeMcpLoopbackServer();
         resetGlobalHookRunner();

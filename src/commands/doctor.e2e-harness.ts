@@ -141,6 +141,14 @@ export const autoMigrateLegacyStateDir = vi.fn().mockResolvedValue({
   changes: [],
   warnings: [],
 }) as unknown as MockFn;
+export const autoMigrateLegacyState = vi.fn().mockResolvedValue({
+  changes: [],
+  warnings: [],
+}) as unknown as MockFn;
+export const autoMigrateLegacyTaskStateSidecars = vi.fn().mockResolvedValue({
+  changes: [],
+  warnings: [],
+}) as unknown as MockFn;
 export const runChannelPluginStartupMaintenance = vi
   .fn()
   .mockResolvedValue(undefined) as unknown as MockFn;
@@ -461,7 +469,9 @@ vi.mock("./onboard-helpers.js", () => ({
 }));
 
 vi.mock("./doctor-state-migrations.js", () => ({
+  autoMigrateLegacyState,
   autoMigrateLegacyStateDir,
+  autoMigrateLegacyTaskStateSidecars,
   detectLegacyStateMigrations,
   runLegacyStateMigrations,
 }));
