@@ -1,5 +1,6 @@
 import "./monitor-inbox.test-harness.js";
 import { describe, expect, it, vi } from "vitest";
+import type { WebInboundMessageWithDeprecatedAliases } from "./inbound/types.js";
 import {
   DEFAULT_ACCOUNT_ID,
   expectPairingPromptSent,
@@ -87,7 +88,7 @@ function firstInboundPayload(onMessage: ReturnType<typeof vi.fn>) {
   if (!payload || typeof payload !== "object") {
     throw new Error("expected first inbound payload");
   }
-  return payload as Record<string, unknown>;
+  return payload as WebInboundMessageWithDeprecatedAliases;
 }
 
 describe("web monitor inbox", () => {
