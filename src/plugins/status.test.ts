@@ -732,6 +732,52 @@ describe("plugin status reports", () => {
     ]);
   });
 
+  it("skips unreadable gateway method descriptors while inspecting a plugin", () => {
+    const unreadableOwner = {};
+    Object.defineProperty(unreadableOwner, "owner", {
+      get() {
+        throw new Error("unreadable fuzzplugin descriptor owner");
+      },
+    });
+    const unreadableName = {
+      owner: { kind: "plugin", pluginId: "mockplugin" },
+    };
+    Object.defineProperty(unreadableName, "name", {
+      get() {
+        throw new Error("unreadable fuzzplugin descriptor name");
+      },
+    });
+    setPluginLoadResult({
+      plugins: [
+        createPluginRecord({
+          id: "mockplugin",
+          name: "Mock Plugin",
+          providerIds: ["mockplugin"],
+        }),
+      ],
+      gatewayMethodDescriptors: [
+        unreadableOwner as never,
+        unreadableName as never,
+        {
+          name: "mockplugin.ready",
+          handler: vi.fn(),
+          scope: "dynamic",
+          owner: { kind: "plugin", pluginId: "mockplugin" },
+        },
+        {
+          name: "fuzzplugin.ready",
+          handler: vi.fn(),
+          scope: "dynamic",
+          owner: { kind: "plugin", pluginId: "fuzzplugin" },
+        },
+      ],
+    });
+
+    const inspect = expectInspectReport("mockplugin");
+
+    expect(inspect.gatewayMethods).toEqual(["mockplugin.ready"]);
+  });
+
   it("builds inspect reports for every loaded plugin", () => {
     setPluginLoadResult({
       plugins: [

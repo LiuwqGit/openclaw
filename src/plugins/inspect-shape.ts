@@ -98,6 +98,69 @@ function derivePluginInspectShape(params: {
   return "non-capability";
 }
 
+function readRecordField(
+  value: unknown,
+  field: string,
+): { ok: true; value: unknown } | { ok: false } {
+  try {
+    if ((typeof value !== "object" && typeof value !== "function") || value === null) {
+      return { ok: false };
+    }
+    return { ok: true, value: (value as Record<string, unknown>)[field] };
+  } catch {
+    return { ok: false };
+  }
+}
+
+function readArrayLength(value: unknown): number | undefined {
+  try {
+    return Array.isArray(value) ? value.length : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readArrayElement(
+  value: unknown,
+  index: number,
+): { ok: true; value: unknown } | { ok: false } {
+  return readRecordField(value, String(index));
+}
+
+export function listPluginOwnedGatewayMethodNames(params: {
+  descriptors: unknown;
+  pluginId: string;
+}): string[] {
+  const length = readArrayLength(params.descriptors);
+  if (length === undefined) {
+    return [];
+  }
+  const names: string[] = [];
+  for (let index = 0; index < length; index += 1) {
+    const descriptor = readArrayElement(params.descriptors, index);
+    if (!descriptor.ok) {
+      continue;
+    }
+    const owner = readRecordField(descriptor.value, "owner");
+    if (!owner.ok) {
+      continue;
+    }
+    const ownerKind = readRecordField(owner.value, "kind");
+    if (!ownerKind.ok || ownerKind.value !== "plugin") {
+      continue;
+    }
+    const ownerPluginId = readRecordField(owner.value, "pluginId");
+    if (!ownerPluginId.ok || ownerPluginId.value !== params.pluginId) {
+      continue;
+    }
+    const name = readRecordField(descriptor.value, "name");
+    if (name.ok && typeof name.value === "string") {
+      names.push(name.value);
+    }
+  }
+  return names;
+}
+
 export function buildPluginShapeSummary(params: {
   plugin: PluginRegistry["plugins"][number];
   report: Pick<PluginRegistry, "hooks" | "typedHooks" | "tools" | "gatewayMethodDescriptors">;
@@ -112,10 +175,10 @@ export function buildPluginShapeSummary(params: {
   const toolCount = params.report.tools.filter(
     (entry) => entry.pluginId === params.plugin.id,
   ).length;
-  const gatewayMethodCount = (params.report.gatewayMethodDescriptors ?? []).filter(
-    (descriptor) =>
-      descriptor.owner.kind === "plugin" && descriptor.owner.pluginId === params.plugin.id,
-  ).length;
+  const gatewayMethodCount = listPluginOwnedGatewayMethodNames({
+    descriptors: params.report.gatewayMethodDescriptors,
+    pluginId: params.plugin.id,
+  }).length;
   const capabilityCount = capabilities.length;
   const shape = derivePluginInspectShape({
     capabilityCount,

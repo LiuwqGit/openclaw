@@ -13,6 +13,7 @@ import { normalizePluginsConfig } from "./config-state.js";
 import { resolveEffectivePluginIds } from "./effective-plugin-ids.js";
 import {
   buildPluginShapeSummary,
+  listPluginOwnedGatewayMethodNames,
   type PluginCapabilityEntry,
   type PluginInspectShape,
 } from "./inspect-shape.js";
@@ -353,11 +354,10 @@ export function buildPluginInspectReport(params: {
   const policyEntry = normalizePluginsConfig(config.plugins).entries[plugin.id];
   const shapeSummary = buildPluginShapeSummary({ plugin, report });
   const shape = shapeSummary.shape;
-  const gatewayMethods = (report.gatewayMethodDescriptors ?? [])
-    .filter(
-      (descriptor) => descriptor.owner.kind === "plugin" && descriptor.owner.pluginId === plugin.id,
-    )
-    .map((descriptor) => descriptor.name);
+  const gatewayMethods = listPluginOwnedGatewayMethodNames({
+    descriptors: report.gatewayMethodDescriptors,
+    pluginId: plugin.id,
+  });
 
   // Populate MCP server info for bundle-format plugins with a known rootDir.
   let mcpServers: PluginInspectReport["mcpServers"] = [];
