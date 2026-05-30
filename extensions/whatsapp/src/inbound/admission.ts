@@ -92,6 +92,15 @@ export type WhatsAppInboundAdmission = {
   resolvedPolicy: WhatsAppInboundResolvedPolicy;
 };
 
+export function requireWhatsAppInboundAdmission(source: {
+  admission?: WhatsAppInboundAdmission;
+}): WhatsAppInboundAdmission {
+  if (!source.admission) {
+    throw new Error("WhatsApp inbound admission is required for accepted inbound messages");
+  }
+  return source.admission;
+}
+
 function copyStringArray(values: readonly string[]): string[] {
   return [...values];
 }

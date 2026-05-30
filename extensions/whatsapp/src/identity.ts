@@ -1,3 +1,5 @@
+import { requireWhatsAppInboundAdmission } from "./inbound/admission.js";
+import type { WhatsAppInboundAdmission } from "./inbound/admission.js";
 import { jidToE164, normalizeE164 } from "./text-runtime.js";
 
 const WHATSAPP_LID_RE = /@(lid|hosted\.lid)$/i;
@@ -22,16 +24,19 @@ export type WhatsAppReplyContext = {
   sender?: WhatsAppIdentity | null;
 };
 
-type LegacySenderLike = {
+type AdmissionIdentitySource = {
+  admission?: WhatsAppInboundAdmission;
+};
+
+type SenderIdentitySource = AdmissionIdentitySource & {
   platform: {
     sender?: WhatsAppIdentity;
     senderJid?: string;
-    senderE164?: string;
     senderName?: string;
   };
 };
 
-type LegacySelfLike = {
+type SelfIdentitySource = AdmissionIdentitySource & {
   platform: {
     self?: WhatsAppSelfIdentity;
     selfJid?: string | null;
@@ -40,7 +45,7 @@ type LegacySelfLike = {
   };
 };
 
-type LegacyReplyLike = {
+type ReplyContextSource = AdmissionIdentitySource & {
   quote?: {
     context?: WhatsAppReplyContext;
     id?: string;
@@ -53,9 +58,10 @@ type LegacyReplyLike = {
   };
 };
 
-type LegacyMentionsLike = {
+type MentionIdentitySource = AdmissionIdentitySource & {
   group?: {
     mentions?: {
+      text?: string[];
       jids?: string[];
     };
   };
@@ -67,6 +73,29 @@ function normalizeDeviceScopedJid(jid: string | null | undefined): string | null
 
 function isLidJid(jid: string | null | undefined): boolean {
   return Boolean(jid && WHATSAPP_LID_RE.test(jid));
+}
+
+function resolveIdentityAuthDir(
+  source: AdmissionIdentitySource,
+  authDir?: string,
+): string | undefined {
+  return authDir ?? source.admission?.account.authDir;
+}
+
+function resolveAdmittedSenderIdentity(
+  senderId: string,
+): Pick<WhatsAppIdentity, "jid" | "lid" | "e164"> {
+  const normalized = normalizeDeviceScopedJid(senderId.trim());
+  if (!normalized) {
+    return {};
+  }
+  if (isLidJid(normalized)) {
+    return { lid: normalized };
+  }
+  if (normalized.includes("@")) {
+    return { jid: normalized };
+  }
+  return { e164: normalized };
 }
 
 export function resolveComparableIdentity(
@@ -110,36 +139,44 @@ export function identitiesOverlap(
   return getComparableIdentityValues(right).some((value) => leftValues.has(value));
 }
 
-export function getSenderIdentity(msg: LegacySenderLike, authDir?: string): WhatsAppIdentity {
+export function getSenderIdentity(msg: SenderIdentitySource, authDir?: string): WhatsAppIdentity {
+  const admission = requireWhatsAppInboundAdmission(msg);
+  const platformSender = msg.platform.sender;
+  const admittedSender = resolveAdmittedSenderIdentity(admission.sender.id);
+  const effectiveAuthDir = resolveIdentityAuthDir(msg, authDir);
   return resolveComparableIdentity(
-    msg.platform.sender ?? {
-      jid: msg.platform.senderJid ?? null,
-      e164: msg.platform.senderE164 ?? null,
-      name: msg.platform.senderName ?? null,
+    {
+      jid: platformSender?.jid ?? msg.platform.senderJid ?? admittedSender.jid ?? null,
+      lid: platformSender?.lid ?? admittedSender.lid ?? null,
+      e164: admittedSender.e164 ?? null,
+      name: platformSender?.name ?? msg.platform.senderName ?? null,
+      label: platformSender?.label ?? null,
     },
-    authDir,
+    effectiveAuthDir,
   );
 }
 
-export function getSelfIdentity(msg: LegacySelfLike, authDir?: string): WhatsAppSelfIdentity {
+export function getSelfIdentity(msg: SelfIdentitySource, authDir?: string): WhatsAppSelfIdentity {
+  const effectiveAuthDir = resolveIdentityAuthDir(msg, authDir);
   return resolveComparableIdentity(
     msg.platform.self ?? {
       jid: msg.platform.selfJid ?? null,
       lid: msg.platform.selfLid ?? null,
       e164: msg.platform.selfE164 ?? null,
     },
-    authDir,
+    effectiveAuthDir,
   );
 }
 
 export function getReplyContext(
-  msg: LegacyReplyLike,
+  msg: ReplyContextSource,
   authDir?: string,
 ): WhatsAppReplyContext | null {
+  const effectiveAuthDir = resolveIdentityAuthDir(msg, authDir);
   if (msg.quote?.context) {
     return {
       ...msg.quote.context,
-      sender: resolveComparableIdentity(msg.quote.context.sender, authDir),
+      sender: resolveComparableIdentity(msg.quote.context.sender, effectiveAuthDir),
     };
   }
   if (!msg.quote?.body) {
@@ -154,20 +191,21 @@ export function getReplyContext(
         e164: msg.quote.sender?.e164 ?? null,
         label: msg.quote.sender?.displayName ?? null,
       },
-      authDir,
+      effectiveAuthDir,
     ),
   };
 }
 
-function getMentionJids(msg: LegacyMentionsLike): string[] {
-  return msg.group?.mentions?.jids ?? [];
+function getMentionJids(msg: MentionIdentitySource): string[] {
+  return msg.group?.mentions?.jids ?? msg.group?.mentions?.text ?? [];
 }
 
 export function getMentionIdentities(
-  msg: LegacyMentionsLike,
+  msg: MentionIdentitySource,
   authDir?: string,
 ): WhatsAppIdentity[] {
-  return getMentionJids(msg).map((jid) => resolveComparableIdentity({ jid }, authDir));
+  const effectiveAuthDir = resolveIdentityAuthDir(msg, authDir);
+  return getMentionJids(msg).map((jid) => resolveComparableIdentity({ jid }, effectiveAuthDir));
 }
 
 export function getPrimaryIdentityId(identity: WhatsAppIdentity | null | undefined): string | null {
