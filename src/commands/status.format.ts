@@ -122,6 +122,8 @@ export const formatDaemonRuntimeShort = (runtime?: {
   if (detail && !noisyLaunchctlDetail) {
     details.push(detail);
   }
+  // Systemd cgroup hygiene adds actionable resource details without changing
+  // the primary runtime status/pid label.
   const cgroupSummary = getSystemdCgroupHygieneSummary(runtime.systemd);
   if (cgroupSummary) {
     details.push(cgroupSummary);
