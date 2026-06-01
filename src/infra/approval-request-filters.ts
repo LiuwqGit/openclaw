@@ -7,6 +7,7 @@ export type ApprovalRequestFilterInput = {
   sessionKey?: string | null;
 };
 
+/** Match a session key against literal substrings or safe bounded regex patterns. */
 export function matchesApprovalRequestSessionFilter(
   sessionKey: string,
   patterns: string[],
@@ -20,6 +21,7 @@ export function matchesApprovalRequestSessionFilter(
   });
 }
 
+/** Apply approval forwarding filters to agent/session identity carried by the request. */
 export function matchesApprovalRequestFilters(params: {
   request: ApprovalRequestFilterInput;
   agentFilter?: string[];
@@ -31,6 +33,8 @@ export function matchesApprovalRequestFilters(params: {
     const sessionAgentId = params.fallbackAgentIdFromSessionKey
       ? (parseAgentSessionKey(params.request.sessionKey)?.agentId ?? undefined)
       : undefined;
+    // Forwarded approvals may only carry a canonical session key, so callers opt into deriving
+    // agent identity from that key when no explicit agent id is available.
     const agentId = explicitAgentId ?? sessionAgentId;
     if (!agentId || !params.agentFilter.includes(agentId)) {
       return false;
