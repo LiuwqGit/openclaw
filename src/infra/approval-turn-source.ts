@@ -1,7 +1,12 @@
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveApprovalInitiatingSurfaceState } from "./exec-approval-surface.js";
 
-/** Return whether the original chat surface can accept the approval decision. */
+/**
+ * Returns whether the original chat surface can accept the approval decision.
+ *
+ * This is checked at reply time with live config because pending approvals can outlive the turn
+ * that created them, and channel/account native approval availability may change meanwhile.
+ */
 export function hasApprovalTurnSourceRoute(params: {
   turnSourceChannel?: string | null;
   turnSourceAccountId?: string | null;
