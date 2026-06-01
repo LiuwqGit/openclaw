@@ -21,6 +21,7 @@ export type {
 type ApprovalRequestEvent = ExecApprovalRequest | PluginApprovalRequest;
 type ApprovalResolvedEvent = ExecApprovalResolved | PluginApprovalResolved;
 
+/** Startup failure that should stop retry loops instead of silently reconnecting forever. */
 export class ExecApprovalChannelRuntimeTerminalStartError extends Error {
   readonly detailCode: string | null;
 
@@ -35,6 +36,7 @@ export class ExecApprovalChannelRuntimeTerminalStartError extends Error {
   }
 }
 
+/** Narrow gateway startup errors that mean the approval runtime reached a terminal auth state. */
 export function isExecApprovalChannelRuntimeTerminalStartError(
   error: unknown,
 ): error is ExecApprovalChannelRuntimeTerminalStartError {
@@ -73,6 +75,7 @@ function readGatewayConnectErrorDetailCode(error: unknown): string | null {
   return readConnectErrorDetailCode((error as { details?: unknown }).details);
 }
 
+/** Create a gateway-backed runtime that delivers, tracks, resolves, and replays approvals. */
 export function createExecApprovalChannelRuntime<
   TPending,
   TRequest extends ApprovalRequestEvent = ExecApprovalRequest,
@@ -178,6 +181,8 @@ export function createExecApprovalChannelRuntime<
     }
     entry.entries = entries;
     entry.delivering = false;
+    // Resolutions can arrive while a native client is still creating message entries; defer
+    // finalization until delivery returns the concrete entries to edit or clean up.
     if (entry.pendingResolution) {
       pending.delete(request.id);
       log.debug(`resolved ${entry.pendingResolution.id} with ${entry.pendingResolution.decision}`);
@@ -203,6 +208,7 @@ export function createExecApprovalChannelRuntime<
       return;
     }
     if (entry.delivering) {
+      // Preserve the resolved payload rather than racing finalization against deliverRequested.
       entry.pendingResolution = resolved;
       return;
     }
@@ -335,6 +341,8 @@ export function createExecApprovalChannelRuntime<
             log.error(`connect error: ${err.message}`);
             lastConnectError = err;
             if (readGatewayConnectErrorDetailCode(err)) {
+              // Auth/detail-code failures may still transition to onReconnectPaused, which has
+              // the terminal reconnect state needed for a stable startup error.
               return;
             }
             settleReady(() => rejectReady(err));

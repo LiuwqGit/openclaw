@@ -5,8 +5,10 @@ import type { PluginApprovalRequest, PluginApprovalResolved } from "./plugin-app
 type ApprovalRequestEvent = ExecApprovalRequest | PluginApprovalRequest;
 type ApprovalResolvedEvent = ExecApprovalResolved | PluginApprovalResolved;
 
+/** Approval event families a native channel runtime subscribes to and replays. */
 export type ExecApprovalChannelRuntimeEventKind = "exec" | "plugin";
 
+/** Channel-specific hooks used by the shared approval gateway runtime. */
 export type ExecApprovalChannelRuntimeAdapter<
   TPending,
   TRequest extends ApprovalRequestEvent = ExecApprovalRequest,
@@ -31,6 +33,7 @@ export type ExecApprovalChannelRuntimeAdapter<
   nowMs?: () => number;
 };
 
+/** Gateway-backed native approval runtime exposed to channel adapters. */
 export type ExecApprovalChannelRuntime<
   TRequest extends ApprovalRequestEvent = ExecApprovalRequest,
   TResolved extends ApprovalResolvedEvent = ExecApprovalResolved,
