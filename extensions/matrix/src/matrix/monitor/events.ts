@@ -273,7 +273,7 @@ export function registerMatrixMonitorEvents(params: {
 
   client.on("room.failed_decryption", (roomId: string, event: MatrixRawEvent, error: Error) => {
     void runMonitorTask(
-      `failed decryption handler room=${roomId} id=${event.event_id ?? "unknown"}`,
+      `failed decrypt handler room=${roomId} id=${event.event_id ?? "unknown"}`,
       async () => {
         const failureState = postHealthySyncDecryptFailureTracker.recordFailure(
           roomId,
