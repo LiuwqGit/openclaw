@@ -54,6 +54,7 @@ function normalizeBase64ForCompare(value: string): string {
 function decodeClientStateBase64(value: string): string | null {
   const buffer = Buffer.from(value, "base64");
   if (normalizeBase64ForCompare(buffer.toString("base64")) !== normalizeBase64ForCompare(value)) {
+    // Telnyx echoes client_state; reject malformed base64 instead of inventing a call id.
     return null;
   }
   return buffer.toString("utf8");
@@ -151,9 +152,9 @@ export class TelnyxProvider implements VoiceCallProvider {
    * Convert Telnyx event to normalized event format.
    */
   private normalizeEvent(data: TelnyxEvent, dedupeKey?: string): NormalizedEvent | null {
-    // Decode client_state from Base64 (we encode it in initiateCall)
     let callId = "";
     if (data.payload?.client_state) {
+      // Outbound calls encode OpenClaw's call id in client_state; fall back to raw carrier value.
       callId = decodeClientStateBase64(data.payload.client_state) ?? data.payload.client_state;
     }
     if (!callId) {
@@ -217,6 +218,7 @@ export class TelnyxProvider implements VoiceCallProvider {
 
       case "streaming.started":
       case "streaming.stopped":
+        // WebSocket bridge owns stream lifecycle; carrier lifecycle webhooks are acknowledged only.
         return null;
 
       default:
@@ -357,8 +359,8 @@ export class TelnyxProvider implements VoiceCallProvider {
 
       const state = data.data?.state ?? "unknown";
       const isAlive = data.data?.is_alive;
-      // If is_alive is missing, treat as unknown rather than terminal (P1 fix)
       if (isAlive === undefined) {
+        // Missing liveness is not terminal proof; keep restore logic conservative.
         return { status: state, isTerminal: false, isUnknown: true };
       }
       return { status: state, isTerminal: !isAlive };
@@ -372,6 +374,7 @@ function buildTelnyxStreamingFields(
   streamUrl: string,
   streamAuthToken: string | undefined,
 ): Record<string, unknown> {
+  // Realtime voice expects 8kHz PCMU in both directions, matching telephony media frames.
   return {
     stream_url: streamUrl,
     stream_track: "inbound_track",
