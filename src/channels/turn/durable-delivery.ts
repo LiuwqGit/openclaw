@@ -57,6 +57,7 @@ export type DurableInboundReplyDeliveryResult =
   | { status: "failed"; error: unknown; sentBeforeError?: true };
 
 function resolveDeliveryTarget(params: DurableInboundReplyDeliveryParams): string | undefined {
+  // OriginatingTo preserves the pre-normalized inbound destination when To is rewritten later.
   return (
     normalizeOptionalString(params.to) ??
     normalizeOptionalString(params.ctxPayload.OriginatingTo) ??
@@ -233,6 +234,7 @@ export async function deliverInboundReplyWithMessageSendContext(
     visibleReplySent: send.status === "sent",
     ...(send.deliveryIntent ? { deliveryIntent: toDeliveryIntent(send.deliveryIntent) } : {}),
   });
+  // Suppressed durable sends still count as handled so legacy delivery does not duplicate them.
   if (send.status === "suppressed") {
     return { status: "handled_no_send", reason: "no_visible_result", delivery };
   }
