@@ -1,13 +1,19 @@
 export type CommandAuthorizer = {
+  /** True when this authorizer has policy data for the current sender/context. */
   configured: boolean;
+  /** True when the configured policy allows the control command. */
   allowed: boolean;
 };
 
+/** Fallback policy used when access groups are disabled for a channel/account. */
 export type CommandGatingModeWhenAccessGroupsOff = "allow" | "deny" | "configured";
 
 export function resolveCommandAuthorizedFromAuthorizers(params: {
+  /** True when configured access groups should be enforced. */
   useAccessGroups: boolean;
+  /** Candidate authorizers; any configured allow grants access. */
   authorizers: CommandAuthorizer[];
+  /** Fallback behavior when access groups are disabled. Defaults to allow. */
   modeWhenAccessGroupsOff?: CommandGatingModeWhenAccessGroupsOff;
 }): boolean {
   const { useAccessGroups, authorizers } = params;
@@ -29,10 +35,15 @@ export function resolveCommandAuthorizedFromAuthorizers(params: {
 }
 
 export function resolveControlCommandGate(params: {
+  /** True when configured access groups should be enforced. */
   useAccessGroups: boolean;
+  /** Candidate authorizers checked before allowing text control commands. */
   authorizers: CommandAuthorizer[];
+  /** True when text commands are enabled for this inbound surface. */
   allowTextCommands: boolean;
+  /** True when the inbound text contains a recognized control command. */
   hasControlCommand: boolean;
+  /** Fallback behavior when access groups are disabled. Defaults to allow. */
   modeWhenAccessGroupsOff?: CommandGatingModeWhenAccessGroupsOff;
 }): { commandAuthorized: boolean; shouldBlock: boolean } {
   const commandAuthorized = resolveCommandAuthorizedFromAuthorizers({
@@ -45,12 +56,19 @@ export function resolveControlCommandGate(params: {
 }
 
 export function resolveDualTextControlCommandGate(params: {
+  /** True when configured access groups should be enforced. */
   useAccessGroups: boolean;
+  /** True when the primary authorizer has policy data for this sender/context. */
   primaryConfigured: boolean;
+  /** True when the primary authorizer allows the command. */
   primaryAllowed: boolean;
+  /** True when the secondary authorizer has policy data for this sender/context. */
   secondaryConfigured: boolean;
+  /** True when the secondary authorizer allows the command. */
   secondaryAllowed: boolean;
+  /** True when the inbound text contains a recognized control command. */
   hasControlCommand: boolean;
+  /** Fallback behavior when access groups are disabled. Defaults to allow. */
   modeWhenAccessGroupsOff?: CommandGatingModeWhenAccessGroupsOff;
 }): { commandAuthorized: boolean; shouldBlock: boolean } {
   return resolveControlCommandGate({
