@@ -217,6 +217,15 @@ function createHarness(params?: {
     throw new Error("room.event listener was not registered");
   }
 
+  const failedDecryptListener: FailedDecryptListener | undefined = listeners.has(
+    "room.failed_decryption",
+  )
+    ? async (roomId, event, error) => {
+        listeners.get("room.failed_decryption")?.(roomId, event, error);
+        await flushTasks();
+      }
+    : undefined;
+
   return {
     onRoomMessage,
     sendMessage,
@@ -234,9 +243,7 @@ function createHarness(params?: {
     roomDecryptedEventListener: listeners.get("room.decrypted_event") as
       | RoomEventListener
       | undefined,
-    failedDecryptListener: listeners.get("room.failed_decryption") as
-      | FailedDecryptListener
-      | undefined,
+    failedDecryptListener,
     verificationSummaryListener: listeners.get("verification.summary") as
       | VerificationSummaryListener
       | undefined,

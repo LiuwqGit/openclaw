@@ -17,7 +17,12 @@ function createClientStub() {
   const client = {
     on: vi.fn((eventName: string, listener: unknown) => {
       if (eventName === "room.invite") {
-        inviteHandler = listener as InviteHandler;
+        inviteHandler = async (roomId, inviteEvent) => {
+          (listener as (roomId: string, inviteEvent: unknown) => void)(roomId, inviteEvent);
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
+        };
       }
       return client;
     }),
