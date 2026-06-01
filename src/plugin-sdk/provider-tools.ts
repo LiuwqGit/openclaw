@@ -159,9 +159,11 @@ function isOpenAICodexBaseUrl(baseUrl: string): boolean {
 }
 
 type NormalizeOpenAIStrictCompatOptions = {
+  /** Top-level empty parameter schemas become explicit empty objects for strict mode. */
   promoteEmptyObject: boolean;
 };
 
+/** Object-valued schema maps whose values are independent child schemas. */
 const OPENAI_STRICT_COMPAT_SCHEMA_MAP_KEYS = new Set([
   "$defs",
   "definitions",
@@ -170,6 +172,7 @@ const OPENAI_STRICT_COMPAT_SCHEMA_MAP_KEYS = new Set([
   "properties",
 ]);
 
+/** Schema-valued fields that should recurse without promoting `{}` to object roots. */
 const OPENAI_STRICT_COMPAT_SCHEMA_NESTED_KEYS = new Set([
   "additionalProperties",
   "allOf",
@@ -227,6 +230,9 @@ function normalizeOpenAIStrictCompatSchemaRecursive(
   let changed = false;
   const normalized: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(record)) {
+    // Map containers such as `properties` hold named schemas; union/nested
+    // containers hold schema nodes directly. Keeping those modes separate
+    // avoids accidentally rewriting property names as schema keywords.
     const next = OPENAI_STRICT_COMPAT_SCHEMA_MAP_KEYS.has(key)
       ? normalizeOpenAIStrictCompatSchemaMap(value)
       : OPENAI_STRICT_COMPAT_SCHEMA_NESTED_KEYS.has(key)
@@ -257,6 +263,8 @@ function normalizeOpenAIStrictCompatSchemaRecursive(
       !Array.isArray(normalized.properties)) ||
       Array.isArray(normalized.required));
   if (hasObjectShapeHints) {
+    // Typebox and plugin-authored schemas often imply object-ness with
+    // `properties`/`required`; native OpenAI strict mode requires it explicitly.
     normalized.type = "object";
     changed = true;
   }
@@ -272,6 +280,7 @@ function normalizeOpenAIStrictCompatSchemaRecursive(
     Object.keys(normalized.properties as Record<string, unknown>).length === 0;
 
   if (normalized.type === "object" && !Array.isArray(normalized.required) && hasEmptyProperties) {
+    // Empty object parameters still need an explicit required list in strict mode.
     normalized.required = [];
     changed = true;
   }
@@ -376,6 +385,7 @@ export function inspectOpenAIToolSchemas(
 
 export const DEEPSEEK_UNSUPPORTED_SCHEMA_KEYWORDS = new Set(["anyOf", "oneOf"]);
 
+/** Detects nullable union arms that can become DeepSeek's `nullable: true` flag. */
 function isNullSchemaVariant(schema: unknown): boolean {
   if (!schema || typeof schema !== "object" || Array.isArray(schema)) {
     return false;
@@ -461,6 +471,9 @@ function normalizeDeepSeekSchema(schema: unknown): unknown {
     return normalized;
   }
 
+  // DeepSeek rejects JSON Schema unions. Prefer the first non-null object arm
+  // and overlay sibling keywords so descriptions/defaults beside anyOf/oneOf
+  // are preserved on the supported single-schema shape.
   const merged = {
     ...(selected as Record<string, unknown>),
     ...normalized,
