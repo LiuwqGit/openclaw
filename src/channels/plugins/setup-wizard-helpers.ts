@@ -46,6 +46,7 @@ function asAllowFromList(value: unknown): ReadonlyArray<string | number> | undef
     : undefined;
 }
 
+/** Prompts for an existing or new account id and returns its normalized form. */
 export const promptAccountId: PromptAccountId = async (params: PromptAccountIdParams) => {
   const existingIds = params.listAccountIds(params.cfg);
   const initial = params.currentId?.trim() || params.defaultAccountId || DEFAULT_ACCOUNT_ID;
@@ -79,6 +80,7 @@ export const promptAccountId: PromptAccountId = async (params: PromptAccountIdPa
   return normalized;
 };
 
+/** Adds the open-DM wildcard to a normalized allowFrom list without duplicating it. */
 export function addWildcardAllowFrom(allowFrom?: ReadonlyArray<string | number> | null): string[] {
   const next = normalizeStringEntries(allowFrom ?? []);
   if (!next.includes("*")) {
@@ -87,6 +89,7 @@ export function addWildcardAllowFrom(allowFrom?: ReadonlyArray<string | number> 
   return next;
 }
 
+/** Merges existing and newly parsed allowFrom entries while preserving first-seen order. */
 export function mergeAllowFromEntries(
   current: Array<string | number> | null | undefined,
   additions: Array<string | number>,
@@ -95,6 +98,7 @@ export function mergeAllowFromEntries(
   return uniqueStrings(merged);
 }
 
+/** Splits setup prompt input on common multi-entry separators and normalizes blanks away. */
 export function splitSetupEntries(raw: string): string[] {
   return normalizeStringEntries(raw.split(/[\n,;]+/g));
 }
@@ -117,6 +121,7 @@ export function parseSetupEntriesWithParser(
   return { entries: normalizeAllowFromEntries(entries) };
 }
 
+/** Parses setup entries while preserving "*" as the explicit open-access token. */
 export function parseSetupEntriesAllowingWildcard(
   raw: string,
   parseEntry: (entry: string) => ParsedSetupEntry,
@@ -129,6 +134,7 @@ export function parseSetupEntriesAllowingWildcard(
   });
 }
 
+/** Parses either a mention, a prefixed id, or a bare id into the channel's canonical id. */
 export function parseMentionOrPrefixedId(params: {
   value: string;
   mentionPattern: RegExp;
@@ -154,6 +160,7 @@ export function parseMentionOrPrefixedId(params: {
   return params.normalizeId ? params.normalizeId(stripped) : stripped;
 }
 
+/** Normalizes allowFrom values, preserving "*" and de-duplicating canonical ids. */
 export function normalizeAllowFromEntries(
   entries: Array<string | number>,
   normalizeEntry?: (value: string) => string | null | undefined,
@@ -172,6 +179,7 @@ export function normalizeAllowFromEntries(
   return uniqueStrings(normalized);
 }
 
+/** Builds the common configured/unconfigured status contract for setup wizards. */
 export function createStandardChannelSetupStatus(params: {
   channelLabel: string;
   configuredLabel: string;
@@ -218,6 +226,7 @@ export function createStandardChannelSetupStatus(params: {
   return status;
 }
 
+/** Resolves the effective setup account id from an override or channel default. */
 export function resolveSetupAccountId(params: {
   accountId?: string;
   defaultAccountId: string;
@@ -225,6 +234,7 @@ export function resolveSetupAccountId(params: {
   return params.accountId?.trim() ? normalizeAccountId(params.accountId) : params.defaultAccountId;
 }
 
+/** Resolves or prompts for the account id used by a configure run. */
 export async function resolveAccountIdForConfigure(params: {
   cfg: OpenClawConfig;
   prompter: WizardPrompter;
@@ -249,6 +259,7 @@ export async function resolveAccountIdForConfigure(params: {
   return accountId;
 }
 
+/** Writes an account-scoped DM allowlist patch for setup flows. */
 export function setAccountAllowFromForChannel(params: {
   cfg: OpenClawConfig;
   channel: string;
@@ -265,6 +276,7 @@ export function setAccountAllowFromForChannel(params: {
   });
 }
 
+/** Patches a top-level channel section while optionally clearing stale fields first. */
 export function patchTopLevelChannelConfigSection(params: {
   cfg: OpenClawConfig;
   channel: string;
@@ -291,6 +303,7 @@ export function patchTopLevelChannelConfigSection(params: {
   };
 }
 
+/** Patches a nested channel section while preserving sibling channel config. */
 export function patchNestedChannelConfigSection(params: {
   cfg: OpenClawConfig;
   channel: string;
@@ -324,6 +337,7 @@ export function patchNestedChannelConfigSection(params: {
   };
 }
 
+/** Writes a top-level allowFrom list for setup helpers that do not use accounts. */
 export function setTopLevelChannelAllowFrom(params: {
   cfg: OpenClawConfig;
   channel: string;
