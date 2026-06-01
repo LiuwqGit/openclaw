@@ -187,10 +187,12 @@ function normalizeMentionDecisionParams(
   };
 }
 
+/** Resolves whether mention policy allows, skips, or command-bypasses one inbound message. */
 export function resolveInboundMentionDecision(
   params: ResolveInboundMentionDecisionParams,
 ): InboundMentionDecision {
   const { facts, policy } = normalizeMentionDecisionParams(params);
+  // Authorized text commands may bypass mention gating only when the message names no one else.
   const shouldBypassMention =
     policy.isGroup &&
     policy.requireMention &&

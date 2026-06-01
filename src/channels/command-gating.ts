@@ -8,6 +8,7 @@ export type CommandAuthorizer = {
 /** Fallback policy used when access groups are disabled for a channel/account. */
 export type CommandGatingModeWhenAccessGroupsOff = "allow" | "deny" | "configured";
 
+/** Resolves command authorization from one or more configured policy sources. */
 export function resolveCommandAuthorizedFromAuthorizers(params: {
   /** True when configured access groups should be enforced. */
   useAccessGroups: boolean;
@@ -29,11 +30,13 @@ export function resolveCommandAuthorizedFromAuthorizers(params: {
     if (!anyConfigured) {
       return true;
     }
+    // "configured" preserves legacy permissive behavior until a concrete authorizer exists.
     return authorizers.some((entry) => entry.configured && entry.allowed);
   }
   return authorizers.some((entry) => entry.configured && entry.allowed);
 }
 
+/** Returns both command authorization and whether a text control command must be blocked. */
 export function resolveControlCommandGate(params: {
   /** True when configured access groups should be enforced. */
   useAccessGroups: boolean;
@@ -55,6 +58,7 @@ export function resolveControlCommandGate(params: {
   return { commandAuthorized, shouldBlock };
 }
 
+/** Convenience wrapper for text command gates with primary and secondary authorizers. */
 export function resolveDualTextControlCommandGate(params: {
   /** True when configured access groups should be enforced. */
   useAccessGroups: boolean;
