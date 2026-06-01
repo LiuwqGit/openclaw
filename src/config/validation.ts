@@ -906,14 +906,14 @@ function hasConfiguredMemoryWatchFdPressureSurface(
   const hasSessionMemory = Boolean(
     defaults?.experimental?.sessionMemory || override?.experimental?.sessionMemory,
   );
-  return Boolean(
+  return (
     hasMemorySearchConfig ||
     hasMultipleGatewayAgents ||
     hasQmdBackend ||
     hasQmdPaths ||
     hasExtraPaths ||
     hasExtraQmdCollections ||
-    hasSessionMemory,
+    hasSessionMemory
   );
 }
 
