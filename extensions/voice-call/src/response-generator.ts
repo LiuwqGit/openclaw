@@ -97,6 +97,8 @@ function tryParseSpokenJson(text: string): string | null {
   const firstBrace = trimmed.indexOf("{");
   const lastBrace = trimmed.lastIndexOf("}");
   if (firstBrace >= 0 && lastBrace > firstBrace) {
+    // Models sometimes wrap the required JSON in prose; recover the outer object
+    // before falling back to plain-text sanitization.
     candidates.push(trimmed.slice(firstBrace, lastBrace + 1));
   }
 
@@ -161,6 +163,8 @@ function sanitizePlainSpokenText(text: string): string | null {
 
   const paragraphs = normalizeStringEntries(withoutCodeFences.split(/\n\s*\n+/));
 
+  // Keep conversational plain text usable, but drop obvious planning paragraphs
+  // that should never be spoken to the caller.
   while (paragraphs.length > 1 && isLikelyMetaReasoningParagraph(paragraphs[0])) {
     paragraphs.shift();
   }
@@ -203,6 +207,8 @@ function resolveVoiceSandboxSessionKey(agentId: string, sessionKey: string): str
   if (trimmed.toLowerCase().startsWith("agent:")) {
     return trimmed;
   }
+  // Embedded agents expect an agent-scoped sandbox key even when the persisted
+  // voice session key is phone- or call-scoped.
   return `agent:${agentId}:${trimmed}`;
 }
 
@@ -258,6 +264,8 @@ export async function generateVoiceResponse(
 
   let sessionEntry = existingSessionEntry;
   if (!sessionEntry?.sessionId || voiceConfig.responseModel) {
+    // Response-model overrides are pinned on the session before the embedded
+    // agent starts so inherited model/auth metadata cannot leak from old calls.
     sessionEntry =
       (await agentRuntime.session.patchSessionEntry({
         storePath,
