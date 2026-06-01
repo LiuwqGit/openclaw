@@ -692,7 +692,7 @@ describe("registerPolicyDoctorChecks", () => {
     );
   });
 
-  it("satisfies required feed sources when feeds is enabled by plugin allowlist", async () => {
+  it("satisfies required feed sources when feeds is explicitly enabled and allowlisted", async () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     await fs.writeFile(configPath, "{}", "utf-8");
     await fs.writeFile(
@@ -718,6 +718,7 @@ describe("registerPolicyDoctorChecks", () => {
               config: { enabled: true },
             },
             feeds: {
+              enabled: true,
               config: {
                 sources: [
                   {
@@ -744,12 +745,11 @@ describe("registerPolicyDoctorChecks", () => {
 
   const disabledFeedSourceCases: readonly [
     string,
-    { readonly plugins?: Record<string, unknown>; readonly feedConfigEnabled?: boolean },
+    { readonly plugins?: Record<string, unknown> },
   ][] = [
     ["global plugins disabled", { plugins: { enabled: false } }],
     ["feeds denied", { plugins: { deny: ["feeds"] } }],
     ["feeds missing from allowlist", { plugins: { allow: ["other-plugin"] } }],
-    ["feed config disabled", { feedConfigEnabled: false }],
   ];
 
   it.each(disabledFeedSourceCases)(
@@ -782,7 +782,6 @@ describe("registerPolicyDoctorChecks", () => {
               feeds: {
                 enabled: true,
                 config: {
-                  enabled: pluginSettings.feedConfigEnabled,
                   sources: [
                     {
                       id: "company-approved",

@@ -414,9 +414,7 @@ export function scanPolicyFeeds(cfg: Record<string, unknown>): readonly PolicyFe
   const deny = readStringArray(plugins.deny);
   if (
     plugins.enabled === false ||
-    feeds.enabled === false ||
-    config.enabled === false ||
-    !(feeds.enabled === true || config.enabled === true || allow.includes("feeds")) ||
+    feeds.enabled !== true ||
     deny.includes("feeds") ||
     (allow.length > 0 && !allow.includes("feeds"))
   ) {
