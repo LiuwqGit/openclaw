@@ -10,26 +10,28 @@ import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
 import { resolveVoiceResponseModel } from "./response-model.js";
 
 export type VoiceResponseParams = {
-  /** Voice call config */
+  /** Voice-call route config that selects agent, model, timeout, and session scope. */
   voiceConfig: VoiceCallConfig;
-  /** Core OpenClaw config */
+  /** Core OpenClaw config used by the embedded agent runtime and session store. */
   coreConfig: CoreConfig;
-  /** Injected host agent runtime */
+  /** Injected host agent runtime used to create/reuse the voice response session. */
   agentRuntime: CoreAgentDeps;
-  /** Call ID for session tracking */
+  /** Internal call id used for per-call session keys and run ids. */
   callId: string;
-  /** Persisted call session key */
+  /** Persisted call session key from the call record, when already resolved. */
   sessionKey?: string;
-  /** Caller's phone number */
+  /** Caller's phone number, used for phone-scoped fallback session keys and prompts. */
   from: string;
-  /** Conversation transcript */
+  /** Durable conversation transcript included in the system prompt as call history. */
   transcript: Array<{ speaker: "user" | "bot"; text: string }>;
-  /** Latest user message */
+  /** Latest caller utterance sent as the embedded-agent prompt. */
   userMessage: string;
 };
 
 export type VoiceResponseResult = {
+  /** Spoken text extracted from the agent payloads, or null for silence/failure. */
   text: string | null;
+  /** User-safe failure summary when the embedded response could not be produced. */
   error?: string;
 };
 
@@ -209,7 +211,11 @@ function resolveVoiceSandboxSessionKey(agentId: string, sessionKey: string): str
   return `agent:${agentId}:${trimmed}`;
 }
 
-/** Generates a spoken voice response through the embedded OpenClaw agent runtime. */
+/**
+ * Generates a spoken voice response through the embedded OpenClaw agent runtime.
+ * The agent is forced through a JSON spoken-output contract, but this helper
+ * also sanitizes common plain-text fallback output before returning speech.
+ */
 export async function generateVoiceResponse(
   params: VoiceResponseParams,
 ): Promise<VoiceResponseResult> {
