@@ -368,7 +368,21 @@ describe("workboard controller", () => {
   it("keeps edit-modal status saves from being rewritten by stale lifecycle sync", async () => {
     const host = {};
     const state = getWorkboardState(host);
-    const linked = { ...sampleCard, sessionKey: sampleSession.key } satisfies WorkboardCard;
+    const linked = {
+      ...sampleCard,
+      sessionKey: sampleSession.key,
+      execution: {
+        id: "exec-1",
+        kind: "agent-session",
+        engine: "codex",
+        mode: "autonomous",
+        status: "running",
+        model: "openai/gpt-5.5",
+        sessionKey: sampleSession.key,
+        startedAt: 1,
+        updatedAt: 1,
+      },
+    } satisfies WorkboardCard;
     state.loaded = true;
     state.cards = [linked];
     state.draftOpen = true;
@@ -419,7 +433,21 @@ describe("workboard controller", () => {
   it("blocks stale lifecycle status writes while edit-modal status saves are in flight", async () => {
     const host = {};
     const state = getWorkboardState(host);
-    const linked = { ...sampleCard, sessionKey: sampleSession.key } satisfies WorkboardCard;
+    const linked = {
+      ...sampleCard,
+      sessionKey: sampleSession.key,
+      execution: {
+        id: "exec-1",
+        kind: "agent-session",
+        engine: "codex",
+        mode: "autonomous",
+        status: "running",
+        model: "openai/gpt-5.5",
+        sessionKey: sampleSession.key,
+        startedAt: 1,
+        updatedAt: 1,
+      },
+    } satisfies WorkboardCard;
     state.loaded = true;
     state.cards = [linked];
     state.draftOpen = true;
@@ -446,8 +474,19 @@ describe("workboard controller", () => {
       ],
     } satisfies WorkboardCard;
     const saveResponse = createDeferred<{ card: WorkboardCard }>();
+    let updateCalls = 0;
     const client = createClient((method) => {
       if (method === "workboard.cards.update") {
+        updateCalls += 1;
+        if (updateCalls > 1) {
+          return {
+            card: {
+              ...linked,
+              execution: { ...linked.execution!, status: "succeeded", updatedAt: 3 },
+              updatedAt: 3,
+            },
+          };
+        }
         return saveResponse.promise;
       }
       return {};
@@ -1497,7 +1536,21 @@ describe("workboard controller", () => {
   it("keeps dragged status changes from being rewritten by stale lifecycle sync", async () => {
     const host = {};
     const state = getWorkboardState(host);
-    const linked = { ...sampleCard, sessionKey: sampleSession.key } satisfies WorkboardCard;
+    const linked = {
+      ...sampleCard,
+      sessionKey: sampleSession.key,
+      execution: {
+        id: "exec-1",
+        kind: "agent-session",
+        engine: "codex",
+        mode: "autonomous",
+        status: "running",
+        model: "openai/gpt-5.5",
+        sessionKey: sampleSession.key,
+        startedAt: 1,
+        updatedAt: 1,
+      },
+    } satisfies WorkboardCard;
     const moved = {
       ...linked,
       status: "running",
@@ -1550,7 +1603,21 @@ describe("workboard controller", () => {
   it("blocks stale lifecycle status writes while dragged status changes are in flight", async () => {
     const host = {};
     const state = getWorkboardState(host);
-    const linked = { ...sampleCard, sessionKey: sampleSession.key } satisfies WorkboardCard;
+    const linked = {
+      ...sampleCard,
+      sessionKey: sampleSession.key,
+      execution: {
+        id: "exec-1",
+        kind: "agent-session",
+        engine: "codex",
+        mode: "autonomous",
+        status: "running",
+        model: "openai/gpt-5.5",
+        sessionKey: sampleSession.key,
+        startedAt: 1,
+        updatedAt: 1,
+      },
+    } satisfies WorkboardCard;
     const moved = {
       ...linked,
       status: "running",
@@ -1569,11 +1636,16 @@ describe("workboard controller", () => {
     state.loaded = true;
     state.cards = [linked];
     const moveResponse = createDeferred<{ card: WorkboardCard }>();
+    let updateCalls = 0;
     const client = createClient((method) => {
       if (method === "workboard.cards.move") {
         return moveResponse.promise;
       }
       if (method === "workboard.cards.update") {
+        updateCalls += 1;
+        if (updateCalls > 1) {
+          throw new Error("expected lifecycle sync to skip pending drag");
+        }
         return { card: { ...moved, status: "review", updatedAt: 3 } };
       }
       return {};

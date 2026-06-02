@@ -1421,6 +1421,29 @@ function clearPendingStatusTransition(host: WorkboardHost, cardId: string, recor
   transitions?.delete(cardId);
 }
 
+function hasPendingStatusTransition(host: WorkboardHost, cardId: string): boolean {
+  return pendingStatusTransitions.get(host)?.has(cardId) ?? false;
+}
+
+function shouldSkipLifecycleWrite(
+  host: WorkboardHost,
+  card: WorkboardCard,
+  lifecycle: WorkboardLifecycle,
+): boolean {
+  if (hasPendingStatusTransition(host, card.id)) {
+    return true;
+  }
+  if (lifecycle.sourceUpdatedAt === undefined) {
+    return false;
+  }
+  const lifecycleStatusSourceUpdatedAt = card.metadata?.lifecycleStatusSourceUpdatedAt;
+  if (lifecycleStatusSourceUpdatedAt !== undefined) {
+    return lifecycle.sourceUpdatedAt < lifecycleStatusSourceUpdatedAt;
+  }
+  const statusTransitionAt = latestStatusTransitionAt(card);
+  return statusTransitionAt !== undefined && lifecycle.sourceUpdatedAt < statusTransitionAt;
+}
+
 function latestStatusTransitionAt(card: WorkboardCard): number | undefined {
   for (let index = (card.events?.length ?? 0) - 1; index >= 0; index -= 1) {
     const event = card.events?.[index];
@@ -1445,18 +1468,7 @@ function shouldSkipLifecycleStatusSync(
   if (!lifecycle.targetStatus) {
     return false;
   }
-  if (pendingStatusTransitions.get(host)?.has(card.id)) {
-    return true;
-  }
-  if (lifecycle.sourceUpdatedAt === undefined) {
-    return false;
-  }
-  const lifecycleStatusSourceUpdatedAt = card.metadata?.lifecycleStatusSourceUpdatedAt;
-  if (lifecycleStatusSourceUpdatedAt !== undefined) {
-    return lifecycle.sourceUpdatedAt < lifecycleStatusSourceUpdatedAt;
-  }
-  const statusTransitionAt = latestStatusTransitionAt(card);
-  return statusTransitionAt !== undefined && lifecycle.sourceUpdatedAt < statusTransitionAt;
+  return shouldSkipLifecycleWrite(host, card, lifecycle);
 }
 
 function executionStatusForLifecycle(
@@ -1738,6 +1750,11 @@ export async function syncWorkboardLifecycle(params: {
       params.sessions,
       state.tasksByCardId.get(card.id),
     );
+    if (shouldSkipLifecycleWrite(params.host, card, lifecycle)) {
+      // Lifecycle writes return whole cards; stale metadata-only sync can replace
+      // the user's explicit status choice with an older lifecycle response.
+      continue;
+    }
     const executionStatus = executionStatusForLifecycle(lifecycle);
     const patch: Record<string, unknown> = {};
     if (
