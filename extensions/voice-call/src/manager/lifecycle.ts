@@ -27,10 +27,15 @@ function removeProviderCallMapping(
 
 /** Finalizes one call record, persists it, and clears transient timers/waiters. */
 export function finalizeCall(params: {
+  /** Manager state maps and optional transient queues that own this call. */
   ctx: CallLifecycleContext;
+  /** Active call record to mark terminal and remove from live indexes. */
   call: CallRecord;
+  /** Terminal reason that also drives the call-state transition. */
   endReason: EndReason;
+  /** Provider event timestamp; defaults to local wall time for local hangups. */
   endedAt?: number;
+  /** Optional waiter error text when a pending transcript promise must be rejected. */
   transcriptRejectReason?: string;
 }): void {
   const { ctx, call, endReason } = params;

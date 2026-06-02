@@ -30,9 +30,13 @@ export function clearMaxDurationTimer(
 
 /** Starts the per-call hard timeout, replacing any previous timer for the same call. */
 export function startMaxDurationTimer(params: {
+  /** Manager maps/config used to find the live call and persist timeout metadata. */
   ctx: MaxDurationTimerContext;
+  /** Internal call id whose timer should be replaced and tracked. */
   callId: CallId;
+  /** Cleanup hook invoked after timeout metadata is persisted on the live call. */
   onTimeout: (callId: CallId) => Promise<void>;
+  /** Optional millisecond override used when restoring aged calls. */
   timeoutMs?: number;
 }): void {
   clearMaxDurationTimer(params.ctx, params.callId);
@@ -111,7 +115,9 @@ export function resolveTranscriptWaiter(
 /** Registers a single pending final-transcript wait for a call turn. */
 export function waitForFinalTranscript(
   ctx: TimerContext,
+  /** Internal call id; only one waiter may be active per call. */
   callId: CallId,
+  /** Optional provider turn token that filters stale final transcripts. */
   turnToken?: string,
 ): Promise<string> {
   if (ctx.transcriptWaiters.has(callId)) {
