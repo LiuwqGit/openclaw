@@ -1,5 +1,6 @@
 import type { FailoverReason } from "../../embedded-agent-helpers.js";
 
+/** Next action the run loop should take after a prompt/assistant/retry failure signal. */
 export type RunFailoverDecision =
   | {
       action: "continue_normal";
@@ -118,6 +119,9 @@ function shouldRotateAssistant(params: AssistantDecisionParams): boolean {
   const timeoutFailure = isAssistantTimeoutFailure(params);
   const harnessOwnedTimeout =
     params.harnessOwnsTransport && (timeoutFailure || params.failoverReason === "timeout");
+  // Harness-owned transports manage their own timeout recovery; rotating here
+  // would hide the original transport state unless a concrete non-timeout
+  // failure also arrived.
   if (harnessOwnedTimeout && !isConcreteNonTimeoutAssistantFailure(params)) {
     return false;
   }
@@ -132,6 +136,10 @@ function assistantFallbackReason(params: AssistantDecisionParams): FailoverReaso
   return isAssistantTimeoutFailure(params) ? "timeout" : (failoverReason ?? "unknown");
 }
 
+/**
+ * Carries the most actionable failover reason forward across retries, treating
+ * a timeout as a fallback reason only when no concrete classifier reason exists.
+ */
 export function mergeRetryFailoverReason(params: {
   previous: FailoverReason | null;
   failoverReason: FailoverReason | null;
@@ -147,6 +155,10 @@ export function resolveRunFailoverDecision(params: PromptDecisionParams): Prompt
 export function resolveRunFailoverDecision(
   params: AssistantDecisionParams,
 ): AssistantFailoverDecision;
+/**
+ * Resolves whether a failed run stage should rotate auth/profile state, switch
+ * to a fallback model, surface the local error, or continue normally.
+ */
 export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): RunFailoverDecision {
   if (params.stage === "retry_limit") {
     if (params.fallbackConfigured && shouldEscalateRetryLimit(params.failoverReason)) {
