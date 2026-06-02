@@ -447,6 +447,15 @@ export const en: TranslationMap = {
     logs: "Live gateway logs.",
     dreams: "Memory dreaming, consolidation, and reflection.",
   },
+  skillWorkshop: {
+    viewSwitcher: {
+      label: "Workshop view",
+      boardTitle: "Board view",
+      board: "Board",
+      todayTitle: "Today view",
+      today: "Today",
+    },
+  },
   activity: {
     title: "Activity",
     subtitle: "Ephemeral tool activity derived from live session events.",
