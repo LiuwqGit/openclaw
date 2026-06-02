@@ -24,9 +24,11 @@ export type FailoverDecisionLoggerInput = {
   fallbackConfigured: boolean;
   timedOut?: boolean;
   aborted?: boolean;
+  /** Optional HTTP-style status attached to the concrete decision event. */
   status?: number;
 };
 
+/** Shared observation fields captured once before logging a concrete failover decision. */
 export type FailoverDecisionLoggerBase = Omit<FailoverDecisionLoggerInput, "decision" | "status">;
 
 /**
@@ -75,6 +77,8 @@ export function createFailoverDecisionLogger(
           // sensitive previews from the human console line when classified.
           ` rawError=${safeRawErrorPreview}`
         : "";
+    // Human console text is composed only from sanitized/redacted fragments; the
+    // structured event retains richer raw-error classification for telemetry.
     log.warn("embedded run failover decision", {
       event: "embedded_run_failover_decision",
       tags: ["error_handling", "failover", normalizedBase.stage, decision],
