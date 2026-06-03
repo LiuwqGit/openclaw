@@ -61,15 +61,15 @@ const buildGatewayConnectionDetailsMock = vi.fn(() => ({
   message: "Gateway mode: local\nGateway target: ws://127.0.0.1:18789",
 }));
 const formatGatewayTransportErrorJsonMock = vi.fn();
-const isGatewayCredentialsRequiredErrorMock = vi.fn(() => false);
+const isGatewayCredentialsRequiredErrorMock = vi.fn<(value: unknown) => boolean>(() => false);
 vi.mock("../gateway/call.js", () => ({
   callGateway: (...args: unknown[]) => callGatewayMock(...args),
   buildGatewayConnectionDetails: (...args: [unknown, ...unknown[]]) =>
     Reflect.apply(buildGatewayConnectionDetailsMock, undefined, args),
   formatGatewayTransportErrorJson: (...args: unknown[]) =>
     formatGatewayTransportErrorJsonMock(...args),
-  isGatewayCredentialsRequiredError: (...args: unknown[]) =>
-    isGatewayCredentialsRequiredErrorMock(...args),
+  isGatewayCredentialsRequiredError: (value: unknown) =>
+    isGatewayCredentialsRequiredErrorMock(value),
 }));
 
 vi.mock("../channels/plugins/read-only.js", () => ({
