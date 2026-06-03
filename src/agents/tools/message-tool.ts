@@ -769,6 +769,10 @@ type MessageToolOptions = {
   inboundEventKind?: InboundEventKind;
   requesterSenderId?: string;
   senderIsOwner?: boolean;
+  shouldSuppressSend?: (params: {
+    action: ChannelMessageActionName;
+    params: Record<string, unknown>;
+  }) => string | false | undefined;
 };
 
 type MessageToolDiscoveryParams = {
@@ -1209,6 +1213,13 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       const action = readStringParam(params, "action", {
         required: true,
       }) as ChannelMessageActionName;
+      const suppressedSendReason = options?.shouldSuppressSend?.({ action, params });
+      if (suppressedSendReason) {
+        return jsonResult({
+          status: "suppressed",
+          reason: suppressedSendReason,
+        });
+      }
       if (
         suppressedVisiblePayloadReason &&
         action === "send" &&

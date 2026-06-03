@@ -12,13 +12,7 @@ import {
 } from "../utils/message-channel.js";
 
 export type ExecApprovalInitiatingSurfaceState =
-  | {
-      kind: "enabled";
-      channel: string | undefined;
-      channelLabel: string;
-      accountId?: string;
-      nativeApproval?: boolean;
-    }
+  | { kind: "enabled"; channel: string | undefined; channelLabel: string; accountId?: string }
   | { kind: "disabled"; channel: string; channelLabel: string; accountId?: string }
   | { kind: "unsupported"; channel: string; channelLabel: string; accountId?: string };
 
@@ -83,13 +77,7 @@ export function resolveApprovalInitiatingSurfaceState(params: {
       approvalKind: params.approvalKind,
     });
   if (state) {
-    return {
-      ...state,
-      channel,
-      channelLabel,
-      accountId,
-      ...(state.kind === "enabled" && capability?.native ? { nativeApproval: true } : {}),
-    };
+    return { ...state, channel, channelLabel, accountId };
   }
   if (isDeliverableMessageChannel(channel)) {
     return { kind: "enabled", channel, channelLabel, accountId };

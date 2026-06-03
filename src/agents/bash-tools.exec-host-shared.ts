@@ -464,22 +464,6 @@ export function buildExecApprovalPendingToolResult(params: {
   nodeId?: string;
 }): AgentToolResult<ExecToolDetails> {
   const allowedDecisions = params.allowedDecisions ?? resolveExecApprovalAllowedDecisions();
-  const nativeApprovalDelivered =
-    params.unavailableReason === null &&
-    params.initiatingSurface.kind === "enabled" &&
-    params.initiatingSurface.nativeApproval === true;
-  const pendingMessage = nativeApprovalDelivered
-    ? "Exec approval is pending and has already been delivered through the native approval UI. Do not send approval instructions or any follow-up message; wait for the approval result before continuing."
-    : buildApprovalPendingMessage({
-        warningText: params.warningText,
-        approvalSlug: params.approvalSlug,
-        approvalId: params.approvalId,
-        allowedDecisions,
-        command: params.command,
-        cwd: params.cwd,
-        host: params.host,
-        nodeId: params.nodeId,
-      });
   return {
     content: [
       {
@@ -494,7 +478,16 @@ export function buildExecApprovalPendingToolResult(params: {
                 accountId: params.initiatingSurface.accountId,
                 sentApproverDms: params.sentApproverDms,
               }).text ?? "")
-            : pendingMessage,
+            : buildApprovalPendingMessage({
+                warningText: params.warningText,
+                approvalSlug: params.approvalSlug,
+                approvalId: params.approvalId,
+                allowedDecisions,
+                command: params.command,
+                cwd: params.cwd,
+                host: params.host,
+                nodeId: params.nodeId,
+              }),
       },
     ],
     details:
@@ -523,7 +516,6 @@ export function buildExecApprovalPendingToolResult(params: {
             cwd: params.cwd,
             nodeId: params.nodeId,
             warningText: params.warningText,
-            ...(nativeApprovalDelivered ? { nativeApprovalDelivered } : {}),
           } satisfies ExecToolDetails),
   };
 }
