@@ -711,6 +711,23 @@ describe("buildAgentSystemPrompt", () => {
     expect(withTool).toContain("keep `description` under 160 bytes");
     expect(withTool).toContain("`proposal_content` within the configured body limit");
     expect(withTool).toContain(
+      "Before creating or updating a skill, gather concrete example user requests and the intended trigger contexts.",
+    );
+    expect(withTool).toContain(
+      "Write skills for another agent to use later: include durable, non-obvious workflow knowledge",
+    );
+    expect(withTool).toContain("Put trigger rules in the SKILL.md frontmatter `description`");
+    expect(withTool).toContain(
+      "Match the skill's degrees of freedom to the work: concise prose for judgment-heavy workflows",
+    );
+    expect(withTool).toContain(
+      "Keep SKILL.md focused on the core workflow, move lengthy examples, schemas, variants, and deep references into `support_files`",
+    );
+    expect(withTool).toContain(
+      "include them in `support_files` with one-level paths such as `scripts/name.ext`, `references/name.md`, or `assets/name.ext`",
+    );
+    expect(withTool).toContain("Pass `goal` and `evidence` when useful");
+    expect(withTool).toContain(
       "Use `action=list` or `action=inspect` only for pending proposal discovery/inspection. Do not use filesystem search for proposal discovery.",
     );
     expect(withTool).toContain("`action=revise` for an existing pending proposal");
