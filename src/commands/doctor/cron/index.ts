@@ -182,7 +182,9 @@ export async function maybeRepairLegacyCronStore(params: {
   const legacyWebhook = normalizeOptionalString(params.cfg.cron?.webhook);
   const notifyCount = rawJobs.filter((job) => job.notify === true).length;
   const dreamingStaleCount = countStaleDreamingJobs(rawJobs);
-  const previewLines = formatLegacyIssuePreview(normalized.issues);
+  const previewLines = formatLegacyIssuePreview(normalized.issues, {
+    unresolvedAgentTurnShellToolPrompt: normalized.unresolvedAgentTurnShellToolPromptJobs,
+  });
   if (legacyStoreDetected) {
     previewLines.unshift(
       legacyImportCount > 0
