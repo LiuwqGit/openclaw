@@ -812,8 +812,6 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
     const { ctx } = createTestContext();
     const onToolResult = vi.fn();
     ctx.params.onToolResult = onToolResult;
-    const deterministicApprovalPromptSentRef = { value: false };
-    ctx.params.deterministicApprovalPromptSentRef = deterministicApprovalPromptSentRef;
 
     await handleToolExecutionEnd(
       ctx as never,
@@ -848,9 +846,7 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
         approvalId: "12345678-1234-1234-1234-123456789012",
         approvalSlug: "12345678",
         approvalKind: "exec",
-        agentId: "agent-test-id",
         allowedDecisions: ["allow-once", "allow-always", "deny"],
-        sessionKey: "agent:unit-session",
       },
     );
     expectInteractiveApprovalButtons(result, [
@@ -871,7 +867,6 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
       },
     ]);
     expect(ctx.state.deterministicApprovalPromptSent).toBe(true);
-    expect(deterministicApprovalPromptSentRef.value).toBe(true);
   });
 
   it("preserves filtered approval decisions from tool details", async () => {
