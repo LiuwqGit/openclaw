@@ -278,6 +278,7 @@ export abstract class MemoryManagerSyncOps {
   protected abstract getIndexConcurrency(): number;
   protected abstract pruneEmbeddingCacheIfNeeded(): void;
   protected abstract resetProviderInitializationForRetry(): void;
+  protected abstract assertRequiredProviderAvailable(operation: "search" | "sync"): void;
   protected abstract indexFile(
     entry: MemoryIndexEntry,
     options: { source: MemorySource; content?: string },
@@ -1771,6 +1772,7 @@ export abstract class MemoryManagerSyncOps {
     if (this.provider) {
       return;
     }
+    this.assertRequiredProviderAvailable("sync");
     const existingMeta = this.readMeta();
     if (
       !existingMeta ||

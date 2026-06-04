@@ -112,6 +112,8 @@ class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
 
   protected resetProviderInitializationForRetry(): void {}
 
+  protected assertRequiredProviderAvailable(): void {}
+
   protected async indexFile(
     _entry: MemoryIndexEntry,
     _options: { source: MemorySource; content?: string },

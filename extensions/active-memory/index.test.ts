@@ -3161,7 +3161,7 @@ describe("active-memory plugin", () => {
     expectLinesToContain(lines, "🔎 Active Memory Debug: backend=qmd searchMs=8 hits=0");
   });
 
-  it("fast-fails unavailable memory_search results without injecting provider errors", async () => {
+  it("fast-fails configured-provider-missing memory_search results without injecting provider errors", async () => {
     const CONFIGURED_TIMEOUT_MS = 1_000;
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
@@ -3184,7 +3184,8 @@ describe("active-memory plugin", () => {
                 disabled: true,
                 warning: "Memory search is unavailable due to an embedding/provider error.",
                 action: "Check the embedding provider configuration, then retry memory_search.",
-                error: "embedding request failed",
+                error:
+                  'Memory search unavailable: embedding provider "openai" is configured but unavailable.',
               },
             },
           },

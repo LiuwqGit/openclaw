@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { FSWatcher } from "chokidar";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { listRegisteredMemoryEmbeddingProviderAdapters } from "openclaw/plugin-sdk/memory-core-host-embedding-registry";
 import {
   createSubsystemLogger,
   resolveAgentDir,
@@ -138,6 +139,7 @@ function resolveEffectiveMemorySearchSettings(
 
 export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements MemorySearchManager {
   private readonly cacheKey: string;
+  private readonly purpose: MemoryIndexManagerPurpose;
   protected readonly cfg: OpenClawConfig;
   protected readonly agentId: string;
   protected readonly workspaceDir: string;
@@ -265,6 +267,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     super();
     const effectiveSettings = resolveEffectiveMemorySearchSettings(params.settings);
     this.cacheKey = params.cacheKey;
+    this.purpose =
+      params.purpose === "status" || params.purpose === "cli" ? params.purpose : "default";
     this.cfg = params.cfg;
     this.agentId = params.agentId;
     this.workspaceDir = params.workspaceDir;
@@ -405,6 +409,40 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     });
   }
 
+  protected isRequiredProviderUnavailable(): boolean {
+    return (
+      this.settings.providerRequirement.mode === "required" &&
+      !this.provider &&
+      this.providerLifecycle.mode === "fts-only" &&
+      this.providerLifecycle.attemptedProviderId === this.settings.provider
+    );
+  }
+
+  protected buildRequiredProviderUnavailableError(operation: "search" | "sync"): Error {
+    const registeredProviderIds = listRegisteredMemoryEmbeddingProviderAdapters()
+      .map((adapter) => adapter.id)
+      .toSorted();
+    const registeredProviders =
+      registeredProviderIds.length > 0 ? registeredProviderIds.join(",") : "none";
+    const reason =
+      this.providerUnavailableReason ??
+      (this.providerLifecycle.mode === "fts-only"
+        ? this.providerLifecycle.reason
+        : "provider is unavailable");
+    return new Error(
+      `Memory ${operation} unavailable: embedding provider "${this.settings.provider}" is configured but unavailable. ` +
+        `Reason: ${reason}. ` +
+        `agentId=${this.agentId} purpose=${this.purpose} lifecycle=${JSON.stringify(this.providerLifecycle)} ` +
+        `registeredMemoryEmbeddingProviders=${registeredProviders}`,
+    );
+  }
+
+  protected assertRequiredProviderAvailable(operation: "search" | "sync"): void {
+    if (this.isRequiredProviderUnavailable()) {
+      throw this.buildRequiredProviderUnavailableError(operation);
+    }
+  }
+
   async warmSession(sessionKey?: string): Promise<void> {
     if (!this.settings.sync.onSessionStart) {
       return;
@@ -454,6 +492,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     },
   ): Promise<MemorySearchResult[]> {
     opts?.onDebug?.({ backend: "builtin" });
+    if (this.settings.providerRequirement.mode === "required") {
+      await this.ensureProviderInitialized();
+      this.assertRequiredProviderAvailable("search");
+    }
     let hasIndexedContent = this.hasIndexedContent();
     if (!hasIndexedContent) {
       try {
@@ -486,6 +528,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     });
     if (preflight.shouldInitializeProvider) {
       await this.ensureProviderInitialized();
+      this.assertRequiredProviderAvailable("search");
     }
     if (!this.provider && this.providerLifecycle.mode === "degraded") {
       const activatedFallback = await this.activateFallbackProvider(
@@ -530,6 +573,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
 
     // FTS-only mode: no embedding provider available
     if (!this.provider) {
+      this.assertRequiredProviderAvailable("search");
       if (!this.fts.enabled || !this.fts.available) {
         log.warn("memory search: no provider and FTS unavailable");
         return [];
