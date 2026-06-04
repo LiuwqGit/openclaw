@@ -39,12 +39,22 @@ function resolveContextToolNames(context: Parameters<StreamFn>[1]): Set<string> 
   if (!Array.isArray(tools)) {
     return new Set();
   }
-  const names = tools
-    .map((tool) => {
-      const record = toRecord(tool);
-      return typeof record?.name === "string" && record.name.trim() ? record.name : undefined;
-    })
-    .filter((name): name is string => Boolean(name));
+  const names: string[] = [];
+  for (const tool of tools) {
+    const record = toRecord(tool);
+    if (!record) {
+      continue;
+    }
+    let name: unknown;
+    try {
+      name = record.name;
+    } catch {
+      continue;
+    }
+    if (typeof name === "string" && name.trim()) {
+      names.push(name);
+    }
+  }
   return new Set(names);
 }
 

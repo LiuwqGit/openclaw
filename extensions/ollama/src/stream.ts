@@ -53,6 +53,9 @@ export const OLLAMA_NATIVE_BASE_URL = OLLAMA_DEFAULT_BASE_URL;
 
 const OLLAMA_STREAM_COOPERATIVE_YIELD_INTERVAL_MS = 12;
 const OLLAMA_STREAM_COOPERATIVE_YIELD_MAX_EVENTS = 64;
+const OLLAMA_TOOL_SCHEMA_MAX_DEPTH = 24;
+const OLLAMA_TOOL_SCHEMA_MAX_NODES = 1_000;
+const OLLAMA_TOOL_SCHEMA_INVALID = Symbol("ollama-tool-schema-invalid");
 const GARBLED_VISIBLE_TEXT_MODEL_RE = /\b(?:glm|kimi)\b/i;
 const GARBLED_VISIBLE_TEXT_MIN_CHARS = 80;
 const GARBLED_VISIBLE_TEXT_SYMBOL_RE = /[$#%&="'_~`^|\\/*+\-[\]{}()<>:;,.!?]/gu;
@@ -616,6 +619,17 @@ interface OllamaToolCall {
   };
 }
 
+type OllamaToolSnapshot = {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+};
+
+type OllamaToolSchemaCloneState = {
+  readonly seen: WeakSet<object>;
+  nodes: number;
+};
+
 interface OllamaChatResponse {
   model: string;
   created_at: string;
@@ -815,50 +829,225 @@ function inferOllamaSchemaType(schema: Record<string, unknown>): string | undefi
   return undefined;
 }
 
-function normalizeOllamaToolSchema(schema: unknown, isRoot = false): Record<string, unknown> {
-  if (!isRecord(schema)) {
+function isOllamaToolSchemaRecord(value: unknown): value is Record<string, unknown> {
+  try {
+    return isRecord(value);
+  } catch {
+    return false;
+  }
+}
+
+function isOllamaToolSchemaArray(value: unknown): value is unknown[] {
+  try {
+    return Array.isArray(value);
+  } catch {
+    return false;
+  }
+}
+
+function setOllamaToolSchemaField(
+  target: Record<string, unknown>,
+  key: string,
+  value: unknown,
+): void {
+  if (key === "__proto__") {
+    Object.defineProperty(target, key, {
+      value,
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+    return;
+  }
+  target[key] = value;
+}
+
+function cloneOllamaToolSchemaValue(
+  value: unknown,
+  state: OllamaToolSchemaCloneState,
+  depth: number,
+): unknown {
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+  if (depth > OLLAMA_TOOL_SCHEMA_MAX_DEPTH || state.nodes > OLLAMA_TOOL_SCHEMA_MAX_NODES) {
+    return OLLAMA_TOOL_SCHEMA_INVALID;
+  }
+  if (isOllamaToolSchemaArray(value)) {
+    if (state.seen.has(value)) {
+      return OLLAMA_TOOL_SCHEMA_INVALID;
+    }
+    state.seen.add(value);
+    const cloned: unknown[] = [];
+    try {
+      state.nodes += 1;
+      if (state.nodes > OLLAMA_TOOL_SCHEMA_MAX_NODES) {
+        return OLLAMA_TOOL_SCHEMA_INVALID;
+      }
+      for (const entry of value) {
+        const clonedEntry = cloneOllamaToolSchemaValue(entry, state, depth + 1);
+        if (clonedEntry === OLLAMA_TOOL_SCHEMA_INVALID) {
+          return OLLAMA_TOOL_SCHEMA_INVALID;
+        }
+        cloned.push(clonedEntry);
+      }
+    } catch {
+      return OLLAMA_TOOL_SCHEMA_INVALID;
+    } finally {
+      state.seen.delete(value);
+    }
+    return cloned;
+  }
+  if (!isOllamaToolSchemaRecord(value)) {
+    return OLLAMA_TOOL_SCHEMA_INVALID;
+  }
+  if (state.seen.has(value)) {
+    return OLLAMA_TOOL_SCHEMA_INVALID;
+  }
+  state.seen.add(value);
+  try {
+    state.nodes += 1;
+    if (state.nodes > OLLAMA_TOOL_SCHEMA_MAX_NODES) {
+      return OLLAMA_TOOL_SCHEMA_INVALID;
+    }
+    const cloned: Record<string, unknown> = {};
+    let entries: Array<[string, unknown]>;
+    try {
+      entries = Object.entries(value);
+    } catch {
+      return OLLAMA_TOOL_SCHEMA_INVALID;
+    }
+    for (const [key, entryValue] of entries) {
+      const clonedValue = cloneOllamaToolSchemaValue(entryValue, state, depth + 1);
+      if (clonedValue === OLLAMA_TOOL_SCHEMA_INVALID) {
+        return OLLAMA_TOOL_SCHEMA_INVALID;
+      }
+      setOllamaToolSchemaField(cloned, key, clonedValue);
+    }
+    return cloned;
+  } finally {
+    state.seen.delete(value);
+  }
+}
+
+function normalizeOllamaToolSchema(
+  schema: unknown,
+  isRoot = false,
+  state: OllamaToolSchemaCloneState = { seen: new WeakSet(), nodes: 0 },
+  depth = 0,
+): Record<string, unknown> | typeof OLLAMA_TOOL_SCHEMA_INVALID {
+  if (!isOllamaToolSchemaRecord(schema)) {
     return {
       type: "object",
       properties: {},
     };
   }
-
-  const normalized: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(schema)) {
-    if (key === "properties" && isRecord(value)) {
-      normalized.properties = Object.fromEntries(
-        Object.entries(value).map(([propertyName, propertySchema]) => [
-          propertyName,
-          normalizeOllamaToolSchema(propertySchema),
-        ]),
-      );
-      continue;
-    }
-    if (key === "items") {
-      normalized.items = Array.isArray(value)
-        ? value.map((entry) => normalizeOllamaToolSchema(entry))
-        : normalizeOllamaToolSchema(value);
-      continue;
-    }
-    if ((key === "anyOf" || key === "oneOf" || key === "allOf") && Array.isArray(value)) {
-      normalized[key] = value.map((entry) => normalizeOllamaToolSchema(entry));
-      continue;
-    }
-    normalized[key] = value;
+  if (depth > OLLAMA_TOOL_SCHEMA_MAX_DEPTH || state.seen.has(schema)) {
+    return OLLAMA_TOOL_SCHEMA_INVALID;
+  }
+  state.seen.add(schema);
+  state.nodes += 1;
+  if (state.nodes > OLLAMA_TOOL_SCHEMA_MAX_NODES) {
+    return OLLAMA_TOOL_SCHEMA_INVALID;
   }
 
-  const schemaType = normalized.type;
-  if (
-    typeof schemaType !== "string" &&
-    (!Array.isArray(schemaType) ||
-      !schemaType.some((entry) => typeof entry === "string" && entry !== "null"))
-  ) {
-    normalized.type = inferOllamaSchemaType(normalized) ?? (isRoot ? "object" : "string");
+  try {
+    const normalized: Record<string, unknown> = {};
+    let entries: Array<[string, unknown]>;
+    try {
+      entries = Object.entries(schema);
+    } catch {
+      return OLLAMA_TOOL_SCHEMA_INVALID;
+    }
+    for (const [key, value] of entries) {
+      if (key === "properties" && isOllamaToolSchemaRecord(value)) {
+        const properties: Record<string, unknown> = {};
+        let propertyEntries: Array<[string, unknown]>;
+        try {
+          propertyEntries = Object.entries(value);
+        } catch {
+          return OLLAMA_TOOL_SCHEMA_INVALID;
+        }
+        for (const [propertyName, propertySchema] of propertyEntries) {
+          const normalizedProperty = normalizeOllamaToolSchema(
+            propertySchema,
+            false,
+            state,
+            depth + 1,
+          );
+          if (normalizedProperty === OLLAMA_TOOL_SCHEMA_INVALID) {
+            return OLLAMA_TOOL_SCHEMA_INVALID;
+          }
+          setOllamaToolSchemaField(properties, propertyName, normalizedProperty);
+        }
+        normalized.properties = properties;
+        continue;
+      }
+      if (key === "items") {
+        if (isOllamaToolSchemaArray(value)) {
+          const items: unknown[] = [];
+          try {
+            for (const entry of value) {
+              const normalizedEntry = normalizeOllamaToolSchema(entry, false, state, depth + 1);
+              if (normalizedEntry === OLLAMA_TOOL_SCHEMA_INVALID) {
+                return OLLAMA_TOOL_SCHEMA_INVALID;
+              }
+              items.push(normalizedEntry);
+            }
+          } catch {
+            return OLLAMA_TOOL_SCHEMA_INVALID;
+          }
+          normalized.items = items;
+        } else {
+          const normalizedItems = normalizeOllamaToolSchema(value, false, state, depth + 1);
+          if (normalizedItems === OLLAMA_TOOL_SCHEMA_INVALID) {
+            return OLLAMA_TOOL_SCHEMA_INVALID;
+          }
+          normalized.items = normalizedItems;
+        }
+        continue;
+      }
+      if (
+        (key === "anyOf" || key === "oneOf" || key === "allOf") &&
+        isOllamaToolSchemaArray(value)
+      ) {
+        const variants: unknown[] = [];
+        try {
+          for (const entry of value) {
+            const normalizedEntry = normalizeOllamaToolSchema(entry, false, state, depth + 1);
+            if (normalizedEntry === OLLAMA_TOOL_SCHEMA_INVALID) {
+              return OLLAMA_TOOL_SCHEMA_INVALID;
+            }
+            variants.push(normalizedEntry);
+          }
+        } catch {
+          return OLLAMA_TOOL_SCHEMA_INVALID;
+        }
+        normalized[key] = variants;
+        continue;
+      }
+      const clonedValue = cloneOllamaToolSchemaValue(value, state, depth + 1);
+      if (clonedValue === OLLAMA_TOOL_SCHEMA_INVALID) {
+        return OLLAMA_TOOL_SCHEMA_INVALID;
+      }
+      setOllamaToolSchemaField(normalized, key, clonedValue);
+    }
+
+    const schemaType = normalized.type;
+    if (
+      typeof schemaType !== "string" &&
+      (!Array.isArray(schemaType) ||
+        !schemaType.some((entry) => typeof entry === "string" && entry !== "null"))
+    ) {
+      normalized.type = inferOllamaSchemaType(normalized) ?? (isRoot ? "object" : "string");
+    }
+    if (normalized.type === "object" && !isRecord(normalized.properties)) {
+      normalized.properties = {};
+    }
+    return normalized;
+  } finally {
+    state.seen.delete(schema);
   }
-  if (normalized.type === "object" && !isRecord(normalized.properties)) {
-    normalized.properties = {};
-  }
-  return normalized;
 }
 
 type OllamaToolCallNameOptions = {
@@ -906,14 +1095,56 @@ function extractToolCalls(
   return result;
 }
 
-function buildOllamaToolNameSet(tools: Tool[] | undefined): ReadonlySet<string> | undefined {
+function snapshotOllamaTools(tools: Tool[] | undefined): OllamaToolSnapshot[] {
   if (!tools || !Array.isArray(tools)) {
+    return [];
+  }
+  const snapshots: OllamaToolSnapshot[] = [];
+  for (const tool of tools) {
+    const snapshot = snapshotOllamaTool(tool);
+    if (snapshot) {
+      snapshots.push(snapshot);
+    }
+  }
+  return snapshots;
+}
+
+function snapshotOllamaTool(tool: Tool): OllamaToolSnapshot | undefined {
+  let name: unknown;
+  let description: unknown;
+  let parameters: unknown;
+  try {
+    name = tool.name;
+    description = tool.description;
+    parameters = tool.parameters;
+  } catch {
+    return undefined;
+  }
+  if (typeof name !== "string" || !name) {
+    return undefined;
+  }
+  const normalizedParameters = normalizeOllamaToolSchema(parameters, true);
+  if (normalizedParameters === OLLAMA_TOOL_SCHEMA_INVALID) {
+    return undefined;
+  }
+  return {
+    name,
+    description: typeof description === "string" ? description : "",
+    parameters: normalizedParameters,
+  };
+}
+
+function buildOllamaToolNameSet(
+  tools: readonly OllamaToolSnapshot[],
+): ReadonlySet<string> | undefined {
+  if (tools.length === 0) {
     return undefined;
   }
   const names = new Set<string>();
   for (const tool of tools) {
-    if (typeof tool.name === "string" && tool.name.trim()) {
-      names.add(tool.name.trim());
+    const name = tool.name.trim();
+    if (name) {
+      names.add(name);
     }
   }
   return names.size > 0 ? names : undefined;
@@ -998,21 +1229,18 @@ export function convertToOllamaMessages(
   return result;
 }
 
-function extractOllamaTools(tools: Tool[] | undefined): OllamaTool[] {
-  if (!tools || !Array.isArray(tools)) {
+function extractOllamaTools(tools: readonly OllamaToolSnapshot[]): OllamaTool[] {
+  if (tools.length === 0) {
     return [];
   }
   const result: OllamaTool[] = [];
   for (const tool of tools) {
-    if (typeof tool.name !== "string" || !tool.name) {
-      continue;
-    }
     result.push({
       type: "function",
       function: {
         name: tool.name,
-        description: typeof tool.description === "string" ? tool.description : "",
-        parameters: normalizeOllamaToolSchema(tool.parameters, true),
+        description: tool.description,
+        parameters: tool.parameters,
       },
     });
   }
@@ -1143,7 +1371,8 @@ function createRawOllamaStreamFn(
 
     const run = async () => {
       try {
-        const availableToolNames = buildOllamaToolNameSet(context.tools);
+        const toolSnapshots = snapshotOllamaTools(context.tools);
+        const availableToolNames = buildOllamaToolNameSet(toolSnapshots);
         const toolCallNameOptions: OllamaToolCallNameOptions = availableToolNames
           ? { availableToolNames }
           : {};
@@ -1152,7 +1381,7 @@ function createRawOllamaStreamFn(
           context.systemPrompt,
           toolCallNameOptions,
         );
-        const ollamaTools = extractOllamaTools(context.tools);
+        const ollamaTools = extractOllamaTools(toolSnapshots);
 
         const ollamaOptions: Record<string, unknown> = resolveOllamaModelOptions(model);
         if (typeof options?.temperature === "number") {
