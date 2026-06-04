@@ -92,6 +92,8 @@ const OPENAI_REALTIME_NO_ACTIVE_RESPONSE_CANCEL_ERROR =
   "Cancellation failed: no active response found";
 const OPENAI_REALTIME_MAX_SESSION_DURATION_FRAGMENT = "maximum duration";
 const OPENAI_REALTIME_DEFAULT_MIN_BARGE_IN_AUDIO_END_MS = 250;
+const OPENAI_REALTIME_TOOL_SCHEMA_MAX_DEPTH = 24;
+const OPENAI_REALTIME_TOOL_SCHEMA_MAX_NODES = 1_000;
 const OPENAI_REALTIME_VOICES = [
   "alloy",
   "ash",
@@ -343,6 +345,133 @@ function isOpenAIRealtimeMaxSessionDurationError(detail: string): boolean {
     normalized.includes("session") &&
     normalized.includes(OPENAI_REALTIME_MAX_SESSION_DURATION_FRAGMENT)
   );
+}
+
+function snapshotOpenAIRealtimeTools(tools: RealtimeVoiceTool[] | undefined): RealtimeVoiceTool[] {
+  if (!Array.isArray(tools)) {
+    return [];
+  }
+  const snapshots: RealtimeVoiceTool[] = [];
+  for (const tool of tools) {
+    const snapshot = snapshotOpenAIRealtimeTool(tool);
+    if (snapshot) {
+      snapshots.push(snapshot);
+    }
+  }
+  return snapshots;
+}
+
+function snapshotOpenAIRealtimeTool(tool: RealtimeVoiceTool): RealtimeVoiceTool | undefined {
+  try {
+    const type = tool.type;
+    const name = tool.name;
+    const description = tool.description;
+    const parameters = tool.parameters;
+    if (type !== "function" || !name || typeof description !== "string") {
+      return undefined;
+    }
+    const parameterSnapshot = snapshotOpenAIRealtimeToolParameters(parameters);
+    if (!parameterSnapshot) {
+      return undefined;
+    }
+    return {
+      type: "function",
+      name,
+      description,
+      parameters: parameterSnapshot,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function snapshotOpenAIRealtimeToolParameters(
+  parameters: RealtimeVoiceTool["parameters"],
+): RealtimeVoiceTool["parameters"] | undefined {
+  if (!parameters || typeof parameters !== "object" || parameters.type !== "object") {
+    return undefined;
+  }
+  const properties = snapshotOpenAIRealtimeSchemaRecord(parameters.properties);
+  if (!properties) {
+    return undefined;
+  }
+  const required = parameters.required;
+  if (required !== undefined && !isStringArray(required)) {
+    return undefined;
+  }
+  return {
+    type: "object",
+    properties,
+    ...(required ? { required: [...required] } : {}),
+  };
+}
+
+function snapshotOpenAIRealtimeSchemaRecord(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const snapshot = cloneOpenAIRealtimeSchemaValue(
+    value,
+    {
+      nodes: 0,
+      stack: new WeakSet<object>(),
+    },
+    0,
+  );
+  return snapshot && typeof snapshot === "object" && !Array.isArray(snapshot)
+    ? (snapshot as Record<string, unknown>)
+    : undefined;
+}
+
+function cloneOpenAIRealtimeSchemaValue(
+  value: unknown,
+  state: { nodes: number; stack: WeakSet<object> },
+  depth: number,
+): unknown {
+  if (
+    value === null ||
+    value === undefined ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return value;
+  }
+  if (!value || typeof value !== "object") {
+    throw new Error("unsupported OpenAI realtime schema value");
+  }
+  if (
+    depth > OPENAI_REALTIME_TOOL_SCHEMA_MAX_DEPTH ||
+    state.nodes > OPENAI_REALTIME_TOOL_SCHEMA_MAX_NODES
+  ) {
+    throw new Error("OpenAI realtime schema is too large");
+  }
+  if (state.stack.has(value)) {
+    throw new Error("OpenAI realtime schema cycle");
+  }
+  state.stack.add(value);
+  state.nodes += 1;
+  try {
+    if (Array.isArray(value)) {
+      return value.map((entry) => cloneOpenAIRealtimeSchemaValue(entry, state, depth + 1));
+    }
+    const result: Record<string, unknown> = {};
+    for (const key of Object.keys(value)) {
+      Object.defineProperty(result, key, {
+        configurable: true,
+        enumerable: true,
+        value: cloneOpenAIRealtimeSchemaValue(Reflect.get(value, key), state, depth + 1),
+        writable: true,
+      });
+    }
+    return result;
+  } finally {
+    state.stack.delete(value);
+  }
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
 }
 
 async function resolveOpenAIRealtimeDefaultAuth(params: {
@@ -904,6 +1033,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     const cfg = this.config;
     const autoRespondToAudio = cfg.autoRespondToAudio ?? true;
     const interruptResponseOnInputAudio = cfg.interruptResponseOnInputAudio ?? autoRespondToAudio;
+    const tools = snapshotOpenAIRealtimeTools(cfg.tools);
     return {
       type: "session.update",
       session: {
@@ -931,9 +1061,9 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
           },
         },
         ...(cfg.reasoningEffort ? { reasoning: { effort: cfg.reasoningEffort } } : {}),
-        ...(cfg.tools && cfg.tools.length > 0
+        ...(tools.length > 0
           ? {
-              tools: cfg.tools,
+              tools,
               tool_choice: "auto",
             }
           : {}),
@@ -948,6 +1078,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private buildAzureDeploymentSessionUpdate(): RealtimeAzureDeploymentSessionUpdate {
     const cfg = this.config;
     const format = this.resolveLegacyRealtimeAudioFormat();
+    const tools = snapshotOpenAIRealtimeTools(cfg.tools);
     return {
       type: "session.update",
       session: {
@@ -965,9 +1096,9 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
           create_response: cfg.autoRespondToAudio ?? true,
         },
         temperature: cfg.temperature ?? 0.8,
-        ...(cfg.tools && cfg.tools.length > 0
+        ...(tools.length > 0
           ? {
-              tools: cfg.tools,
+              tools,
               tool_choice: "auto",
             }
           : {}),
@@ -1401,8 +1532,9 @@ async function createOpenAIRealtimeBrowserSession(
       output: { voice },
     },
   };
-  if (req.tools && req.tools.length > 0) {
-    session.tools = req.tools;
+  const tools = snapshotOpenAIRealtimeTools(req.tools);
+  if (tools.length > 0) {
+    session.tools = tools;
     session.tool_choice = "auto";
   }
   const reasoningEffort = trimToUndefined(req.reasoningEffort) ?? config.reasoningEffort;

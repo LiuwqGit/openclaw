@@ -279,6 +279,60 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(options?.headers).not.toHaveProperty("OpenAI-Beta");
   });
 
+  it("skips unreadable native realtime tools before sending session updates", () => {
+    const badTool = {
+      type: "function" as const,
+      get name(): string {
+        throw new Error("tool revoked");
+      },
+      description: "Broken tool",
+      parameters: { type: "object" as const, properties: {} },
+    };
+    const badSchemaTool = {
+      type: "function" as const,
+      name: "bad_schema",
+      description: "Broken schema",
+      parameters: {
+        type: "object" as const,
+        properties: {
+          query: {
+            get type(): string {
+              throw new Error("schema revoked");
+            },
+          },
+        },
+      },
+    };
+    const goodTool = {
+      type: "function" as const,
+      name: "lookup",
+      description: "Lookup",
+      parameters: {
+        type: "object" as const,
+        properties: {
+          query: { type: "string" },
+        },
+      },
+    };
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      tools: [badTool, badSchemaTool, goodTool],
+    });
+
+    void bridge.connect();
+    const socket = FakeWebSocket.instances[0];
+    socket.readyState = FakeWebSocket.OPEN;
+    expect(() => socket.emit("open")).not.toThrow();
+    bridge.close();
+
+    const session = requireSession(socket);
+    expect(session.tools).toEqual([goodTool]);
+    expect(session.tool_choice).toBe("auto");
+  });
+
   it("mints an ephemeral Realtime secret for native websocket bridges when using Codex OAuth", async () => {
     resolveProviderAuthProfileApiKeyMock.mockResolvedValueOnce("oauth-token");
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
@@ -502,6 +556,48 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     // api.openai.com passes the CORS preflight (only authorization,content-type
     // allowed — #76435). All three are filtered, leaving no browser offer headers.
     expect((session as { offerHeaders?: Record<string, string> }).offerHeaders).toBeUndefined();
+  });
+
+  it("skips unreadable browser realtime tools before creating client secrets", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: createJsonResponse({
+        client_secret: { value: "client-secret-123" },
+      }),
+      release: vi.fn(async () => undefined),
+    });
+    const badTool = {
+      type: "function" as const,
+      get name(): string {
+        throw new Error("tool revoked");
+      },
+      description: "Broken tool",
+      parameters: { type: "object" as const, properties: {} },
+    };
+    const goodTool = {
+      type: "function" as const,
+      name: "lookup",
+      description: "Lookup",
+      parameters: {
+        type: "object" as const,
+        properties: {
+          query: { type: "string" },
+        },
+      },
+    };
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    if (!provider.createBrowserSession) {
+      throw new Error("expected OpenAI realtime provider to support browser sessions");
+    }
+
+    await provider.createBrowserSession({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      tools: [badTool, goodTool],
+    });
+
+    const body = requireFetchJsonBody();
+    const bodySession = requireRecord(body.session, "fetch session");
+    expect(bodySession.tools).toEqual([goodTool]);
+    expect(bodySession.tool_choice).toBe("auto");
   });
 
   it("resolves keychain OPENAI_API_KEY refs before creating browser sessions", async () => {
