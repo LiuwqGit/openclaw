@@ -71,6 +71,11 @@ type PluginToolFactoryTiming = {
 };
 
 type PluginToolFactoryResult = AnyAgentTool | AnyAgentTool[] | null | undefined;
+type PluginToolSchemaSnapshot = {
+  name: string;
+  parameters: Record<string, unknown>;
+  execute: AnyAgentTool["execute"];
+};
 
 const log = createSubsystemLogger("plugins/tools");
 const PLUGIN_TOOL_FACTORY_WARN_TOTAL_MS = 5_000;
@@ -322,7 +327,11 @@ function readPluginToolName(tool: unknown): string {
     return "";
   }
   // Optional-tool allowlists need a best-effort name before full shape validation.
-  return typeof tool.name === "string" ? tool.name.trim() : "";
+  try {
+    return typeof tool.name === "string" ? tool.name.trim() : "";
+  } catch {
+    return "";
+  }
 }
 
 function toElapsedMs(value: number): number {
@@ -450,21 +459,120 @@ function shouldWarnPluginToolFactoryTimings(params: {
   );
 }
 
-function describeMalformedPluginTool(tool: unknown): string | undefined {
+function readPluginToolSchemaSnapshot(
+  tool: unknown,
+):
+  | { snapshot: PluginToolSchemaSnapshot; malformedReason?: undefined }
+  | { snapshot?: undefined; malformedReason: string } {
   if (!isRecord(tool)) {
-    return "tool must be an object";
+    return { malformedReason: "tool must be an object" };
   }
   const name = readPluginToolName(tool);
   if (!name) {
-    return "missing non-empty name";
+    return { malformedReason: "missing non-empty name" };
   }
-  if (typeof tool.execute !== "function") {
-    return `${name} missing execute function`;
+  let execute: unknown;
+  try {
+    execute = tool.execute;
+  } catch {
+    return { malformedReason: `${name} missing execute function` };
   }
-  if (!isRecord(tool.parameters)) {
-    return `${name} missing parameters object`;
+  if (typeof execute !== "function") {
+    return { malformedReason: `${name} missing execute function` };
   }
-  return undefined;
+  let parameters: unknown;
+  try {
+    parameters = tool.parameters;
+  } catch {
+    return { malformedReason: `${name} missing parameters object` };
+  }
+  if (!isRecord(parameters)) {
+    return { malformedReason: `${name} missing parameters object` };
+  }
+  return { snapshot: { name, parameters, execute: execute as AnyAgentTool["execute"] } };
+}
+
+function stabilizePluginToolSchema(
+  tool: AnyAgentTool,
+  snapshot: PluginToolSchemaSnapshot,
+): AnyAgentTool {
+  const prototype = (() => {
+    try {
+      return Object.getPrototypeOf(tool);
+    } catch {
+      throw new Error("tool metadata descriptors are unreadable");
+    }
+  })();
+  const isEnumerable = (prop: PropertyKey, fallback: boolean) => {
+    try {
+      return Reflect.getOwnPropertyDescriptor(tool, prop)?.enumerable ?? fallback;
+    } catch {
+      throw new Error("tool metadata descriptors are unreadable");
+    }
+  };
+  let prepareArguments: unknown;
+  try {
+    prepareArguments = (tool as { prepareArguments?: unknown }).prepareArguments;
+  } catch {
+    prepareArguments = undefined;
+  }
+  const stable = Object.create(prototype) as AnyAgentTool;
+  const stableDescriptors: PropertyDescriptorMap = {
+    name: {
+      configurable: true,
+      enumerable: isEnumerable("name", true),
+      value: snapshot.name,
+      writable: true,
+    },
+    parameters: {
+      configurable: true,
+      enumerable: isEnumerable("parameters", true),
+      value: snapshot.parameters,
+      writable: true,
+    },
+    execute: {
+      configurable: true,
+      enumerable: isEnumerable("execute", true),
+      value: (toolCallId: string, params: unknown, signal?: AbortSignal, onUpdate?: unknown) =>
+        Reflect.apply(snapshot.execute, tool, [toolCallId, params, signal, onUpdate]) as ReturnType<
+          AnyAgentTool["execute"]
+        >,
+      writable: true,
+    },
+  };
+  if (typeof prepareArguments === "function") {
+    stableDescriptors.prepareArguments = {
+      configurable: true,
+      enumerable: isEnumerable("prepareArguments", false),
+      value: (...args: unknown[]) => Reflect.apply(prepareArguments, tool, args),
+      writable: true,
+    };
+  }
+  for (const prop of [
+    "description",
+    "label",
+    "displaySummary",
+    "executionMode",
+    "prepareBeforeToolCallParams",
+    "finalizeBeforeToolCallParams",
+  ]) {
+    stableDescriptors[prop] = {
+      configurable: true,
+      enumerable: isEnumerable(prop, prop === "description"),
+      get() {
+        return Reflect.get(tool, prop, tool);
+      },
+    };
+  }
+  Object.defineProperties(stable, stableDescriptors);
+  return new Proxy(stable, {
+    get(target, prop, receiver) {
+      if (Reflect.has(target, prop)) {
+        return Reflect.get(target, prop, receiver);
+      }
+      return Reflect.get(tool, prop, tool);
+    },
+  });
 }
 
 function pluginToolNamesMatchAllowlist(params: {
@@ -696,13 +804,29 @@ function createCachedDescriptorPluginTool(params: {
         const resolved = resolvePluginToolFactory(candidate, params.ctx);
         const listRaw: unknown[] = Array.isArray(resolved) ? resolved : resolved ? [resolved] : [];
         for (const toolRaw of listRaw) {
-          const malformedReason = describeMalformedPluginTool(toolRaw);
-          if (malformedReason) {
+          if (!isRecord(toolRaw)) {
             continue;
           }
-          const runtimeTool = toolRaw as AnyAgentTool;
-          if (normalizeToolName(readPluginToolName(runtimeTool)) === requestedToolName) {
-            return runtimeTool;
+          const runtimeToolName = readPluginToolName(toolRaw);
+          if (normalizeToolName(runtimeToolName) !== requestedToolName) {
+            continue;
+          }
+          let execute: unknown;
+          try {
+            execute = toolRaw.execute;
+          } catch {
+            continue;
+          }
+          if (typeof execute === "function") {
+            try {
+              return stabilizePluginToolSchema(toolRaw as AnyAgentTool, {
+                name: runtimeToolName,
+                parameters: descriptor.inputSchema as Record<string, unknown>,
+                execute: execute as AnyAgentTool["execute"],
+              });
+            } catch {
+              continue;
+            }
           }
         }
         return undefined;
@@ -1277,9 +1401,10 @@ export function resolvePluginTools(params: {
     for (const toolRaw of list) {
       // Plugin factories run at request time and can return arbitrary values; isolate
       // malformed tools here so one bad plugin tool cannot poison every provider.
-      const malformedReason = describeMalformedPluginTool(toolRaw);
-      if (malformedReason) {
-        const message = `plugin tool is malformed (${entry.pluginId}): ${malformedReason}`;
+      const schemaSnapshot = readPluginToolSchemaSnapshot(toolRaw);
+      const toolSchema = schemaSnapshot.snapshot;
+      if (!toolSchema) {
+        const message = `plugin tool is malformed (${entry.pluginId}): ${schemaSnapshot.malformedReason}`;
         context.logger.error(message);
         registry.diagnostics.push({
           level: "error",
@@ -1289,11 +1414,25 @@ export function resolvePluginTools(params: {
         });
         continue;
       }
-      const tool = toolRaw as AnyAgentTool;
+      const toolName = toolSchema.name;
+      let tool: AnyAgentTool;
+      try {
+        tool = stabilizePluginToolSchema(toolRaw as AnyAgentTool, toolSchema);
+      } catch {
+        const message = `plugin tool is malformed (${entry.pluginId}): ${toolName} unreadable metadata descriptors`;
+        context.logger.error(message);
+        registry.diagnostics.push({
+          level: "error",
+          pluginId: entry.pluginId,
+          source: entry.source,
+          message,
+        });
+        continue;
+      }
       const undeclared = entry.declaredNames
         ? findUndeclaredPluginToolNames({
             declaredNames: entry.declaredNames,
-            toolNames: [tool.name],
+            toolNames: [toolName],
           })
         : [];
       if (undeclared.length > 0) {
@@ -1307,9 +1446,9 @@ export function resolvePluginTools(params: {
         });
         continue;
       }
-      const normalizedToolName = normalizeToolName(tool.name);
+      const normalizedToolName = normalizeToolName(toolName);
       if (normalizedNameSet.has(normalizedToolName) || existingNormalized.has(normalizedToolName)) {
-        const message = `plugin tool name conflict (${entry.pluginId}): ${tool.name}`;
+        const message = `plugin tool name conflict (${entry.pluginId}): ${toolName}`;
         if (!params.suppressNameConflicts) {
           context.logger.error(message);
           registry.diagnostics.push({
@@ -1322,19 +1461,19 @@ export function resolvePluginTools(params: {
         continue;
       }
       normalizedNameSet.add(normalizedToolName);
-      existing.add(tool.name);
+      existing.add(toolName);
       existingNormalized.add(normalizedToolName);
       const optional = isPluginToolOptional({
         entry,
         manifestPlugin,
-        toolName: tool.name,
+        toolName,
       });
       pluginToolMeta.set(tool, {
         pluginId: entry.pluginId,
         optional,
         trustedLocalMedia: isTrustedManifestLocalMediaTool({
           manifestPlugin,
-          toolName: tool.name,
+          toolName,
         }),
       });
       if (manifestPlugin) {
