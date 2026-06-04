@@ -95,6 +95,26 @@ function isKnownLocalCodingToolName(normalized: string): boolean {
   );
 }
 
+type ReadableAttemptTool<T> = {
+  tool: T;
+  name: string;
+};
+
+function collectReadableAttemptTools<T extends { name: string }>(
+  tools: readonly T[],
+): ReadableAttemptTool<T>[] {
+  const entries: ReadableAttemptTool<T>[] = [];
+  for (const tool of tools) {
+    try {
+      entries.push({ tool, name: tool.name });
+    } catch {
+      // Final runtime schema projection will report unreadable descriptors for
+      // broad lists; explicit allowlists cannot match a tool whose name is not readable.
+    }
+  }
+  return entries;
+}
+
 /**
  * Applies a runtime allowlist to a concrete tool list after expanding tool and
  * plugin groups. Undefined allowlists keep all tools; an explicit empty list
@@ -116,13 +136,25 @@ export function applyEmbeddedAttemptToolsAllow<T extends { name: string }>(
   if (hasWildcardToolAllowlist(toolsAllow)) {
     return tools;
   }
+  const readableTools = collectReadableAttemptTools(tools);
   const pluginGroups = options?.toolMeta
-    ? buildPluginToolGroups({ tools, toolMeta: options.toolMeta })
+    ? buildPluginToolGroups({
+        tools: readableTools,
+        toolMeta: (entry) => {
+          try {
+            return options.toolMeta?.(entry.tool);
+          } catch {
+            return undefined;
+          }
+        },
+      })
     : undefined;
   const policy = pluginGroups
     ? expandPolicyWithPluginGroups({ allow: toolsAllow }, pluginGroups)
     : { allow: toolsAllow };
-  return tools.filter((tool) => isToolAllowedByPolicyName(tool.name, policy));
+  return readableTools
+    .filter((entry) => isToolAllowedByPolicyName(entry.name, policy))
+    .map((entry) => entry.tool);
 }
 
 /**

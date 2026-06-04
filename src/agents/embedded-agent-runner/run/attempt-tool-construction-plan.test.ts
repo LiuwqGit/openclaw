@@ -135,6 +135,41 @@ describe("applyEmbeddedAttemptToolsAllow", () => {
     ).toEqual(["memory_search", "memory_get"]);
   });
 
+  it("skips unreadable tool names during explicit allowlist filtering", () => {
+    const unreadable = Object.defineProperty({}, "name", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin tool name getter exploded");
+      },
+    }) as { name: string };
+    const tools = [unreadable, { name: "memory_search" }];
+
+    expect(
+      applyEmbeddedAttemptToolsAllow(tools, ["memory_search"]).map((tool) => tool.name),
+    ).toEqual(["memory_search"]);
+  });
+
+  it("keeps explicit tool-name matches when plugin metadata lookup throws", () => {
+    const tools = [{ name: "memory_search" }, { name: "browser" }];
+    const toolMeta = (tool: { name: string }) => {
+      if (tool.name === "memory_search") {
+        throw new Error("fuzzplugin metadata getter exploded");
+      }
+      return { pluginId: "browser" };
+    };
+
+    expect(
+      applyEmbeddedAttemptToolsAllow(tools, ["memory_search"], { toolMeta }).map(
+        (tool) => tool.name,
+      ),
+    ).toEqual(["memory_search"]);
+    expect(
+      applyEmbeddedAttemptToolsAllow(tools, ["group:plugins"], { toolMeta }).map(
+        (tool) => tool.name,
+      ),
+    ).toEqual(["browser"]);
+  });
+
   it("filters bundled runtime tools by explicit tool name and bundled plugin id", () => {
     // Bundled MCP/LSP tools are plugin-owned tools, so allowlists can target
     // either exact tool names or bundled plugin ids.
