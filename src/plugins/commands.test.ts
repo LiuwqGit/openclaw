@@ -432,6 +432,55 @@ describe("registerPluginCommand", () => {
     expect(registerPluginCommand("demo-plugin", command as never)).toEqual(expected);
   });
 
+  it("rejects unreadable command metadata without blocking later registrations", () => {
+    const poisoned = createVoiceCommand();
+    Object.defineProperty(poisoned, "nativeNames", {
+      get() {
+        throw new Error("command native names exploded");
+      },
+    });
+
+    expect(registerPluginCommand("poisoned-plugin", poisoned)).toEqual({
+      ok: false,
+      error: "Command nativeNames is unreadable",
+    });
+    expect(registerPluginCommand("demo-plugin", createVoiceCommand({ name: "healthy" }))).toEqual({
+      ok: true,
+    });
+    expect(listPluginCommands().map((command) => command.name)).toEqual(["healthy"]);
+  });
+
+  it("copies optional command metadata before storing registrations", () => {
+    const nativeNames = { telegram: "talkvoice" };
+    const channels = ["telegram"];
+    const agentPromptGuidance = [
+      { text: "  Use /voice for voice routing.  ", surfaces: ["openclaw_main" as const] },
+    ];
+    const result = registerVoiceCommandForTest({
+      nativeNames,
+      channels,
+      agentPromptGuidance,
+      description: "Demo command",
+    });
+
+    nativeNames.telegram = "changedvoice";
+    channels[0] = "discord";
+    agentPromptGuidance[0].text = "Changed guidance";
+
+    expect(result).toEqual({ ok: true });
+    expect(matchPluginCommand("/voice", { channel: "telegram" })?.command.channels).toEqual([
+      "telegram",
+    ]);
+    expect(matchPluginCommand("/voice", { channel: "discord" })).toBeNull();
+    expectProviderCommandSpecCases([
+      { provider: "telegram", expectedNames: ["talkvoice"] },
+      { provider: "discord", expectedNames: [] },
+    ]);
+    expect(listRegisteredPluginAgentPromptGuidance({ surface: "openclaw_main" })).toEqual([
+      "Use /voice for voice routing.",
+    ]);
+  });
+
   it("normalizes command metadata for downstream consumers", () => {
     const result = registerPluginCommand("demo-plugin", {
       name: "  demo_cmd  ",

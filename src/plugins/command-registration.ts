@@ -22,6 +22,12 @@ import {
   type OpenClawPluginCommandDefinition,
 } from "./types.js";
 
+type CommandField = keyof OpenClawPluginCommandDefinition;
+
+type CommandSnapshotResult =
+  | { ok: true; command: OpenClawPluginCommandDefinition }
+  | { ok: false; error: string };
+
 /**
  * Reserved command names that plugins cannot override (built-in commands).
  *
@@ -119,6 +125,17 @@ export function validateCommandName(
  * Shared by both the global registration path and snapshot (non-activating) loads.
  */
 export function validatePluginCommandDefinition(
+  command: OpenClawPluginCommandDefinition,
+  opts?: { allowReservedCommandNames?: boolean },
+): string | null {
+  const snapshot = snapshotPluginCommandDefinition(command);
+  if (!snapshot.ok) {
+    return snapshot.error;
+  }
+  return validatePluginCommandSnapshot(snapshot.command, opts);
+}
+
+function validatePluginCommandSnapshot(
   command: OpenClawPluginCommandDefinition,
   opts?: { allowReservedCommandNames?: boolean },
 ): string | null {
@@ -227,6 +244,213 @@ export function validatePluginCommandDefinition(
   return null;
 }
 
+function readCommandField(
+  command: OpenClawPluginCommandDefinition,
+  field: CommandField,
+): { ok: true; value: unknown } | { ok: false; error: string } {
+  try {
+    return { ok: true, value: command[field] };
+  } catch {
+    return { ok: false, error: `Command ${field} is unreadable` };
+  }
+}
+
+function copyArrayEntries(
+  value: unknown,
+  field: string,
+): { ok: true; value: unknown[] } | { ok: false; error: string } {
+  let length: number;
+  try {
+    if (!Array.isArray(value)) {
+      return { ok: false, error: `${field} must be an array` };
+    }
+    length = value.length;
+  } catch {
+    return { ok: false, error: `${field} is unreadable` };
+  }
+  const entries: unknown[] = [];
+  for (let index = 0; index < length; index += 1) {
+    try {
+      entries.push(value[index]);
+    } catch {
+      return { ok: false, error: `${field} entry ${index + 1} is unreadable` };
+    }
+  }
+  return { ok: true, value: entries };
+}
+
+function copyOptionalArrayField(
+  command: OpenClawPluginCommandDefinition,
+  field: "channels" | "requiredScopes",
+  label: string,
+): { ok: true; value: unknown[] | undefined } | { ok: false; error: string } {
+  const fieldValue = readCommandField(command, field);
+  if (!fieldValue.ok) {
+    return fieldValue;
+  }
+  if (fieldValue.value === undefined) {
+    return { ok: true, value: undefined };
+  }
+  return copyArrayEntries(fieldValue.value, label);
+}
+
+function copyOptionalRecordField(
+  command: OpenClawPluginCommandDefinition,
+  field: "nativeNames" | "nativeProgressMessages" | "descriptionLocalizations",
+  label: string,
+): { ok: true; value: Record<string, unknown> | undefined } | { ok: false; error: string } {
+  const fieldValue = readCommandField(command, field);
+  if (!fieldValue.ok) {
+    return fieldValue;
+  }
+  if (fieldValue.value === undefined) {
+    return { ok: true, value: undefined };
+  }
+  if (!isRecord(fieldValue.value)) {
+    return { ok: false, error: `${label} must be an object` };
+  }
+  try {
+    return { ok: true, value: Object.fromEntries(Object.entries(fieldValue.value)) };
+  } catch {
+    return { ok: false, error: `${label} is unreadable` };
+  }
+}
+
+function copyAgentPromptGuidance(
+  command: OpenClawPluginCommandDefinition,
+): { ok: true; value: AgentPromptGuidance[] | undefined } | { ok: false; error: string } {
+  const fieldValue = readCommandField(command, "agentPromptGuidance");
+  if (!fieldValue.ok) {
+    return fieldValue;
+  }
+  if (fieldValue.value === undefined) {
+    return { ok: true, value: undefined };
+  }
+  try {
+    if (!Array.isArray(fieldValue.value)) {
+      return {
+        ok: false,
+        error: "Agent prompt guidance must be an array of strings or objects",
+      };
+    }
+  } catch {
+    return { ok: false, error: "Agent prompt guidance is unreadable" };
+  }
+  const entries = copyArrayEntries(fieldValue.value, "Agent prompt guidance");
+  if (!entries.ok) {
+    return entries;
+  }
+  const guidance: AgentPromptGuidance[] = [];
+  for (let index = 0; index < entries.value.length; index += 1) {
+    const entry = entries.value[index];
+    if (typeof entry === "string") {
+      guidance.push(entry);
+      continue;
+    }
+    if (!isRecord(entry)) {
+      guidance.push(entry as AgentPromptGuidance);
+      continue;
+    }
+    let text: unknown;
+    let surfaces: unknown;
+    try {
+      text = entry.text;
+      surfaces = entry.surfaces;
+    } catch {
+      return { ok: false, error: `Agent prompt guidance ${index + 1} is unreadable` };
+    }
+    if (surfaces === undefined) {
+      guidance.push({ text } as AgentPromptGuidanceEntry);
+      continue;
+    }
+    const copiedSurfaces = copyArrayEntries(
+      surfaces,
+      `Agent prompt guidance ${index + 1} surfaces`,
+    );
+    if (!copiedSurfaces.ok) {
+      return copiedSurfaces;
+    }
+    guidance.push({ text, surfaces: copiedSurfaces.value } as AgentPromptGuidanceEntry);
+  }
+  return { ok: true, value: guidance };
+}
+
+function snapshotPluginCommandDefinition(
+  command: OpenClawPluginCommandDefinition,
+): CommandSnapshotResult {
+  if (!isRecord(command)) {
+    return { ok: false, error: "Command definition must be an object" };
+  }
+
+  const handler = readCommandField(command, "handler");
+  if (!handler.ok) {
+    return handler;
+  }
+  const name = readCommandField(command, "name");
+  if (!name.ok) {
+    return name;
+  }
+  const description = readCommandField(command, "description");
+  if (!description.ok) {
+    return description;
+  }
+  const ownership = readCommandField(command, "ownership");
+  if (!ownership.ok) {
+    return ownership;
+  }
+
+  const snapshot: OpenClawPluginCommandDefinition = {
+    name: name.value as string,
+    description: description.value as string,
+    handler: handler.value as OpenClawPluginCommandDefinition["handler"],
+  };
+  const setKnownField = <K extends keyof OpenClawPluginCommandDefinition>(
+    field: K,
+    value: OpenClawPluginCommandDefinition[K] | undefined,
+  ) => {
+    if (value !== undefined) {
+      snapshot[field] = value;
+    }
+  };
+  for (const field of ["acceptsArgs", "requireAuth", "exposeSenderIsOwner"] as const) {
+    const value = readCommandField(command, field);
+    if (!value.ok) {
+      return value;
+    }
+    setKnownField(field, value.value as OpenClawPluginCommandDefinition[typeof field]);
+  }
+  const arrayFields = [
+    ["channels", "Command channels"],
+    ["requiredScopes", "Command requiredScopes"],
+  ] as const;
+  for (const [field, label] of arrayFields) {
+    const value = copyOptionalArrayField(command, field, label);
+    if (!value.ok) {
+      return value;
+    }
+    setKnownField(field, value.value as OpenClawPluginCommandDefinition[typeof field]);
+  }
+  const recordFields = [
+    ["nativeNames", "Command nativeNames"],
+    ["nativeProgressMessages", "Command nativeProgressMessages"],
+    ["descriptionLocalizations", "Command descriptionLocalizations"],
+  ] as const;
+  for (const [field, label] of recordFields) {
+    const value = copyOptionalRecordField(command, field, label);
+    if (!value.ok) {
+      return value;
+    }
+    setKnownField(field, value.value as OpenClawPluginCommandDefinition[typeof field]);
+  }
+  const agentPromptGuidance = copyAgentPromptGuidance(command);
+  if (!agentPromptGuidance.ok) {
+    return agentPromptGuidance;
+  }
+  setKnownField("agentPromptGuidance", agentPromptGuidance.value);
+  setKnownField("ownership", ownership.value as OpenClawPluginCommandDefinition["ownership"]);
+  return { ok: true, command: snapshot };
+}
+
 function validateAgentPromptGuidance(index: number, guidance: AgentPromptGuidance): string | null {
   const label = `Agent prompt guidance ${index + 1}`;
   if (typeof guidance === "string") {
@@ -292,8 +516,13 @@ export function listPluginInvocationKeys(command: OpenClawPluginCommandDefinitio
     keys.add(`/${normalized}`);
   };
 
-  push(command.name);
-  for (const alias of Object.values(command.nativeNames ?? {})) {
+  const name = readCommandField(command, "name");
+  if (name.ok && typeof name.value === "string") {
+    push(name.value);
+  }
+  const nativeNames = copyOptionalRecordField(command, "nativeNames", "Command nativeNames");
+  const aliases = nativeNames.ok ? nativeNames.value : undefined;
+  for (const alias of Object.values(aliases ?? {})) {
     if (typeof alias === "string") {
       push(alias);
     }
@@ -306,12 +535,14 @@ export function pluginCommandSupportsChannel(
   command: OpenClawPluginCommandDefinition,
   channel?: string,
 ): boolean {
-  if (!command.channels || command.channels.length === 0 || !channel) {
+  const channels = copyOptionalArrayField(command, "channels", "Command channels");
+  if (!channels.ok || !channels.value || channels.value.length === 0 || !channel) {
     return true;
   }
   const normalizedChannel = normalizeLowercaseStringOrEmpty(channel);
-  return command.channels.some(
-    (entry) => normalizeLowercaseStringOrEmpty(entry) === normalizedChannel,
+  return channels.value.some(
+    (entry) =>
+      typeof entry === "string" && normalizeLowercaseStringOrEmpty(entry) === normalizedChannel,
   );
 }
 
@@ -329,31 +560,57 @@ export function registerPluginCommand(
   if (isPluginCommandRegistryLocked()) {
     return { ok: false, error: "Cannot register commands while processing is in progress" };
   }
-  if (command.ownership === "reserved") {
+  const snapshot = snapshotPluginCommandDefinition(command);
+  if (!snapshot.ok) {
+    return { ok: false, error: snapshot.error };
+  }
+  if (snapshot.command.ownership === "reserved") {
     return {
       ok: false,
       error: "Reserved command ownership is only available to bundled reserved commands",
     };
   }
 
-  const definitionError = validatePluginCommandDefinition(command, opts);
+  const definitionError = validatePluginCommandSnapshot(snapshot.command, opts);
   if (definitionError) {
     return { ok: false, error: definitionError };
   }
 
-  const name = command.name.trim();
+  const name = snapshot.command.name.trim();
   const normalizedName = normalizeLowercaseStringOrEmpty(name);
-  const description = command.description.trim();
-  const normalizedCommand = {
-    ...command,
+  const description = snapshot.command.description.trim();
+  const normalizedCommand: OpenClawPluginCommandDefinition = {
     name,
     description,
-    ...(command.channels
-      ? { channels: command.channels.map((channel) => normalizeLowercaseStringOrEmpty(channel)) }
+    handler: snapshot.command.handler,
+    ...(snapshot.command.acceptsArgs !== undefined
+      ? { acceptsArgs: snapshot.command.acceptsArgs }
       : {}),
-    ...(command.agentPromptGuidance
-      ? { agentPromptGuidance: normalizeAgentPromptGuidance(command.agentPromptGuidance) }
+    ...(snapshot.command.requireAuth !== undefined
+      ? { requireAuth: snapshot.command.requireAuth }
       : {}),
+    ...(snapshot.command.requiredScopes ? { requiredScopes: snapshot.command.requiredScopes } : {}),
+    ...(snapshot.command.exposeSenderIsOwner !== undefined
+      ? { exposeSenderIsOwner: snapshot.command.exposeSenderIsOwner }
+      : {}),
+    ...(snapshot.command.nativeNames ? { nativeNames: snapshot.command.nativeNames } : {}),
+    ...(snapshot.command.nativeProgressMessages
+      ? { nativeProgressMessages: snapshot.command.nativeProgressMessages }
+      : {}),
+    ...(snapshot.command.descriptionLocalizations
+      ? { descriptionLocalizations: snapshot.command.descriptionLocalizations }
+      : {}),
+    ...(snapshot.command.channels
+      ? {
+          channels: snapshot.command.channels.map((channel) =>
+            normalizeLowercaseStringOrEmpty(channel),
+          ),
+        }
+      : {}),
+    ...(snapshot.command.agentPromptGuidance
+      ? { agentPromptGuidance: normalizeAgentPromptGuidance(snapshot.command.agentPromptGuidance) }
+      : {}),
+    ...(snapshot.command.ownership ? { ownership: snapshot.command.ownership } : {}),
   };
   const invocationKeys = listPluginInvocationKeys(normalizedCommand);
   const key = `/${normalizedName}`;
