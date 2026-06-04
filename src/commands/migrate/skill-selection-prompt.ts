@@ -251,4 +251,7 @@ export function promptMigrationSkillSelectionValues(
   return prompt.prompt();
 }
 
+/**
+ * @deprecated Use promptMigrationSkillSelectionValues.
+ */
 export const promptMigrationSelectionValues = promptMigrationSkillSelectionValues;
