@@ -226,6 +226,119 @@ describe("OpenAI-compatible completions params", () => {
     expect(capturedRetention).toBe("24h");
   });
 
+  it("skips unreadable tools when building OpenAI completions payloads", async () => {
+    const revokedTool = Object.create(null) as {
+      name: string;
+      description: string;
+      parameters: Record<string, unknown>;
+    };
+    Object.defineProperty(revokedTool, "name", {
+      enumerable: true,
+      get() {
+        throw new Error("tool revoked");
+      },
+    });
+    Object.defineProperty(revokedTool, "description", {
+      enumerable: true,
+      value: "broken",
+    });
+    Object.defineProperty(revokedTool, "parameters", {
+      enumerable: true,
+      value: { type: "object", properties: {} },
+    });
+    const revokedSchema = Proxy.revocable({ type: "object", properties: {} }, {});
+    revokedSchema.revoke();
+    const healthyTool = {
+      name: "healthy_tool",
+      description: "Still available",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string" },
+        },
+        required: ["query"],
+      },
+    };
+    let capturedTools: unknown;
+    const stream = streamOpenAICompletions(
+      createModel(32_000),
+      {
+        ...context,
+        tools: [
+          revokedTool,
+          {
+            name: "revoked_schema",
+            description: "Revoked schema proxy",
+            parameters: revokedSchema.proxy,
+          },
+          healthyTool,
+        ],
+      },
+      {
+        apiKey: "sk-test",
+        onPayload(payload) {
+          capturedTools = (payload as { tools?: unknown }).tools;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedTools).toEqual([
+      {
+        type: "function",
+        function: {
+          name: "healthy_tool",
+          description: "Still available",
+          parameters: {
+            type: "object",
+            properties: {
+              query: { type: "string" },
+            },
+            required: ["query"],
+          },
+          strict: false,
+        },
+      },
+    ]);
+  });
+
+  it("fails closed when forced OpenAI completions tool choice is filtered out", async () => {
+    const revokedSchema = Proxy.revocable({ type: "object", properties: {} }, {});
+    revokedSchema.revoke();
+    const stream = streamOpenAICompletions(
+      createModel(32_000),
+      {
+        ...context,
+        tools: [
+          {
+            name: "revoked_schema",
+            description: "Revoked schema proxy",
+            parameters: revokedSchema.proxy,
+          },
+          {
+            name: "healthy_tool",
+            description: "Still available",
+            parameters: { type: "object", properties: {} },
+          },
+        ],
+      },
+      {
+        apiKey: "sk-test",
+        toolChoice: { type: "function", function: { name: "revoked_schema" } },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toContain(
+      'OpenAI completions forced toolChoice "revoked_schema" is unavailable after tool schema filtering',
+    );
+  });
+
   it("strips the internal cache boundary from OpenAI-compatible system prompts", async () => {
     let capturedMessages: unknown;
     const stream = streamOpenAICompletions(

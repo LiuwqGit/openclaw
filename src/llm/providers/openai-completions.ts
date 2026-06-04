@@ -76,6 +76,10 @@ function isToolCallBlock(block: { type: string }): block is ToolCall {
   return block.type === "toolCall";
 }
 
+const OPENAI_COMPLETIONS_TOOL_SCHEMA_MAX_DEPTH = 24;
+const OPENAI_COMPLETIONS_TOOL_SCHEMA_MAX_NODES = 1_000;
+const OPENAI_COMPLETIONS_TOOL_SCHEMA_INVALID = Symbol("openai-completions-tool-schema-invalid");
+
 function isImageContentBlock(block: { type: string }): block is ImageContent {
   return block.type === "image";
 }
@@ -652,8 +656,9 @@ function buildParams(
     params.stop = options.stop;
   }
 
-  if (context.tools && context.tools.length > 0) {
-    params.tools = convertTools(context.tools, compat);
+  const toolSnapshots = context.tools?.length ? snapshotOpenAICompletionsTools(context.tools) : [];
+  if (toolSnapshots.length > 0) {
+    params.tools = convertTools(toolSnapshots, compat);
     if (compat.zaiToolStream) {
       params.tool_stream = true;
     }
@@ -667,7 +672,7 @@ function buildParams(
   }
 
   if (options?.toolChoice) {
-    params.tool_choice = options.toolChoice;
+    params.tool_choice = resolveOpenAICompletionsToolChoice(options.toolChoice, toolSnapshots);
   }
 
   if (compat.thinkingFormat === "zai" && model.reasoning) {
@@ -1151,8 +1156,19 @@ export function convertMessages(
   return params;
 }
 
+type OpenAICompletionsToolSnapshot = {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+};
+
+type OpenAICompletionsToolSchemaCloneState = {
+  seen: WeakSet<object>;
+  nodes: number;
+};
+
 function convertTools(
-  tools: Tool[],
+  tools: readonly OpenAICompletionsToolSnapshot[],
   compat: ResolvedOpenAICompletionsCompat,
 ): OpenAI.Chat.Completions.ChatCompletionTool[] {
   return tools.map((tool) => ({
@@ -1160,11 +1176,164 @@ function convertTools(
     function: {
       name: tool.name,
       description: tool.description,
-      parameters: tool.parameters as Record<string, unknown>, // TypeBox already generates JSON Schema
+      parameters: tool.parameters,
       // Only include strict if provider supports it. Some reject unknown fields.
       ...(compat.supportsStrictMode && { strict: false }),
     },
   }));
+}
+
+function snapshotOpenAICompletionsTools(tools: readonly Tool[]): OpenAICompletionsToolSnapshot[] {
+  const snapshots: OpenAICompletionsToolSnapshot[] = [];
+  for (const tool of tools) {
+    const snapshot = snapshotOpenAICompletionsTool(tool);
+    if (snapshot) {
+      snapshots.push(snapshot);
+    }
+  }
+  return snapshots;
+}
+
+function snapshotOpenAICompletionsTool(tool: Tool): OpenAICompletionsToolSnapshot | undefined {
+  let name: string;
+  let description: string;
+  let parameters: unknown;
+  try {
+    name = tool.name;
+    description = tool.description;
+    parameters = tool.parameters;
+  } catch {
+    return undefined;
+  }
+  if (!name || typeof name !== "string" || typeof description !== "string") {
+    return undefined;
+  }
+
+  let clonedParameters: unknown;
+  try {
+    clonedParameters = cloneOpenAICompletionsToolSchemaValue(
+      parameters,
+      {
+        seen: new WeakSet<object>(),
+        nodes: 0,
+      },
+      0,
+    );
+  } catch {
+    return undefined;
+  }
+  if (
+    clonedParameters === OPENAI_COMPLETIONS_TOOL_SCHEMA_INVALID ||
+    !clonedParameters ||
+    typeof clonedParameters !== "object" ||
+    Array.isArray(clonedParameters)
+  ) {
+    return undefined;
+  }
+
+  return {
+    name,
+    description,
+    parameters: clonedParameters as Record<string, unknown>,
+  };
+}
+
+function cloneOpenAICompletionsToolSchemaValue(
+  value: unknown,
+  state: OpenAICompletionsToolSchemaCloneState,
+  depth: number,
+): unknown {
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+  if (
+    depth >= OPENAI_COMPLETIONS_TOOL_SCHEMA_MAX_DEPTH ||
+    state.nodes >= OPENAI_COMPLETIONS_TOOL_SCHEMA_MAX_NODES
+  ) {
+    return OPENAI_COMPLETIONS_TOOL_SCHEMA_INVALID;
+  }
+  if (state.seen.has(value)) {
+    return OPENAI_COMPLETIONS_TOOL_SCHEMA_INVALID;
+  }
+  state.seen.add(value);
+  state.nodes += 1;
+
+  if (Array.isArray(value)) {
+    const result: unknown[] = [];
+    for (const item of value) {
+      const clonedItem = cloneOpenAICompletionsToolSchemaValue(item, state, depth + 1);
+      if (clonedItem === OPENAI_COMPLETIONS_TOOL_SCHEMA_INVALID) {
+        state.seen.delete(value);
+        return OPENAI_COMPLETIONS_TOOL_SCHEMA_INVALID;
+      }
+      result.push(clonedItem);
+    }
+    state.seen.delete(value);
+    return result;
+  }
+
+  const result: Record<string, unknown> = {};
+  let keys: string[];
+  try {
+    keys = Object.keys(value);
+  } catch {
+    state.seen.delete(value);
+    return OPENAI_COMPLETIONS_TOOL_SCHEMA_INVALID;
+  }
+  for (const key of keys) {
+    let entry: unknown;
+    try {
+      entry = Reflect.get(value, key);
+    } catch {
+      state.seen.delete(value);
+      return OPENAI_COMPLETIONS_TOOL_SCHEMA_INVALID;
+    }
+    const clonedEntry = cloneOpenAICompletionsToolSchemaValue(entry, state, depth + 1);
+    if (clonedEntry === OPENAI_COMPLETIONS_TOOL_SCHEMA_INVALID) {
+      state.seen.delete(value);
+      return OPENAI_COMPLETIONS_TOOL_SCHEMA_INVALID;
+    }
+    if (key === "__proto__") {
+      Object.defineProperty(result, key, {
+        value: clonedEntry,
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
+    } else {
+      result[key] = clonedEntry;
+    }
+  }
+
+  state.seen.delete(value);
+  return result;
+}
+
+function resolveOpenAICompletionsToolChoice(
+  choice: OpenAICompletionsOptions["toolChoice"],
+  tools: readonly OpenAICompletionsToolSnapshot[],
+): NonNullable<OpenAICompletionsOptions["toolChoice"]> {
+  if (!choice) {
+    return "auto";
+  }
+  if (choice === "auto" || choice === "none") {
+    return choice;
+  }
+  if (choice === "required") {
+    if (tools.length === 0) {
+      throw new Error(
+        'OpenAI completions toolChoice "required" requires at least one available tool',
+      );
+    }
+    return choice;
+  }
+  const requiredName = choice.function.name;
+  if (tools.some((tool) => tool.name === requiredName)) {
+    return choice;
+  }
+  throw new Error(
+    `OpenAI completions forced toolChoice "${requiredName}" is unavailable after tool schema filtering`,
+  );
 }
 
 function parseChunkUsage(
