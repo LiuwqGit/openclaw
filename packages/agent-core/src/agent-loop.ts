@@ -9,6 +9,7 @@ import type {
 } from "../../llm-core/src/index.js";
 import type { EventStream as SourceEventStream } from "../../llm-core/src/index.js";
 import { type AgentCoreStreamRuntimeDeps, resolveAgentCoreStreamFn } from "./runtime-deps.js";
+import { snapshotAgentTools } from "./tool-snapshot.js";
 import type {
   AgentContext,
   AgentEvent,
@@ -34,6 +35,16 @@ const EMPTY_USAGE = {
 };
 
 const EventStreamConstructor: typeof SourceEventStream = LlmEventStream;
+
+function sanitizeLoopContextTools(context: AgentContext): AgentContext {
+  if (!context.tools) {
+    return context;
+  }
+  return {
+    ...context,
+    tools: snapshotAgentTools(context.tools, { logContext: "agent loop" }),
+  };
+}
 
 /**
  * Start an agent loop with a new prompt message.
@@ -126,10 +137,10 @@ export async function runAgentLoop(
   runtime?: AgentCoreStreamRuntimeDeps,
 ): Promise<AgentMessage[]> {
   const newMessages: AgentMessage[] = [...prompts];
-  const currentContext: AgentContext = {
+  const currentContext: AgentContext = sanitizeLoopContextTools({
     ...context,
     messages: [...context.messages, ...prompts],
-  };
+  });
 
   await emit({ type: "agent_start" });
   await emit({ type: "turn_start" });
@@ -160,7 +171,7 @@ export async function runAgentLoopContinue(
   }
 
   const newMessages: AgentMessage[] = [];
-  const currentContext: AgentContext = { ...context };
+  const currentContext: AgentContext = sanitizeLoopContextTools({ ...context });
 
   await emit({ type: "agent_start" });
   await emit({ type: "turn_start" });
@@ -296,7 +307,9 @@ async function runLoop(
       };
       const nextTurnSnapshot = await config.prepareNextTurn?.(nextTurnContext);
       if (nextTurnSnapshot) {
-        currentContext = nextTurnSnapshot.context ?? currentContext;
+        currentContext = nextTurnSnapshot.context
+          ? sanitizeLoopContextTools(nextTurnSnapshot.context)
+          : currentContext;
         config = Object.assign({}, config, {
           model: nextTurnSnapshot.model ?? config.model,
           reasoning:
