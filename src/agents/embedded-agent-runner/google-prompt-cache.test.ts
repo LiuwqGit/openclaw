@@ -182,6 +182,16 @@ describe("google prompt cache", () => {
           messages: [],
           tools: [
             {
+              name: "revoked_lookup",
+              description: "Bad lookup",
+              parameters: Object.defineProperty({ type: "object" }, "properties", {
+                enumerable: true,
+                get() {
+                  throw new Error("schema revoked");
+                },
+              }),
+            },
+            {
               name: "lookup",
               description: "Look up a value",
               parameters: { type: "object" },
@@ -254,6 +264,51 @@ describe("google prompt cache", () => {
         },
       },
     ]);
+  });
+
+  it("fails closed when a required tool choice has no surviving cache declarations", async () => {
+    const now = 1_500_000;
+    const entries: SessionCustomEntry[] = [];
+    const sessionManager = makeSessionManager(entries);
+    const fetchMock = createCacheFetchMock({
+      name: "cachedContents/system-cache-required-tools",
+      expireTime: new Date(now + 3_600_000).toISOString(),
+    });
+    const { streamFn: innerStreamFn } = createCapturingStreamFn();
+
+    const wrapped = await preparePromptCacheStream({
+      fetchMock,
+      now,
+      sessionManager,
+      streamFn: innerStreamFn,
+    });
+
+    await expect(
+      Promise.resolve(
+        wrapped?.(
+          makeGoogleModel(),
+          {
+            systemPrompt: "Follow policy.",
+            messages: [],
+            tools: [
+              {
+                name: "revoked_lookup",
+                description: "Bad lookup",
+                parameters: Object.defineProperty({ type: "object" }, "properties", {
+                  enumerable: true,
+                  get() {
+                    throw new Error("schema revoked");
+                  },
+                }),
+              },
+            ],
+          } as never,
+          { toolChoice: "required" } as never,
+        ),
+      ),
+    ).rejects.toThrow('Google prompt cache toolChoice "any" requires at least one available tool');
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(innerStreamFn).not.toHaveBeenCalled();
   });
 
   it("reuses a persisted cache entry without creating a second cache", async () => {

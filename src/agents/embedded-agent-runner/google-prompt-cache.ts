@@ -26,9 +26,21 @@ const GOOGLE_PROMPT_CACHE_CUSTOM_TYPE = "openclaw.google-prompt-cache";
 const GOOGLE_PROMPT_CACHE_RETRY_BACKOFF_MS = 10 * 60_000;
 const GOOGLE_PROMPT_CACHE_SHORT_REFRESH_WINDOW_MS = 30_000;
 const GOOGLE_PROMPT_CACHE_LONG_REFRESH_WINDOW_MS = 5 * 60_000;
+const GOOGLE_PROMPT_CACHE_TOOL_SCHEMA_MAX_DEPTH = 24;
+const GOOGLE_PROMPT_CACHE_TOOL_SCHEMA_MAX_NODES = 1_000;
+const GOOGLE_PROMPT_CACHE_TOOL_SCHEMA_INVALID = Symbol("google-prompt-cache-tool-schema-invalid");
 
 type CacheRetention = "short" | "long";
 type CustomEntryLike = { type?: unknown; customType?: unknown; data?: unknown };
+type GooglePromptCacheToolSchemaCloneState = {
+  seen: WeakSet<object>;
+  nodes: number;
+};
+type GooglePromptCacheToolSnapshot = {
+  name: string;
+  description: string;
+  parametersJsonSchema: Record<string, unknown>;
+};
 
 type GooglePromptCacheSessionManager = {
   appendCustomEntry(customType: string, data?: unknown): void | Promise<void>;
@@ -196,23 +208,148 @@ function parseExpireTimeMs(expireTime: string | undefined): number | null {
   return asDateTimestampMs(Date.parse(expireTime)) ?? null;
 }
 
-function convertManagedGoogleTools(tools: NonNullable<GooglePromptCacheContext["tools"]>) {
-  if (tools.length === 0) {
-    return undefined;
+function snapshotManagedGoogleTools(
+  tools: NonNullable<GooglePromptCacheContext["tools"]>,
+): GooglePromptCacheToolSnapshot[] {
+  const snapshots: GooglePromptCacheToolSnapshot[] = [];
+  for (const tool of tools) {
+    let name: unknown;
+    let description: unknown;
+    let parameters: unknown;
+    try {
+      name = tool.name;
+      description = tool.description;
+      parameters = tool.parameters;
+    } catch {
+      continue;
+    }
+    if (typeof name !== "string" || name.length === 0 || typeof description !== "string") {
+      continue;
+    }
+    const parametersJsonSchema = cloneGooglePromptCacheToolSchema(parameters);
+    if (!parametersJsonSchema) {
+      continue;
+    }
+    snapshots.push({
+      name,
+      description,
+      parametersJsonSchema,
+    });
   }
-  return [
+  return snapshots;
+}
+
+function cloneGooglePromptCacheToolSchema(schema: unknown): Record<string, unknown> | undefined {
+  const cloned = cloneGooglePromptCacheToolSchemaValue(
+    schema,
     {
-      functionDeclarations: tools.map((tool) => ({
-        name: tool.name,
-        description: tool.description,
-        parametersJsonSchema: tool.parameters,
-      })),
+      seen: new WeakSet(),
+      nodes: 0,
     },
-  ];
+    0,
+  );
+  return isGooglePromptCacheToolSchemaRecord(cloned) ? cloned : undefined;
+}
+
+function cloneGooglePromptCacheToolSchemaValue(
+  value: unknown,
+  state: GooglePromptCacheToolSchemaCloneState,
+  depth: number,
+): unknown {
+  try {
+    return cloneGooglePromptCacheToolSchemaValueUnsafe(value, state, depth);
+  } catch {
+    return GOOGLE_PROMPT_CACHE_TOOL_SCHEMA_INVALID;
+  }
+}
+
+function cloneGooglePromptCacheToolSchemaValueUnsafe(
+  value: unknown,
+  state: GooglePromptCacheToolSchemaCloneState,
+  depth: number,
+): unknown {
+  if (value === null || typeof value === "string" || typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : GOOGLE_PROMPT_CACHE_TOOL_SCHEMA_INVALID;
+  }
+  if (typeof value !== "object") {
+    return GOOGLE_PROMPT_CACHE_TOOL_SCHEMA_INVALID;
+  }
+  if (
+    depth >= GOOGLE_PROMPT_CACHE_TOOL_SCHEMA_MAX_DEPTH ||
+    state.nodes >= GOOGLE_PROMPT_CACHE_TOOL_SCHEMA_MAX_NODES
+  ) {
+    return GOOGLE_PROMPT_CACHE_TOOL_SCHEMA_INVALID;
+  }
+  if (state.seen.has(value)) {
+    return GOOGLE_PROMPT_CACHE_TOOL_SCHEMA_INVALID;
+  }
+  state.seen.add(value);
+  try {
+    state.nodes += 1;
+    if (state.nodes > GOOGLE_PROMPT_CACHE_TOOL_SCHEMA_MAX_NODES) {
+      return GOOGLE_PROMPT_CACHE_TOOL_SCHEMA_INVALID;
+    }
+    if (Array.isArray(value)) {
+      const result: unknown[] = [];
+      for (const entry of value) {
+        const clonedEntry = cloneGooglePromptCacheToolSchemaValueUnsafe(entry, state, depth + 1);
+        if (clonedEntry === GOOGLE_PROMPT_CACHE_TOOL_SCHEMA_INVALID) {
+          return GOOGLE_PROMPT_CACHE_TOOL_SCHEMA_INVALID;
+        }
+        result.push(clonedEntry);
+      }
+      return result;
+    }
+    if (!isGooglePromptCacheToolSchemaRecord(value)) {
+      return GOOGLE_PROMPT_CACHE_TOOL_SCHEMA_INVALID;
+    }
+    const result: Record<string, unknown> = {};
+    let entries: Array<[string, unknown]>;
+    try {
+      entries = Object.entries(value);
+    } catch {
+      return GOOGLE_PROMPT_CACHE_TOOL_SCHEMA_INVALID;
+    }
+    for (const [key, entry] of entries) {
+      const clonedEntry = cloneGooglePromptCacheToolSchemaValueUnsafe(entry, state, depth + 1);
+      if (clonedEntry === GOOGLE_PROMPT_CACHE_TOOL_SCHEMA_INVALID) {
+        return GOOGLE_PROMPT_CACHE_TOOL_SCHEMA_INVALID;
+      }
+      if (key === "__proto__") {
+        Object.defineProperty(result, key, {
+          value: clonedEntry,
+          enumerable: true,
+          configurable: true,
+          writable: true,
+        });
+        continue;
+      }
+      result[key] = clonedEntry;
+    }
+    return result;
+  } finally {
+    state.seen.delete(value);
+  }
+}
+
+function isGooglePromptCacheToolSchemaRecord(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  try {
+    const prototype = Object.getPrototypeOf(value);
+    return prototype === Object.prototype || prototype === null;
+  } catch {
+    return false;
+  }
 }
 
 function mapManagedGoogleToolChoice(
   choice: unknown,
+  tools: readonly GooglePromptCacheToolSnapshot[],
 ): { mode: "AUTO" | "NONE" | "ANY"; allowedFunctionNames?: string[] } | undefined {
   if (!choice) {
     return undefined;
@@ -223,18 +360,34 @@ function mapManagedGoogleToolChoice(
     (choice as { type?: unknown }).type === "function"
   ) {
     const functionName = (choice as { function?: { name?: unknown } }).function?.name;
-    return typeof functionName === "string"
-      ? { mode: "ANY", allowedFunctionNames: [functionName] }
-      : { mode: "ANY" };
+    if (typeof functionName === "string") {
+      if (!tools.some((tool) => tool.name === functionName)) {
+        throw new Error(
+          `Google prompt cache forced toolChoice "${functionName}" is unavailable after tool schema filtering`,
+        );
+      }
+      return { mode: "ANY", allowedFunctionNames: [functionName] };
+    }
+    if (tools.length === 0) {
+      throw new Error(
+        "Google prompt cache function toolChoice requires at least one available tool",
+      );
+    }
+    return { mode: "ANY" };
   }
   switch (choice) {
     case "none":
       return { mode: "NONE" };
     case "any":
     case "required":
+      if (tools.length === 0) {
+        throw new Error(
+          'Google prompt cache toolChoice "any" requires at least one available tool',
+        );
+      }
       return { mode: "ANY" };
     default:
-      return { mode: "AUTO" };
+      return tools.length > 0 ? { mode: "AUTO" } : undefined;
   }
 }
 
@@ -242,10 +395,19 @@ function buildManagedGooglePromptCacheConfig(
   context: GooglePromptCacheContext,
   options: GooglePromptCacheOptions,
 ) {
-  const tools = context.tools?.length ? convertManagedGoogleTools(context.tools) : undefined;
-  const toolChoice = tools
-    ? mapManagedGoogleToolChoice((options as { toolChoice?: unknown } | undefined)?.toolChoice)
-    : undefined;
+  const toolDeclarations = context.tools?.length ? snapshotManagedGoogleTools(context.tools) : [];
+  const tools =
+    toolDeclarations.length > 0
+      ? [
+          {
+            functionDeclarations: toolDeclarations,
+          },
+        ]
+      : undefined;
+  const toolChoice = mapManagedGoogleToolChoice(
+    (options as { toolChoice?: unknown } | undefined)?.toolChoice,
+    toolDeclarations,
+  );
   const toolConfig = toolChoice ? { functionCallingConfig: toolChoice } : undefined;
   const cacheConfigDigest =
     tools || toolConfig
