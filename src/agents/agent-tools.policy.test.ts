@@ -55,6 +55,20 @@ describe("agent-tools.policy", () => {
   it("keeps apply_patch when write is denylisted", () => {
     expect(isToolAllowedByPolicyName("apply_patch", { deny: ["write"] })).toBe(true);
   });
+
+  it("skips unreadable tool names during configured policy filtering", () => {
+    const unreadable = Object.defineProperty({}, "name", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin name getter exploded");
+      },
+    }) as ReturnType<typeof createStubTool>;
+    const tools = [unreadable, createStubTool("read"), createStubTool("exec")];
+
+    expect(filterToolsByPolicy(tools, { allow: ["read"] }).map((tool) => tool.name)).toEqual([
+      "read",
+    ]);
+  });
 });
 
 describe("resolveGroupToolPolicy group context validation", () => {

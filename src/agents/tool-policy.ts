@@ -63,12 +63,22 @@ export function replaceWithEffectiveToolAllowlist(
   target.length = 0;
   const seen = new Set<string>();
   for (const tool of tools) {
-    const normalized = normalizeToolName(tool.name);
+    const normalized = readNormalizedToolName(tool);
     if (!normalized || seen.has(normalized)) {
       continue;
     }
     seen.add(normalized);
     target.push(normalized);
+  }
+}
+
+/** Reads a runtime tool name for policy matching without trusting plugin descriptors. */
+export function readNormalizedToolName(tool: { name: string }): string | undefined {
+  try {
+    const normalized = normalizeToolName(tool.name);
+    return normalized || undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -128,11 +138,19 @@ export function buildPluginToolGroups<T extends { name: string }>(params: {
   const all: string[] = [];
   const byPlugin = new Map<string, string[]>();
   for (const tool of params.tools) {
-    const meta = params.toolMeta(tool);
+    let meta: { pluginId: string } | undefined;
+    try {
+      meta = params.toolMeta(tool);
+    } catch {
+      continue;
+    }
     if (!meta) {
       continue;
     }
-    const name = normalizeToolName(tool.name);
+    const name = readNormalizedToolName(tool);
+    if (!name) {
+      continue;
+    }
     all.push(name);
     const pluginId = normalizeOptionalLowercaseString(meta.pluginId);
     if (!pluginId) {

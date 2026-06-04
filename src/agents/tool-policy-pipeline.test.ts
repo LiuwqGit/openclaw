@@ -295,6 +295,33 @@ describe("tool-policy-pipeline", () => {
     expect(filtered.map((t) => (t as unknown as DummyTool).name)).toEqual(["exec"]);
   });
 
+  test("fails closed when plugin metadata lookup throws during policy filtering", () => {
+    const tools = [
+      { name: "plugin_tool" },
+      { name: "healthy_plugin" },
+      { name: "read" },
+    ] as unknown as DummyTool[];
+    const filtered = applyToolPolicyPipeline({
+      tools: tools as any,
+      toolMeta: (tool: any) => {
+        if (tool.name === "plugin_tool") {
+          throw new Error("fuzzplugin metadata lookup exploded");
+        }
+        return tool.name === "healthy_plugin" ? { pluginId: "healthy" } : undefined;
+      },
+      warn: () => {},
+      steps: [
+        {
+          policy: { deny: ["group:plugins"] },
+          label: "tools.deny",
+          stripPluginOnlyAllowlist: true,
+        },
+      ],
+    });
+
+    expect(filtered.map((t) => (t as unknown as DummyTool).name)).toEqual(["read"]);
+  });
+
   test("audits the policy rule that removes tools", () => {
     const tools = [
       { name: "exec" },

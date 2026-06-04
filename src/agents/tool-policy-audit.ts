@@ -6,7 +6,12 @@
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { SandboxConfig } from "./sandbox/types.js";
 import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
-import { normalizeToolList, normalizeToolName, type ToolPolicyLike } from "./tool-policy.js";
+import {
+  normalizeToolList,
+  normalizeToolName,
+  readNormalizedToolName,
+  type ToolPolicyLike,
+} from "./tool-policy.js";
 
 // Emits bounded audit logs when tool allow/deny policies remove or block tools.
 // Sanitizing here keeps logs single-line and safe for arbitrary tool names.
@@ -35,7 +40,7 @@ function toolPolicyRuleKind(policy: ToolPolicyLike): ToolPolicyRuleKind {
 }
 
 function normalizedToolNames(tools: readonly { name: string }[]): string[] {
-  return normalizeToolList(tools.map((tool) => tool.name));
+  return normalizeToolList(tools.flatMap((tool) => readNormalizedToolName(tool) ?? []));
 }
 
 function removedToolNamesByRule(params: {

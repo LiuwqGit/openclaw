@@ -9,10 +9,12 @@ import { isToolAllowed, resolveSandboxToolPolicyForAgent } from "./sandbox/tool-
 import type { SandboxToolPolicy } from "./sandbox/types.js";
 import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
 import {
+  buildPluginToolGroups,
   collectExplicitAllowlist,
   DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
   expandToolGroups,
   normalizeToolName,
+  replaceWithEffectiveToolAllowlist,
   resolveToolProfilePolicy,
   TOOL_GROUPS,
 } from "./tool-policy.js";
@@ -78,6 +80,46 @@ describe("tool-policy", () => {
     expect(collectExplicitAllowlist([pickSandboxToolPolicy({ alsoAllow: [" * "] })])).toEqual([
       "*",
     ]);
+  });
+
+  it("skips unreadable names when replacing effective inherited allowlists", () => {
+    const target = ["stale"];
+    const unreadable = Object.defineProperty({}, "name", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin name getter exploded");
+      },
+    }) as { name: string };
+
+    replaceWithEffectiveToolAllowlist(target, [
+      { name: " READ " },
+      unreadable,
+      { name: "read" },
+      { name: "plugin_lookup" },
+    ]);
+
+    expect(target).toEqual(["read", "plugin_lookup"]);
+  });
+
+  it("skips unreadable plugin tools while building plugin groups", () => {
+    const unreadable = Object.defineProperty({}, "name", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin name getter exploded");
+      },
+    }) as { name: string };
+    const groups = buildPluginToolGroups({
+      tools: [unreadable, { name: "memory_search" }, { name: "browser" }],
+      toolMeta: (tool) => {
+        if (tool.name === "browser") {
+          throw new Error("fuzzplugin metadata lookup exploded");
+        }
+        return { pluginId: "memory" };
+      },
+    });
+
+    expect(groups.all).toEqual(["memory_search"]);
+    expect(groups.byPlugin.get("memory")).toEqual(["memory_search"]);
   });
 });
 

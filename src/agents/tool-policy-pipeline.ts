@@ -12,6 +12,7 @@ import {
   buildPluginToolGroups,
   expandPolicyWithPluginGroups,
   normalizeToolName,
+  readNormalizedToolName,
   type ToolPolicyLike,
 } from "./tool-policy.js";
 
@@ -130,19 +131,37 @@ export function applyToolPolicyPipeline(params: {
   steps: ToolPolicyPipelineStep[];
   auditLogLevel?: ToolPolicyAuditLogLevel;
 }): AnyAgentTool[] {
-  const coreToolNames = new Set(
-    params.tools
-      .filter((tool) => !params.toolMeta(tool))
-      .map((tool) => normalizeToolName(tool.name))
-      .filter(Boolean),
-  );
+  const toolsWithReadableMetadata: AnyAgentTool[] = [];
+  const metadataByTool = new WeakMap<AnyAgentTool, { pluginId: string } | undefined>();
+  for (const tool of params.tools) {
+    try {
+      const meta = params.toolMeta(tool);
+      metadataByTool.set(tool, meta);
+      toolsWithReadableMetadata.push(tool);
+    } catch {
+      // Ownership metadata is part of policy enforcement. If it cannot be read,
+      // fail closed for this tool instead of letting plugin-id deny rules miss it.
+    }
+  }
+
+  const coreToolNames = new Set<string>();
+  for (const tool of toolsWithReadableMetadata) {
+    const meta = metadataByTool.get(tool);
+    if (meta) {
+      continue;
+    }
+    const name = readNormalizedToolName(tool);
+    if (name) {
+      coreToolNames.add(name);
+    }
+  }
 
   const pluginGroups = buildPluginToolGroups({
-    tools: params.tools,
-    toolMeta: params.toolMeta,
+    tools: toolsWithReadableMetadata,
+    toolMeta: (tool) => metadataByTool.get(tool),
   });
 
-  let filtered = params.tools;
+  let filtered = toolsWithReadableMetadata;
   for (const step of params.steps) {
     if (!step.policy) {
       continue;
