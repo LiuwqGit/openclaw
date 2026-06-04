@@ -361,6 +361,7 @@ export async function tryDispatchAcpReply(params: {
   dispatcher: ReplyDispatcher;
   runId?: string;
   sessionKey?: string;
+  toolsAllow?: string[];
   images?: Array<{ data: string; mimeType: string }>;
   abortSignal?: AbortSignal;
   inboundAudio: boolean;
@@ -583,6 +584,7 @@ export async function tryDispatchAcpReply(params: {
         promptText: turnPromptText,
         sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
       }),
+      toolsAllow: params.toolsAllow,
       attachments: attachments.length > 0 ? attachments : undefined,
       mode: "prompt",
       requestId: resolveAcpRequestId(params.ctx),
