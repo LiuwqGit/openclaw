@@ -94,6 +94,7 @@ export type MatrixQaConfigOverrides = {
   execApprovals?: MatrixQaExecApprovalsConfigOverrides;
   groupAllowFrom?: string[];
   groupAllowRoles?: MatrixQaActorRole[];
+  groupMentionPatterns?: string[];
   groupPolicy?: MatrixQaGroupPolicy;
   configuredBotRoles?: MatrixQaActorRole[];
   groupsByKey?: Record<string, MatrixQaGroupConfigOverrides>;
@@ -128,6 +129,7 @@ export type MatrixQaConfigSnapshot = {
   execApprovals?: MatrixQaExecApprovalsConfigOverrides;
   configuredBotRoles: MatrixQaActorRole[];
   groupAllowFrom: string[];
+  groupMentionPatterns: string[];
   groupPolicy: MatrixQaGroupPolicy;
   groupsByKey: Record<string, MatrixQaGroupSnapshot>;
   replyToMode: MatrixQaReplyToMode;
@@ -511,6 +513,7 @@ export function buildMatrixQaConfigSnapshot(params: {
     execApprovals: params.overrides?.execApprovals,
     configuredBotRoles: [...(params.overrides?.configuredBotRoles ?? [])],
     groupAllowFrom: resolveMatrixQaGroupAllowFrom(params),
+    groupMentionPatterns: normalizeMatrixQaAllowlist(params.overrides?.groupMentionPatterns),
     groupPolicy: params.overrides?.groupPolicy ?? "allowlist",
     groupsByKey: resolveMatrixQaGroupSnapshots({
       overrides: params.overrides,
@@ -543,6 +546,7 @@ export function summarizeMatrixQaConfigSnapshot(snapshot: MatrixQaConfigSnapshot
     `dm.policy=${snapshot.dm.policy}`,
     `dm.sessionScope=${snapshot.dm.sessionScope}`,
     `dm.threadReplies=${snapshot.dm.threadReplies}`,
+    `groupMentionPatterns=${snapshot.groupMentionPatterns.length > 0 ? snapshot.groupMentionPatterns.join("|") : "<default>"}`,
     `streaming=${snapshot.streaming}`,
     `streaming.preview.toolProgress=${formatMatrixQaBoolean(snapshot.streamingPreviewToolProgress)}`,
     `textChunkLimit=${snapshot.textChunkLimit ?? "<default>"}`,
@@ -674,6 +678,9 @@ export function buildMatrixQaConfig(
       ...baseCfg.messages,
       groupChat: {
         ...baseCfg.messages?.groupChat,
+        ...(snapshot.groupMentionPatterns.length > 0
+          ? { mentionPatterns: snapshot.groupMentionPatterns }
+          : {}),
         visibleReplies: "automatic",
       },
     },

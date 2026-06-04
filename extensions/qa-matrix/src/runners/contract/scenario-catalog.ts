@@ -503,6 +503,7 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
       audio: {
         enabled: true,
       },
+      groupMentionPatterns: ["\\S"],
     },
     providerMode: "live-frontier",
     timeoutMs: 180_000,
