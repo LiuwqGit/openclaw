@@ -89,6 +89,35 @@ function requireFirstAudio(mock: ReturnType<typeof vi.fn>): unknown {
   return requireFirstMockArg(mock, "Google Live audio");
 }
 
+function createUnreadableToolSchema(): Record<string, unknown> {
+  const schema: Record<string, unknown> = {
+    type: "object",
+    additionalProperties: false,
+  };
+  Object.defineProperty(schema, "properties", {
+    enumerable: true,
+    get() {
+      throw new Error("tool schema getter exploded");
+    },
+  });
+  return schema;
+}
+
+function createToolSchemaWithProtoProperty(): Record<string, unknown> {
+  const properties: Record<string, unknown> = {};
+  Object.defineProperty(properties, "__proto__", {
+    value: { type: "string" },
+    enumerable: true,
+    configurable: true,
+    writable: true,
+  });
+  return {
+    type: "object",
+    properties,
+    additionalProperties: false,
+  };
+}
+
 describe("buildGoogleRealtimeVoiceProvider", () => {
   beforeEach(() => {
     envSnapshot = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
@@ -299,6 +328,66 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
       required: ["question"],
     });
     expect(declarations[1]?.behavior).toBe("NON_BLOCKING");
+  });
+
+  it("skips unreadable realtime tool schemas while preserving healthy declarations", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      tools: [
+        {
+          type: "function",
+          name: "broken_lookup",
+          description: "Broken",
+          parameters: createUnreadableToolSchema() as never,
+        },
+        {
+          type: "function",
+          name: "safe_lookup",
+          description: "Safe",
+          parameters: createToolSchemaWithProtoProperty() as never,
+        },
+      ],
+    });
+
+    await bridge.connect();
+
+    const config = lastConnectParams().config as {
+      tools?: Array<{
+        functionDeclarations?: Array<{
+          name?: string;
+          parametersJsonSchema?: { properties?: Record<string, unknown> };
+        }>;
+      }>;
+    };
+    expect(() => JSON.stringify(config)).not.toThrow();
+    const declarations = config.tools?.[0]?.functionDeclarations ?? [];
+    expect(declarations.map((tool) => tool.name)).toEqual(["safe_lookup"]);
+    const properties = declarations[0]?.parametersJsonSchema?.properties;
+    expect(Object.hasOwn(properties as Record<string, unknown>, "__proto__")).toBe(true);
+  });
+
+  it("omits realtime tools when every schema is unreadable", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      tools: [
+        {
+          type: "function",
+          name: "broken_lookup",
+          description: "Broken",
+          parameters: createUnreadableToolSchema() as never,
+        },
+      ],
+    });
+
+    await bridge.connect();
+
+    expect(lastConnectParams().config).not.toHaveProperty("tools");
   });
 
   it("omits zero temperature for native audio responses", async () => {

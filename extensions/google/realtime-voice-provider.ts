@@ -63,6 +63,9 @@ const GOOGLE_REALTIME_RECONNECT_MAX_ATTEMPTS = 3;
 const GOOGLE_REALTIME_RECONNECT_BASE_DELAY_MS = 250;
 const GOOGLE_REALTIME_RECONNECT_MAX_DELAY_MS = 2_000;
 const MULAW_LINEAR_SAMPLES = new Int16Array(256);
+const GOOGLE_REALTIME_TOOL_SCHEMA_MAX_DEPTH = 24;
+const GOOGLE_REALTIME_TOOL_SCHEMA_MAX_NODES = 1_000;
+const GOOGLE_REALTIME_TOOL_SCHEMA_INVALID = Symbol("google-realtime-tool-schema-invalid");
 
 for (let i = 0; i < MULAW_LINEAR_SAMPLES.length; i += 1) {
   MULAW_LINEAR_SAMPLES[i] = decodeMulawSample(i);
@@ -113,6 +116,17 @@ type GoogleRealtimeLiveConfig = {
   contextWindowCompression?: boolean;
   thinkingLevel?: GoogleRealtimeThinkingLevel;
   thinkingBudget?: number;
+};
+
+type GoogleRealtimeToolSnapshot = {
+  name: string;
+  description: string;
+  parametersJsonSchema: Record<string, unknown>;
+};
+
+type GoogleRealtimeToolSchemaCloneState = {
+  seen: WeakSet<object>;
+  nodes: number;
 };
 
 type GoogleRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest & GoogleRealtimeLiveConfig;
@@ -337,12 +351,14 @@ function buildRealtimeInputConfig(
   return Object.keys(realtimeInputConfig).length > 0 ? realtimeInputConfig : undefined;
 }
 
-function buildFunctionDeclarations(tools: RealtimeVoiceTool[] | undefined): FunctionDeclaration[] {
-  return (tools ?? []).map((tool) => {
+function buildFunctionDeclarations(
+  tools: readonly GoogleRealtimeToolSnapshot[],
+): FunctionDeclaration[] {
+  return tools.map((tool) => {
     const declaration: FunctionDeclaration = {
       name: tool.name,
       description: tool.description,
-      parametersJsonSchema: tool.parameters,
+      parametersJsonSchema: tool.parametersJsonSchema,
     };
     if (tool.name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
       declaration.behavior = "NON_BLOCKING" as Behavior;
@@ -351,8 +367,143 @@ function buildFunctionDeclarations(tools: RealtimeVoiceTool[] | undefined): Func
   });
 }
 
+function snapshotGoogleRealtimeTools(
+  tools: RealtimeVoiceTool[] | undefined,
+): GoogleRealtimeToolSnapshot[] {
+  const snapshots: GoogleRealtimeToolSnapshot[] = [];
+  for (const tool of tools ?? []) {
+    let name: unknown;
+    let description: unknown;
+    let parameters: unknown;
+    try {
+      name = tool.name;
+      description = tool.description;
+      parameters = tool.parameters;
+    } catch {
+      continue;
+    }
+    if (typeof name !== "string" || name.length === 0 || typeof description !== "string") {
+      continue;
+    }
+    const parametersJsonSchema = cloneGoogleRealtimeToolSchema(parameters);
+    if (!parametersJsonSchema) {
+      continue;
+    }
+    snapshots.push({ name, description, parametersJsonSchema });
+  }
+  return snapshots;
+}
+
+function cloneGoogleRealtimeToolSchema(schema: unknown): Record<string, unknown> | undefined {
+  const cloned = cloneGoogleRealtimeToolSchemaValue(
+    schema,
+    {
+      seen: new WeakSet(),
+      nodes: 0,
+    },
+    0,
+  );
+  return isGoogleRealtimeToolSchemaRecord(cloned) ? cloned : undefined;
+}
+
+function cloneGoogleRealtimeToolSchemaValue(
+  value: unknown,
+  state: GoogleRealtimeToolSchemaCloneState,
+  depth: number,
+): unknown {
+  try {
+    return cloneGoogleRealtimeToolSchemaValueUnsafe(value, state, depth);
+  } catch {
+    return GOOGLE_REALTIME_TOOL_SCHEMA_INVALID;
+  }
+}
+
+function cloneGoogleRealtimeToolSchemaValueUnsafe(
+  value: unknown,
+  state: GoogleRealtimeToolSchemaCloneState,
+  depth: number,
+): unknown {
+  if (value === null || typeof value === "string" || typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : GOOGLE_REALTIME_TOOL_SCHEMA_INVALID;
+  }
+  if (typeof value !== "object") {
+    return GOOGLE_REALTIME_TOOL_SCHEMA_INVALID;
+  }
+  if (
+    depth >= GOOGLE_REALTIME_TOOL_SCHEMA_MAX_DEPTH ||
+    state.nodes >= GOOGLE_REALTIME_TOOL_SCHEMA_MAX_NODES
+  ) {
+    return GOOGLE_REALTIME_TOOL_SCHEMA_INVALID;
+  }
+  if (state.seen.has(value)) {
+    return GOOGLE_REALTIME_TOOL_SCHEMA_INVALID;
+  }
+  state.seen.add(value);
+  try {
+    state.nodes += 1;
+    if (state.nodes > GOOGLE_REALTIME_TOOL_SCHEMA_MAX_NODES) {
+      return GOOGLE_REALTIME_TOOL_SCHEMA_INVALID;
+    }
+    if (Array.isArray(value)) {
+      const result: unknown[] = [];
+      for (const entry of value) {
+        const clonedEntry = cloneGoogleRealtimeToolSchemaValueUnsafe(entry, state, depth + 1);
+        if (clonedEntry === GOOGLE_REALTIME_TOOL_SCHEMA_INVALID) {
+          return GOOGLE_REALTIME_TOOL_SCHEMA_INVALID;
+        }
+        result.push(clonedEntry);
+      }
+      return result;
+    }
+    if (!isGoogleRealtimeToolSchemaRecord(value)) {
+      return GOOGLE_REALTIME_TOOL_SCHEMA_INVALID;
+    }
+    const result: Record<string, unknown> = {};
+    let entries: Array<[string, unknown]>;
+    try {
+      entries = Object.entries(value);
+    } catch {
+      return GOOGLE_REALTIME_TOOL_SCHEMA_INVALID;
+    }
+    for (const [key, entry] of entries) {
+      const clonedEntry = cloneGoogleRealtimeToolSchemaValueUnsafe(entry, state, depth + 1);
+      if (clonedEntry === GOOGLE_REALTIME_TOOL_SCHEMA_INVALID) {
+        return GOOGLE_REALTIME_TOOL_SCHEMA_INVALID;
+      }
+      if (key === "__proto__") {
+        Object.defineProperty(result, key, {
+          value: clonedEntry,
+          enumerable: true,
+          configurable: true,
+          writable: true,
+        });
+        continue;
+      }
+      result[key] = clonedEntry;
+    }
+    return result;
+  } finally {
+    state.seen.delete(value);
+  }
+}
+
+function isGoogleRealtimeToolSchemaRecord(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  try {
+    const prototype = Object.getPrototypeOf(value);
+    return prototype === Object.prototype || prototype === null;
+  } catch {
+    return false;
+  }
+}
+
 function buildGoogleLiveConnectConfig(config: GoogleRealtimeLiveConfig): LiveConnectConfig {
-  const functionDeclarations = buildFunctionDeclarations(config.tools);
+  const functionDeclarations = buildFunctionDeclarations(snapshotGoogleRealtimeTools(config.tools));
   const realtimeInputConfig = buildRealtimeInputConfig(config);
   const thinkingConfig = buildThinkingConfig(config);
   return {
