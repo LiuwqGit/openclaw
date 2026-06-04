@@ -9,6 +9,7 @@ import type {
 } from "../../llm-core/src/index.js";
 import { runAgentLoop, runAgentLoopContinue } from "./agent-loop.js";
 import { type AgentCoreStreamRuntimeDeps, resolveAgentCoreStreamFn } from "./runtime-deps.js";
+import { snapshotAgentTools } from "./tool-snapshot.js";
 import type {
   AfterToolCallContext,
   AfterToolCallResult,
@@ -57,6 +58,10 @@ const DEFAULT_MODEL = {
   maxTokens: 0,
 } satisfies Model;
 
+function snapshotAgentStateTools(tools: AgentTool[] | undefined): AgentTool[] {
+  return snapshotAgentTools(tools, { logContext: "agent state" });
+}
+
 type MutableAgentState = Omit<
   AgentState,
   "isStreaming" | "streamingMessage" | "pendingToolCalls" | "errorMessage"
@@ -72,7 +77,7 @@ function createMutableAgentState(
     Omit<AgentState, "pendingToolCalls" | "isStreaming" | "streamingMessage" | "errorMessage">
   >,
 ): MutableAgentState {
-  let tools = initialState?.tools?.slice() ?? [];
+  let tools = snapshotAgentStateTools(initialState?.tools);
   let messages = initialState?.messages?.slice() ?? [];
 
   return {
@@ -83,7 +88,7 @@ function createMutableAgentState(
       return tools;
     },
     set tools(nextTools: AgentTool[]) {
-      tools = nextTools.slice();
+      tools = snapshotAgentStateTools(nextTools);
     },
     get messages() {
       return messages;
@@ -461,7 +466,7 @@ export class Agent {
     return {
       systemPrompt: this.mutableState.systemPrompt,
       messages: this.mutableState.messages.slice(),
-      tools: this.mutableState.tools.slice(),
+      tools: snapshotAgentStateTools(this.mutableState.tools),
     };
   }
 
@@ -481,7 +486,19 @@ export class Agent {
       beforeToolCall: this.beforeToolCall,
       afterToolCall: this.afterToolCall,
       prepareNextTurn: this.prepareNextTurn
-        ? async () => await this.prepareNextTurn?.(this.signal)
+        ? async () => {
+            const update = await this.prepareNextTurn?.(this.signal);
+            if (update?.context?.tools) {
+              return {
+                ...update,
+                context: {
+                  ...update.context,
+                  tools: snapshotAgentStateTools(update.context.tools),
+                },
+              };
+            }
+            return update;
+          }
         : undefined,
       convertToLlm: this.convertToLlm,
       transformContext: this.transformContext,
