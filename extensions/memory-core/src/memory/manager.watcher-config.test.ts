@@ -139,6 +139,8 @@ vi.mock("./sqlite-vec.js", () => ({
 
 vi.mock("./embeddings.js", () => ({
   resolveEmbeddingProviderAdapterId: (providerId: string) => providerId,
+  resolveEmbeddingProviderAdapterTransport: (providerId: string) =>
+    providerId === "local" ? "local" : "remote",
   createEmbeddingProvider: async () => ({
     requestedProvider: "openai",
     provider: {
