@@ -115,3 +115,136 @@ describe("Bedrock thinking effort mapping", () => {
     ).toBe("max");
   });
 });
+
+describe("Bedrock tool config snapshots", () => {
+  it("clones tool schemas before building AWS payloads", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        query: { type: "string" },
+      },
+      required: ["query"],
+    };
+    const toolConfig = testing.convertToolConfig(
+      [
+        {
+          name: "search",
+          description: "Search docs",
+          parameters: schema,
+        },
+      ],
+      "auto",
+    );
+
+    schema.properties.query.type = "number";
+    schema.required.push("limit");
+
+    const inputSchema = toolConfig?.tools?.[0]?.toolSpec?.inputSchema?.json;
+    expect(inputSchema).toEqual({
+      type: "object",
+      properties: {
+        query: { type: "string" },
+      },
+      required: ["query"],
+    });
+    expect(inputSchema).not.toBe(schema);
+    expect((inputSchema as { properties?: unknown }).properties).not.toBe(schema.properties);
+  });
+
+  it("skips tools with unreadable fields or cyclic schemas", () => {
+    const cyclicSchema: Record<string, unknown> = { type: "object", properties: {} };
+    cyclicSchema.properties = { self: cyclicSchema };
+    const unreadableTool = Object.defineProperty({}, "name", {
+      enumerable: true,
+      get() {
+        throw new Error("bad tool");
+      },
+    });
+
+    const toolConfig = testing.convertToolConfig(
+      [
+        unreadableTool,
+        {
+          name: "loop",
+          description: "Loop",
+          parameters: cyclicSchema,
+        },
+        {
+          name: "lookup",
+          description: "Lookup",
+          parameters: {
+            type: "object",
+            properties: {
+              id: { type: "string" },
+            },
+          },
+        },
+      ] as never,
+      "any",
+    );
+
+    expect(toolConfig).toEqual({
+      tools: [
+        {
+          toolSpec: {
+            name: "lookup",
+            description: "Lookup",
+            inputSchema: {
+              json: {
+                type: "object",
+                properties: {
+                  id: { type: "string" },
+                },
+              },
+            },
+          },
+        },
+      ],
+      toolChoice: { any: {} },
+    });
+  });
+
+  it("fails closed when a forced tool choice is skipped", () => {
+    const cyclicSchema: Record<string, unknown> = { type: "object" };
+    cyclicSchema.self = cyclicSchema;
+
+    expect(() =>
+      testing.convertToolConfig(
+        [
+          {
+            name: "loop",
+            description: "Loop",
+            parameters: cyclicSchema,
+          },
+          {
+            name: "lookup",
+            description: "Lookup",
+            parameters: {
+              type: "object",
+              properties: {},
+            },
+          },
+        ] as never,
+        { type: "tool", name: "loop" },
+      ),
+    ).toThrow('Bedrock toolChoice requires unavailable tool "loop"');
+  });
+
+  it("fails closed when any-choice has no surviving tools", () => {
+    const cyclicSchema: Record<string, unknown> = { type: "object" };
+    cyclicSchema.self = cyclicSchema;
+
+    expect(() =>
+      testing.convertToolConfig(
+        [
+          {
+            name: "loop",
+            description: "Loop",
+            parameters: cyclicSchema,
+          },
+        ] as never,
+        "any",
+      ),
+    ).toThrow('Bedrock toolChoice "any" requires at least one available tool');
+  });
+});

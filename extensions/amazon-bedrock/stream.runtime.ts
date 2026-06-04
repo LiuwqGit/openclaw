@@ -55,6 +55,15 @@ import { supportsBedrockPromptCaching, type BedrockOptions } from "./bedrock-opt
 
 type Block = (TextContent | ThinkingContent | ToolCall) & { index?: number; partialJson?: string };
 
+const BEDROCK_TOOL_SCHEMA_MAX_DEPTH = 24;
+const BEDROCK_TOOL_SCHEMA_MAX_NODES = 1_000;
+const BEDROCK_TOOL_SCHEMA_INVALID = Symbol("bedrock-tool-schema-invalid");
+
+type BedrockToolSchemaCloneState = {
+  seen: WeakSet<object>;
+  nodes: number;
+};
+
 /** Stream a Bedrock Converse request using Bedrock-specific options. */
 export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> = (
   model: Model<"bedrock-converse-stream">,
@@ -772,13 +781,23 @@ function convertToolConfig(
     return undefined;
   }
 
-  const bedrockTools: BedrockTool[] = tools.map((tool) => ({
-    toolSpec: {
-      name: tool.name,
-      description: tool.description,
-      inputSchema: { json: tool.parameters as unknown as DocumentType },
-    },
-  }));
+  const forcedToolChoiceName = resolveBedrockForcedToolChoiceName(toolChoice);
+  const bedrockTools: BedrockTool[] = [];
+  for (const tool of tools) {
+    const snapshot = snapshotBedrockTool(tool);
+    if (snapshot) {
+      bedrockTools.push(snapshot);
+    }
+  }
+  if (bedrockTools.length === 0) {
+    if (forcedToolChoiceName) {
+      throw new Error(`Bedrock toolChoice requires unavailable tool "${forcedToolChoiceName}"`);
+    }
+    if (toolChoice === "any") {
+      throw new Error('Bedrock toolChoice "any" requires at least one available tool');
+    }
+    return undefined;
+  }
 
   let bedrockToolChoice: ToolChoice | undefined;
   switch (toolChoice) {
@@ -789,12 +808,156 @@ function convertToolConfig(
       bedrockToolChoice = { any: {} };
       break;
     default:
-      if (typeof toolChoice === "object" && toolChoice?.type === "tool") {
-        bedrockToolChoice = { tool: { name: toolChoice.name } };
+      if (forcedToolChoiceName) {
+        if (!bedrockTools.some((tool) => tool.toolSpec?.name === forcedToolChoiceName)) {
+          throw new Error(`Bedrock toolChoice requires unavailable tool "${forcedToolChoiceName}"`);
+        }
+        bedrockToolChoice = { tool: { name: forcedToolChoiceName } };
       }
   }
 
   return { tools: bedrockTools, toolChoice: bedrockToolChoice };
+}
+
+function resolveBedrockForcedToolChoiceName(
+  toolChoice: BedrockOptions["toolChoice"],
+): string | undefined {
+  try {
+    return typeof toolChoice === "object" &&
+      toolChoice?.type === "tool" &&
+      typeof toolChoice.name === "string" &&
+      toolChoice.name.length > 0
+      ? toolChoice.name
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function snapshotBedrockTool(tool: Tool): BedrockTool | undefined {
+  let name: unknown;
+  let description: unknown;
+  let parameters: unknown;
+  try {
+    name = tool.name;
+    description = tool.description;
+    parameters = tool.parameters;
+  } catch {
+    return undefined;
+  }
+  if (typeof name !== "string" || name.trim().length === 0) {
+    return undefined;
+  }
+  if (!isBedrockToolSchemaRecord(parameters)) {
+    return undefined;
+  }
+  const schema = cloneBedrockToolSchemaValue(
+    parameters,
+    {
+      seen: new WeakSet(),
+      nodes: 0,
+    },
+    0,
+  );
+  if (schema === BEDROCK_TOOL_SCHEMA_INVALID) {
+    return undefined;
+  }
+  return {
+    toolSpec: {
+      name,
+      description: typeof description === "string" ? description : "",
+      inputSchema: { json: schema as DocumentType },
+    },
+  };
+}
+
+function cloneBedrockToolSchemaValue(
+  value: unknown,
+  state: BedrockToolSchemaCloneState,
+  depth: number,
+): unknown {
+  if (value === null || typeof value === "string" || typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : BEDROCK_TOOL_SCHEMA_INVALID;
+  }
+  if (typeof value !== "object") {
+    return BEDROCK_TOOL_SCHEMA_INVALID;
+  }
+  if (depth > BEDROCK_TOOL_SCHEMA_MAX_DEPTH || state.nodes > BEDROCK_TOOL_SCHEMA_MAX_NODES) {
+    return BEDROCK_TOOL_SCHEMA_INVALID;
+  }
+  if (state.seen.has(value)) {
+    return BEDROCK_TOOL_SCHEMA_INVALID;
+  }
+  state.seen.add(value);
+  try {
+    state.nodes += 1;
+    if (state.nodes > BEDROCK_TOOL_SCHEMA_MAX_NODES) {
+      return BEDROCK_TOOL_SCHEMA_INVALID;
+    }
+    if (isBedrockToolSchemaArray(value)) {
+      const cloned: unknown[] = [];
+      for (const entry of value) {
+        const clonedEntry = cloneBedrockToolSchemaValue(entry, state, depth + 1);
+        if (clonedEntry === BEDROCK_TOOL_SCHEMA_INVALID) {
+          return BEDROCK_TOOL_SCHEMA_INVALID;
+        }
+        cloned.push(clonedEntry);
+      }
+      return cloned;
+    }
+    if (!isBedrockToolSchemaRecord(value)) {
+      return BEDROCK_TOOL_SCHEMA_INVALID;
+    }
+    const cloned: Record<string, unknown> = {};
+    let entries: Array<[string, unknown]>;
+    try {
+      entries = Object.entries(value);
+    } catch {
+      return BEDROCK_TOOL_SCHEMA_INVALID;
+    }
+    for (const [key, entryValue] of entries) {
+      const clonedValue = cloneBedrockToolSchemaValue(entryValue, state, depth + 1);
+      if (clonedValue === BEDROCK_TOOL_SCHEMA_INVALID) {
+        return BEDROCK_TOOL_SCHEMA_INVALID;
+      }
+      if (key === "__proto__") {
+        Object.defineProperty(cloned, key, {
+          value: clonedValue,
+          enumerable: true,
+          configurable: true,
+          writable: true,
+        });
+        continue;
+      }
+      cloned[key] = clonedValue;
+    }
+    return cloned;
+  } finally {
+    state.seen.delete(value);
+  }
+}
+
+function isBedrockToolSchemaArray(value: unknown): value is unknown[] {
+  try {
+    return Array.isArray(value);
+  } catch {
+    return false;
+  }
+}
+
+function isBedrockToolSchemaRecord(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== "object" || isBedrockToolSchemaArray(value)) {
+    return false;
+  }
+  try {
+    const prototype = Object.getPrototypeOf(value);
+    return prototype === Object.prototype || prototype === null;
+  } catch {
+    return false;
+  }
 }
 
 function mapStopReason(reason: string | undefined): StopReason {
@@ -956,6 +1119,7 @@ function createImageBlock(mimeType: string, data: string) {
 
 /** Test-only hooks for Bedrock runtime conversion and endpoint policy. */
 export const testing = {
+  convertToolConfig,
   convertMessages,
   getConfiguredBedrockRegion,
   hasConfiguredBedrockProfile,
