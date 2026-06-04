@@ -123,6 +123,21 @@ export interface CopilotToolBridge {
 export const SUPPORTED_TOOL_PROVIDERS: ReadonlySet<string> = new Set(["github-copilot"]);
 const BASE_COPILOT_CODING_TOOL_NAMES = new Set(["edit", "read", "write"]);
 const SHELL_COPILOT_CODING_TOOL_NAMES = new Set(["apply_patch", "exec", "process"]);
+const COPILOT_TOOL_SCHEMA_MAX_DEPTH = 24;
+const COPILOT_TOOL_SCHEMA_MAX_NODES = 1_000;
+const COPILOT_TOOL_SCHEMA_INVALID = Symbol("copilot-tool-schema-invalid");
+
+type CopilotToolSnapshot = {
+  sourceTool: AnyAgentTool;
+  name: string;
+  description: string | undefined;
+  parameters: Record<string, unknown> | undefined;
+};
+
+type CopilotToolSchemaCloneState = {
+  seen: WeakSet<object>;
+  nodes: number;
+};
 
 export function supportsModelTools(modelProvider: string): boolean {
   return SUPPORTED_TOOL_PROVIDERS.has(modelProvider);
@@ -182,8 +197,9 @@ export async function createCopilotToolBridge(
     );
   }
 
+  const toolSnapshots = snapshotCopilotTools(sourceTools as AnyAgentTool[]);
   const plannedTools = filterCopilotToolsForConstructionPlan(
-    sourceTools as AnyAgentTool[],
+    toolSnapshots,
     effectiveToolPlan.codingToolConstructionPlan,
   );
   const filteredTools = filterCopilotToolsForAllowlist(
@@ -200,13 +216,19 @@ export async function createCopilotToolBridge(
   }
 
   return {
-    sdkTools: filteredTools.map((sourceTool) =>
-      convertOpenClawToolToSdkTool(sourceTool, {
+    sdkTools: filteredTools.map((tool) =>
+      convertCopilotToolSnapshotToSdkTool(tool, {
         abortSignal: input.abortSignal,
         beforeExecute: input.beforeExecute,
       }),
     ),
-    sourceTools: filteredTools,
+    sourceTools:
+      filteredTools.length === (sourceTools as AnyAgentTool[]).length &&
+      filteredTools.every(
+        (tool, index) => tool.sourceTool === (sourceTools as AnyAgentTool[])[index],
+      )
+        ? (sourceTools as AnyAgentTool[])
+        : filteredTools.map((tool) => tool.sourceTool),
   };
 }
 
@@ -378,6 +400,154 @@ function buildOpenClawCodingToolsOptions(
   };
 }
 
+function snapshotCopilotTools(tools: readonly AnyAgentTool[]): CopilotToolSnapshot[] {
+  const snapshots: CopilotToolSnapshot[] = [];
+  for (const tool of tools) {
+    const snapshot = snapshotCopilotTool(tool);
+    if (snapshot) {
+      snapshots.push(snapshot);
+    }
+  }
+  return snapshots;
+}
+
+function snapshotCopilotTool(tool: AnyAgentTool): CopilotToolSnapshot | undefined {
+  let name: unknown;
+  let description: unknown;
+  let parameters: unknown;
+  try {
+    name = tool.name;
+    description = tool.description;
+    parameters = tool.parameters;
+  } catch {
+    return undefined;
+  }
+  if (typeof name !== "string" || name.trim().length === 0) {
+    return undefined;
+  }
+  if (description !== undefined && typeof description !== "string") {
+    return undefined;
+  }
+  const clonedParameters = cloneCopilotToolSchema(parameters);
+  if (parameters !== undefined && !clonedParameters) {
+    return undefined;
+  }
+  return {
+    sourceTool: tool,
+    name,
+    description,
+    parameters: clonedParameters,
+  };
+}
+
+function cloneCopilotToolSchema(schema: unknown): Record<string, unknown> | undefined {
+  if (schema === undefined) {
+    return undefined;
+  }
+  const cloned = cloneCopilotToolSchemaValue(
+    schema,
+    {
+      seen: new WeakSet(),
+      nodes: 0,
+    },
+    0,
+  );
+  return isCopilotToolSchemaRecord(cloned) ? cloned : undefined;
+}
+
+function cloneCopilotToolSchemaValue(
+  value: unknown,
+  state: CopilotToolSchemaCloneState,
+  depth: number,
+): unknown {
+  try {
+    return cloneCopilotToolSchemaValueUnsafe(value, state, depth);
+  } catch {
+    return COPILOT_TOOL_SCHEMA_INVALID;
+  }
+}
+
+function cloneCopilotToolSchemaValueUnsafe(
+  value: unknown,
+  state: CopilotToolSchemaCloneState,
+  depth: number,
+): unknown {
+  if (value === null || typeof value === "string" || typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : COPILOT_TOOL_SCHEMA_INVALID;
+  }
+  if (typeof value !== "object") {
+    return COPILOT_TOOL_SCHEMA_INVALID;
+  }
+  if (depth >= COPILOT_TOOL_SCHEMA_MAX_DEPTH || state.nodes >= COPILOT_TOOL_SCHEMA_MAX_NODES) {
+    return COPILOT_TOOL_SCHEMA_INVALID;
+  }
+  if (state.seen.has(value)) {
+    return COPILOT_TOOL_SCHEMA_INVALID;
+  }
+  state.seen.add(value);
+  try {
+    state.nodes += 1;
+    if (state.nodes > COPILOT_TOOL_SCHEMA_MAX_NODES) {
+      return COPILOT_TOOL_SCHEMA_INVALID;
+    }
+    if (Array.isArray(value)) {
+      const result: unknown[] = [];
+      for (const entry of value) {
+        const clonedEntry = cloneCopilotToolSchemaValueUnsafe(entry, state, depth + 1);
+        if (clonedEntry === COPILOT_TOOL_SCHEMA_INVALID) {
+          return COPILOT_TOOL_SCHEMA_INVALID;
+        }
+        result.push(clonedEntry);
+      }
+      return result;
+    }
+    if (!isCopilotToolSchemaRecord(value)) {
+      return COPILOT_TOOL_SCHEMA_INVALID;
+    }
+    const result: Record<string, unknown> = {};
+    let entries: Array<[string, unknown]>;
+    try {
+      entries = Object.entries(value);
+    } catch {
+      return COPILOT_TOOL_SCHEMA_INVALID;
+    }
+    for (const [key, entry] of entries) {
+      const clonedEntry = cloneCopilotToolSchemaValueUnsafe(entry, state, depth + 1);
+      if (clonedEntry === COPILOT_TOOL_SCHEMA_INVALID) {
+        return COPILOT_TOOL_SCHEMA_INVALID;
+      }
+      if (key === "__proto__") {
+        Object.defineProperty(result, key, {
+          value: clonedEntry,
+          enumerable: true,
+          configurable: true,
+          writable: true,
+        });
+        continue;
+      }
+      result[key] = clonedEntry;
+    }
+    return result;
+  } finally {
+    state.seen.delete(value);
+  }
+}
+
+function isCopilotToolSchemaRecord(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  try {
+    const prototype = Object.getPrototypeOf(value);
+    return prototype === Object.prototype || prototype === null;
+  } catch {
+    return false;
+  }
+}
+
 export function convertOpenClawToolToSdkTool(
   sourceTool: AnyAgentTool,
   ctx: {
@@ -385,13 +555,24 @@ export function convertOpenClawToolToSdkTool(
     beforeExecute?: CopilotToolBridgeInput["beforeExecute"];
   },
 ): SdkTool {
-  if (typeof sourceTool.name !== "string" || sourceTool.name.trim().length === 0) {
+  const snapshot = snapshotCopilotTool(sourceTool);
+  if (!snapshot) {
     throw new Error("[copilot-tool-bridge] tool name must be a non-empty string");
   }
+  return convertCopilotToolSnapshotToSdkTool(snapshot, ctx);
+}
 
+function convertCopilotToolSnapshotToSdkTool(
+  snapshot: CopilotToolSnapshot,
+  ctx: {
+    abortSignal?: AbortSignal;
+    beforeExecute?: CopilotToolBridgeInput["beforeExecute"];
+  },
+): SdkTool {
+  const { sourceTool } = snapshot;
   if (typeof sourceTool.execute !== "function") {
     throw new Error(
-      `[copilot-tool-bridge] tool '${sourceTool.name}' must define an execute function`,
+      `[copilot-tool-bridge] tool '${snapshot.name}' must define an execute function`,
     );
   }
 
@@ -411,11 +592,11 @@ export function convertOpenClawToolToSdkTool(
         invocation,
         sourceTool,
         toolCallId: invocation.toolCallId,
-        toolName: sourceTool.name,
+        toolName: snapshot.name,
       });
     } catch (error: unknown) {
       return createFailureResult(
-        `[copilot-tool-bridge] beforeExecute failed for tool '${sourceTool.name}': ${toError(error).message}`,
+        `[copilot-tool-bridge] beforeExecute failed for tool '${snapshot.name}': ${toError(error).message}`,
         error,
       );
     }
@@ -425,7 +606,7 @@ export function convertOpenClawToolToSdkTool(
       preparedArgs = sourceTool.prepareArguments ? sourceTool.prepareArguments(args) : args;
     } catch (error: unknown) {
       return createFailureResult(
-        `[copilot-tool-bridge] prepareArguments failed for tool '${sourceTool.name}': ${toError(error).message}`,
+        `[copilot-tool-bridge] prepareArguments failed for tool '${snapshot.name}': ${toError(error).message}`,
         error,
       );
     }
@@ -440,7 +621,7 @@ export function convertOpenClawToolToSdkTool(
       );
     } catch (error: unknown) {
       return createFailureResult(
-        `[copilot-tool-bridge] tool '${sourceTool.name}' failed: ${toError(error).message}`,
+        `[copilot-tool-bridge] tool '${snapshot.name}' failed: ${toError(error).message}`,
         error,
       );
     }
@@ -464,9 +645,9 @@ export function convertOpenClawToolToSdkTool(
       : executeOnce;
 
   return {
-    description: sourceTool.description,
+    description: snapshot.description,
     handler,
-    name: sourceTool.name,
+    name: snapshot.name,
     // OpenClaw owns its bridged tools by design (the harness docs:
     // "OpenClaw still owns ... OpenClaw dynamic tools (bridged)"). The bundled
     // Copilot CLI ships built-in tools whose names (edit, read, write, bash,
@@ -476,7 +657,7 @@ export function convertOpenClawToolToSdkTool(
     // same name." OpenClaw's tool layer is the source of truth for these
     // names within a copilot attempt.
     overridesBuiltInTool: true,
-    parameters: sourceTool.parameters as Record<string, unknown> | undefined,
+    parameters: snapshot.parameters,
     // Bridged OpenClaw tools enforce their own permission/policy decisions
     // inside `wrapToolWithBeforeToolCallHook` (see
     // `src/agents/pi-tools.before-tool-call.ts` — the same hook PI itself
@@ -616,8 +797,14 @@ function filterCopilotToolsForAllowlist<T extends { name: string }>(
   toolsAllow?: string[],
 ): T[] {
   return applyEmbeddedAttemptToolsAllow(tools, toolsAllow, {
-    toolMeta: (tool) =>
-      getPluginToolMeta(tool as unknown as AnyAgentTool) ?? readInlinePluginToolMeta(tool),
+    toolMeta: (tool) => {
+      const sourceTool = (tool as { sourceTool?: AnyAgentTool }).sourceTool;
+      return (
+        (sourceTool ? getPluginToolMeta(sourceTool) : undefined) ??
+        getPluginToolMeta(tool as unknown as AnyAgentTool) ??
+        readInlinePluginToolMeta(sourceTool ?? tool)
+      );
+    },
   });
 }
 
@@ -651,7 +838,7 @@ function readInlinePluginToolMeta(tool: { name: string }): { pluginId: string } 
   return typeof pluginId === "string" && pluginId.trim() ? { pluginId } : undefined;
 }
 
-function findDuplicateToolNames(sourceTools: AnyAgentTool[]): string[] {
+function findDuplicateToolNames(sourceTools: readonly { name: unknown }[]): string[] {
   const counts = new Map<string, number>();
   for (const sourceTool of sourceTools) {
     if (typeof sourceTool.name !== "string" || sourceTool.name.length === 0) {

@@ -64,6 +64,35 @@ function makeTool(
   } as unknown as FakeTool;
 }
 
+function createUnreadableToolSchema(): Record<string, unknown> {
+  const schema: Record<string, unknown> = {
+    additionalProperties: false,
+    type: "object",
+  };
+  Object.defineProperty(schema, "properties", {
+    enumerable: true,
+    get() {
+      throw new Error("tool schema getter exploded");
+    },
+  });
+  return schema;
+}
+
+function createToolSchemaWithProtoProperty(): Record<string, unknown> {
+  const properties: Record<string, unknown> = {};
+  Object.defineProperty(properties, "__proto__", {
+    value: { type: "string" },
+    enumerable: true,
+    configurable: true,
+    writable: true,
+  });
+  return {
+    additionalProperties: false,
+    properties,
+    type: "object",
+  };
+}
+
 function getError(result: ToolResultObject): string | undefined {
   return result.error;
 }
@@ -158,6 +187,47 @@ describe("createCopilotToolBridge", () => {
     expect(result.sourceTools).toBe(sourceTools);
     expect(result.sdkTools).toHaveLength(2);
     expect(result.sdkTools.map((tool) => tool.name)).toEqual(["tool-a", "tool-b"]);
+  });
+
+  it("skips unreadable tool schemas while preserving healthy tools", async () => {
+    const broken = makeTool({
+      name: "broken_lookup",
+      parameters: createUnreadableToolSchema() as never,
+    });
+    const healthy = makeTool({
+      name: "safe_lookup",
+      parameters: createToolSchemaWithProtoProperty() as never,
+    });
+
+    const result = await createCopilotToolBridge({
+      modelProvider: "github-copilot",
+      createOpenClawCodingTools: async () => [broken, healthy],
+    });
+
+    expect(result.sourceTools).toEqual([healthy]);
+    expect(result.sdkTools.map((tool) => tool.name)).toEqual(["safe_lookup"]);
+    expect(() => JSON.stringify(result.sdkTools[0]?.parameters)).not.toThrow();
+    const properties = result.sdkTools[0]?.parameters?.properties;
+    expect(Object.hasOwn(properties as Record<string, unknown>, "__proto__")).toBe(true);
+  });
+
+  it("skips tools with unreadable names before bridge filtering", async () => {
+    const broken = makeTool({ name: "broken_lookup" });
+    Object.defineProperty(broken, "name", {
+      enumerable: true,
+      get() {
+        throw new Error("tool name getter exploded");
+      },
+    });
+    const healthy = makeTool({ name: "safe_lookup" });
+
+    const result = await createCopilotToolBridge({
+      modelProvider: "github-copilot",
+      createOpenClawCodingTools: async () => [broken, healthy],
+    });
+
+    expect(result.sourceTools).toEqual([healthy]);
+    expect(result.sdkTools.map((tool) => tool.name)).toEqual(["safe_lookup"]);
   });
 
   it("throws when createOpenClawCodingTools returns a non-array", async () => {
@@ -1061,7 +1131,7 @@ describe("convertOpenClawToolToSdkTool", () => {
     );
   });
 
-  it("preserves name, description, and parameters exactly", () => {
+  it("preserves name, description, and parameter schema content", () => {
     const parameters = {
       properties: { path: { type: "string" } },
       type: "object",
@@ -1076,7 +1146,8 @@ describe("convertOpenClawToolToSdkTool", () => {
 
     expect(result.name).toBe("read_file");
     expect(result.description).toBe("Read a file");
-    expect(result.parameters).toBe(parameters);
+    expect(result.parameters).toEqual(parameters);
+    expect(result.parameters).not.toBe(parameters);
   });
 
   it("sets skipPermission: true so OpenClaw's wrapped-tool internal enforcement handles permission decisions (PI-parity model)", () => {
