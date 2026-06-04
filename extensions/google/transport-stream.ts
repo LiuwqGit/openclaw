@@ -79,8 +79,22 @@ type GoogleGenerateContentRequest = {
   toolConfig?: Record<string, unknown>;
 };
 
+type GoogleTransportToolSnapshot = {
+  name: string;
+  description: string;
+  parametersJsonSchema: Record<string, unknown>;
+};
+
+type GoogleTransportToolSchemaCloneState = {
+  seen: WeakSet<object>;
+  nodes: number;
+};
+
 const GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_DEFAULT_MS = 45_000;
 const GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_ENV = "OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS";
+const GOOGLE_TRANSPORT_TOOL_SCHEMA_MAX_DEPTH = 24;
+const GOOGLE_TRANSPORT_TOOL_SCHEMA_MAX_NODES = 1_000;
+const GOOGLE_TRANSPORT_TOOL_SCHEMA_INVALID = Symbol("google-transport-tool-schema-invalid");
 
 type GoogleTransportContentBlock =
   | { type: "text"; text: string; textSignature?: string }
@@ -285,21 +299,31 @@ function toolCallThoughtSignatureReplayKey(block: {
 
 function mapToolChoice(
   choice: GoogleTransportOptions["toolChoice"],
+  tools: readonly GoogleTransportToolSnapshot[],
 ): { mode: "AUTO" | "NONE" | "ANY"; allowedFunctionNames?: string[] } | undefined {
   if (!choice) {
     return undefined;
   }
   if (typeof choice === "object" && choice.type === "function") {
-    return { mode: "ANY", allowedFunctionNames: [choice.function.name] };
+    const functionName = choice.function.name;
+    if (tools.some((tool) => tool.name === functionName)) {
+      return { mode: "ANY", allowedFunctionNames: [functionName] };
+    }
+    throw new Error(
+      `Google transport forced toolChoice "${functionName}" is unavailable after tool schema filtering`,
+    );
   }
   switch (choice) {
     case "none":
       return { mode: "NONE" };
     case "any":
     case "required":
+      if (tools.length === 0) {
+        throw new Error('Google transport toolChoice "any" requires at least one available tool');
+      }
       return { mode: "ANY" };
     default:
-      return { mode: "AUTO" };
+      return tools.length > 0 ? { mode: "AUTO" } : undefined;
   }
 }
 
@@ -676,7 +700,7 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
   return contents;
 }
 
-function convertGoogleTools(tools: NonNullable<Context["tools"]>) {
+function convertGoogleTools(tools: readonly GoogleTransportToolSnapshot[]) {
   if (tools.length === 0) {
     return undefined;
   }
@@ -685,10 +709,149 @@ function convertGoogleTools(tools: NonNullable<Context["tools"]>) {
       functionDeclarations: tools.map((tool) => ({
         name: tool.name,
         description: tool.description,
-        parametersJsonSchema: tool.parameters,
+        parametersJsonSchema: tool.parametersJsonSchema,
       })),
     },
   ];
+}
+
+function snapshotGoogleTransportTools(
+  tools: NonNullable<Context["tools"]>,
+): GoogleTransportToolSnapshot[] {
+  const snapshots: GoogleTransportToolSnapshot[] = [];
+  for (const tool of tools) {
+    let name: unknown;
+    let description: unknown;
+    let parameters: unknown;
+    try {
+      name = tool.name;
+      description = tool.description;
+      parameters = tool.parameters;
+    } catch {
+      continue;
+    }
+    if (typeof name !== "string" || name.length === 0 || typeof description !== "string") {
+      continue;
+    }
+    const parametersJsonSchema = cloneGoogleTransportToolSchema(parameters);
+    if (!parametersJsonSchema) {
+      continue;
+    }
+    snapshots.push({
+      name,
+      description,
+      parametersJsonSchema,
+    });
+  }
+  return snapshots;
+}
+
+function cloneGoogleTransportToolSchema(schema: unknown): Record<string, unknown> | undefined {
+  const cloned = cloneGoogleTransportToolSchemaValue(
+    schema,
+    {
+      seen: new WeakSet(),
+      nodes: 0,
+    },
+    0,
+  );
+  return isGoogleTransportToolSchemaRecord(cloned) ? cloned : undefined;
+}
+
+function cloneGoogleTransportToolSchemaValue(
+  value: unknown,
+  state: GoogleTransportToolSchemaCloneState,
+  depth: number,
+): unknown {
+  try {
+    return cloneGoogleTransportToolSchemaValueUnsafe(value, state, depth);
+  } catch {
+    return GOOGLE_TRANSPORT_TOOL_SCHEMA_INVALID;
+  }
+}
+
+function cloneGoogleTransportToolSchemaValueUnsafe(
+  value: unknown,
+  state: GoogleTransportToolSchemaCloneState,
+  depth: number,
+): unknown {
+  if (value === null || typeof value === "string" || typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : GOOGLE_TRANSPORT_TOOL_SCHEMA_INVALID;
+  }
+  if (typeof value !== "object") {
+    return GOOGLE_TRANSPORT_TOOL_SCHEMA_INVALID;
+  }
+  if (
+    depth >= GOOGLE_TRANSPORT_TOOL_SCHEMA_MAX_DEPTH ||
+    state.nodes >= GOOGLE_TRANSPORT_TOOL_SCHEMA_MAX_NODES
+  ) {
+    return GOOGLE_TRANSPORT_TOOL_SCHEMA_INVALID;
+  }
+  if (state.seen.has(value)) {
+    return GOOGLE_TRANSPORT_TOOL_SCHEMA_INVALID;
+  }
+  state.seen.add(value);
+  try {
+    state.nodes += 1;
+    if (state.nodes > GOOGLE_TRANSPORT_TOOL_SCHEMA_MAX_NODES) {
+      return GOOGLE_TRANSPORT_TOOL_SCHEMA_INVALID;
+    }
+    if (Array.isArray(value)) {
+      const result: unknown[] = [];
+      for (const entry of value) {
+        const clonedEntry = cloneGoogleTransportToolSchemaValueUnsafe(entry, state, depth + 1);
+        if (clonedEntry === GOOGLE_TRANSPORT_TOOL_SCHEMA_INVALID) {
+          return GOOGLE_TRANSPORT_TOOL_SCHEMA_INVALID;
+        }
+        result.push(clonedEntry);
+      }
+      return result;
+    }
+    if (!isGoogleTransportToolSchemaRecord(value)) {
+      return GOOGLE_TRANSPORT_TOOL_SCHEMA_INVALID;
+    }
+    const result: Record<string, unknown> = {};
+    let entries: Array<[string, unknown]>;
+    try {
+      entries = Object.entries(value);
+    } catch {
+      return GOOGLE_TRANSPORT_TOOL_SCHEMA_INVALID;
+    }
+    for (const [key, entry] of entries) {
+      const clonedEntry = cloneGoogleTransportToolSchemaValueUnsafe(entry, state, depth + 1);
+      if (clonedEntry === GOOGLE_TRANSPORT_TOOL_SCHEMA_INVALID) {
+        return GOOGLE_TRANSPORT_TOOL_SCHEMA_INVALID;
+      }
+      if (key === "__proto__") {
+        Object.defineProperty(result, key, {
+          value: clonedEntry,
+          enumerable: true,
+          configurable: true,
+          writable: true,
+        });
+        continue;
+      }
+      result[key] = clonedEntry;
+    }
+    return result;
+  } finally {
+    state.seen.delete(value);
+  }
+}
+
+function isGoogleTransportToolSchemaRecord(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  try {
+    const prototype = Object.getPrototypeOf(value);
+    return prototype === Object.prototype || prototype === null;
+  } catch {
+    return false;
+  }
 }
 
 export function buildGoogleGenerativeAiParams(
@@ -732,8 +895,9 @@ export function buildGoogleGenerativeAiParams(
     };
   }
   if (!cachedContent && context.tools?.length) {
-    params.tools = convertGoogleTools(context.tools);
-    const toolChoice = mapToolChoice(options?.toolChoice);
+    const toolSnapshots = snapshotGoogleTransportTools(context.tools);
+    params.tools = convertGoogleTools(toolSnapshots);
+    const toolChoice = mapToolChoice(options?.toolChoice, toolSnapshots);
     if (toolChoice) {
       params.toolConfig = {
         functionCallingConfig: toolChoice,

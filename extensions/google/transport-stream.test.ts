@@ -206,6 +206,35 @@ function requireThinkingConfig(config: Record<string, unknown>): Record<string, 
   return thinkingConfig as Record<string, unknown>;
 }
 
+function createUnreadableToolSchema(): Record<string, unknown> {
+  const schema: Record<string, unknown> = {
+    type: "object",
+    additionalProperties: false,
+  };
+  Object.defineProperty(schema, "properties", {
+    enumerable: true,
+    get() {
+      throw new Error("tool schema getter exploded");
+    },
+  });
+  return schema;
+}
+
+function createToolSchemaWithProtoProperty(): Record<string, unknown> {
+  const properties: Record<string, unknown> = {};
+  Object.defineProperty(properties, "__proto__", {
+    value: { type: "string" },
+    enumerable: true,
+    configurable: true,
+    writable: true,
+  });
+  return {
+    type: "object",
+    properties,
+    additionalProperties: false,
+  };
+}
+
 type GoogleTestContentTurn = Record<string, unknown> & {
   parts: Array<Record<string, unknown>>;
 };
@@ -1865,6 +1894,79 @@ describe("google transport stream", () => {
     expect(params.systemInstruction).toBeUndefined();
     expect(params.tools).toBeUndefined();
     expect(params.toolConfig).toBeUndefined();
+  });
+
+  it("skips unreadable Gemini tool schemas while preserving healthy tools", () => {
+    const params = buildGoogleGenerativeAiParams(
+      buildGeminiModel(),
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        tools: [
+          {
+            name: "broken_lookup",
+            description: "Broken",
+            parameters: createUnreadableToolSchema(),
+          },
+          {
+            name: "safe_lookup",
+            description: "Safe",
+            parameters: createToolSchemaWithProtoProperty(),
+          },
+        ],
+      } as never,
+      undefined,
+    ) as {
+      tools?: Array<{
+        functionDeclarations?: Array<{
+          name?: string;
+          parametersJsonSchema?: { properties?: Record<string, unknown> };
+        }>;
+      }>;
+    };
+
+    expect(() => JSON.stringify(params)).not.toThrow();
+    const declarations = params.tools?.[0]?.functionDeclarations ?? [];
+    expect(declarations.map((tool) => tool.name)).toEqual(["safe_lookup"]);
+    const properties = declarations[0]?.parametersJsonSchema?.properties;
+    expect(Object.hasOwn(properties as Record<string, unknown>, "__proto__")).toBe(true);
+  });
+
+  it("rejects required Gemini toolChoice when schema filtering removes all tools", () => {
+    expect(() =>
+      buildGoogleGenerativeAiParams(
+        buildGeminiModel(),
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+          tools: [
+            {
+              name: "broken_lookup",
+              description: "Broken",
+              parameters: createUnreadableToolSchema(),
+            },
+          ],
+        } as never,
+        { toolChoice: "required" },
+      ),
+    ).toThrow(/requires at least one available tool/);
+  });
+
+  it("rejects forced Gemini toolChoice when the selected tool is filtered", () => {
+    expect(() =>
+      buildGoogleGenerativeAiParams(
+        buildGeminiModel(),
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+          tools: [
+            {
+              name: "broken_lookup",
+              description: "Broken",
+              parameters: createUnreadableToolSchema(),
+            },
+          ],
+        } as never,
+        { toolChoice: { type: "function", function: { name: "broken_lookup" } } },
+      ),
+    ).toThrow(/forced toolChoice "broken_lookup" is unavailable/);
   });
 
   it("uses a non-empty text placeholder for empty user text", () => {
