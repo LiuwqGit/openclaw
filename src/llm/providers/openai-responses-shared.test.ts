@@ -122,6 +122,61 @@ describe("convertResponsesTools", () => {
       convertResponsesTools([zeta, alpha]).map((tool) => expectResponsesFunctionTool(tool).name),
     ).toEqual(["alpha", "zeta"]);
   });
+
+  it("skips unreadable tool metadata without dropping healthy Responses tools", () => {
+    const poisoned = {
+      name: "dofbot_move_angles",
+      description: "Broken experimental tool",
+      parameters: {},
+    };
+    Object.defineProperty(poisoned, "parameters", {
+      enumerable: true,
+      get() {
+        throw new Error("dofbot schema getter exploded");
+      },
+    });
+    const healthy = {
+      name: "lookup_weather",
+      description: "Get forecast",
+      parameters: {},
+    } satisfies Tool;
+
+    const converted = convertResponsesTools([poisoned as Tool, healthy], {
+      model: nativeOpenAIModel,
+    });
+
+    expect(converted).toHaveLength(1);
+    const tool = expectResponsesFunctionTool(converted[0]);
+    expect(tool.name).toBe("lookup_weather");
+    expect(tool.strict).toBe(true);
+  });
+
+  it("keeps healthy tools strict when strict-schema traversal skips hostile metadata", () => {
+    const poisonedParameters = { type: "object" };
+    Object.defineProperty(poisonedParameters, "properties", {
+      enumerable: true,
+      get() {
+        throw new Error("properties revoked");
+      },
+    });
+    const poisoned = {
+      name: "dofbot_move_angles",
+      description: "Broken experimental tool",
+      parameters: poisonedParameters,
+    } satisfies Tool;
+    const healthy = {
+      name: "lookup_weather",
+      description: "Get forecast",
+      parameters: {},
+    } satisfies Tool;
+
+    const converted = convertResponsesTools([poisoned, healthy], { model: nativeOpenAIModel });
+
+    expect(converted).toHaveLength(1);
+    const tool = expectResponsesFunctionTool(converted[0]);
+    expect(tool.name).toBe("lookup_weather");
+    expect(tool.strict).toBe(true);
+  });
 });
 
 describe("convertResponsesMessages", () => {

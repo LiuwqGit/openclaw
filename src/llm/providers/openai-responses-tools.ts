@@ -3,6 +3,7 @@ import type { Tool as OpenAITool } from "openai/resources/responses/responses.js
 import { resolveOpenAIStrictToolSetting } from "../../agents/openai-strict-tool-setting.js";
 import {
   findOpenAIStrictToolSchemaDiagnostics,
+  isStrictOpenAIJsonSchemaCompatible,
   normalizeOpenAIStrictToolParameters,
   resolveOpenAIStrictToolFlagForInventory,
 } from "../../agents/openai-tool-schema.js";
@@ -25,6 +26,12 @@ type ResponsesFunctionTool = {
   strict?: boolean | null;
 };
 
+type ResponsesToolSnapshot = {
+  name: string;
+  description?: string;
+  parameters: unknown;
+};
+
 // Converts OpenClaw tool schemas to OpenAI Responses tools, including strict-mode compatibility.
 const log = createSubsystemLogger("llm/openai-responses");
 const MAX_STRICT_TOOL_DOWNGRADE_DIAGNOSTIC_KEYS = 64;
@@ -35,25 +42,89 @@ export function convertResponsesTools(
   tools: Tool[],
   options?: ConvertResponsesToolsOptions,
 ): OpenAITool[] {
+  const snapshots = snapshotResponsesTools(tools);
   const strictSetting = resolveResponsesStrictToolSetting(options);
-  const strict = resolveResponsesStrictToolFlag(tools, strictSetting, options?.model);
+  const strict = resolveResponsesStrictToolFlag(
+    filterResponsesStrictInspectableTools(snapshots, strictSetting),
+    strictSetting,
+    options?.model,
+  );
   // Sort tools before request construction so prompt-cache bytes stay deterministic.
-  return sortResponsesToolsByName(tools).map((tool) => {
+  const convertedTools: OpenAITool[] = [];
+  for (const tool of sortResponsesToolsByName(snapshots)) {
+    let parameters: Record<string, unknown>;
+    try {
+      parameters = normalizeOpenAIStrictToolParameters(
+        tool.parameters,
+        strict === true,
+        options?.model?.compat as OpenAIToolSchemaCompat,
+      ) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
     const result: ResponsesFunctionTool = {
       type: "function",
       name: tool.name,
       description: tool.description,
-      parameters: normalizeOpenAIStrictToolParameters(
-        tool.parameters,
-        strict === true,
-        options?.model?.compat as OpenAIToolSchemaCompat,
-      ) as Record<string, unknown>,
+      parameters,
     };
     if (strict !== undefined) {
       result.strict = strict;
     }
-    return result as OpenAITool;
-  });
+    convertedTools.push(result as OpenAITool);
+  }
+  return convertedTools;
+}
+
+function snapshotResponsesTools(tools: readonly Tool[]): ResponsesToolSnapshot[] {
+  const snapshots: ResponsesToolSnapshot[] = [];
+  for (const tool of tools) {
+    const snapshot = snapshotResponsesTool(tool);
+    if (snapshot) {
+      snapshots.push(snapshot);
+    }
+  }
+  return snapshots;
+}
+
+function snapshotResponsesTool(tool: Tool): ResponsesToolSnapshot | undefined {
+  let name: unknown;
+  let description: unknown;
+  let parameters: unknown;
+  try {
+    name = tool.name;
+    description = tool.description;
+    parameters = tool.parameters;
+  } catch {
+    return undefined;
+  }
+  if (typeof name !== "string" || !name.trim()) {
+    return undefined;
+  }
+  return {
+    name: name.trim(),
+    ...(typeof description === "string" ? { description } : {}),
+    parameters,
+  };
+}
+
+function filterResponsesStrictInspectableTools(
+  tools: readonly ResponsesToolSnapshot[],
+  strictSetting: boolean | null | undefined,
+): ResponsesToolSnapshot[] {
+  if (strictSetting !== true) {
+    return [...tools];
+  }
+  const inspectable: ResponsesToolSnapshot[] = [];
+  for (const tool of tools) {
+    try {
+      isStrictOpenAIJsonSchemaCompatible(tool.parameters);
+      inspectable.push(tool);
+    } catch {
+      continue;
+    }
+  }
+  return inspectable;
 }
 
 function resolveResponsesStrictToolSetting(
@@ -72,7 +143,7 @@ function resolveResponsesStrictToolSetting(
 }
 
 function resolveResponsesStrictToolFlag(
-  tools: Tool[],
+  tools: readonly ResponsesToolSnapshot[],
   strictSetting: boolean | null | undefined,
   model: Model | undefined,
 ): boolean | undefined {
