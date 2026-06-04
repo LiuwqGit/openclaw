@@ -278,8 +278,10 @@ import {
   wrapAnthropicStreamWithRecovery,
 } from "../thinking.js";
 import {
+  collectClientToolNameList,
   collectCoreBuiltinToolNames,
   collectRegisteredToolNames,
+  collectToolNameList,
   AGENT_RESERVED_TOOL_NAMES,
   toSessionToolAllowlist,
 } from "../tool-name-allowlist.js";
@@ -1274,7 +1276,7 @@ export async function runEmbeddedAttempt(
         })();
     prepStages.mark("core-plugin-tools");
     emitCorePluginToolStageSummary("core-plugin-tools", corePluginToolStages.snapshot());
-    const bootstrapHasFileAccess = toolsEnabled && toolsRaw.some((tool) => tool.name === "read");
+    const bootstrapHasFileAccess = toolsEnabled && collectRegisteredToolNames(toolsRaw).has("read");
     const bootstrapWarn = makeBootstrapWarn({
       sessionLabel,
       workspaceDir: resolvedWorkspace,
@@ -1461,8 +1463,8 @@ export async function runEmbeddedAttempt(
       ? await materializeBundleMcpToolsForRun({
           runtime: bundleMcpSessionRuntime,
           reservedToolNames: [
-            ...tools.map((tool) => tool.name),
-            ...(clientTools?.map((tool) => tool.function.name) ?? []),
+            ...collectToolNameList(tools),
+            ...collectClientToolNameList(clientTools),
           ],
         })
       : undefined;
@@ -1476,9 +1478,9 @@ export async function runEmbeddedAttempt(
           workspaceDir: effectiveWorkspace,
           cfg: params.config,
           reservedToolNames: [
-            ...tools.map((tool) => tool.name),
-            ...(clientTools?.map((tool) => tool.function.name) ?? []),
-            ...(bundleMcpRuntime?.tools.map((tool) => tool.name) ?? []),
+            ...collectToolNameList(tools),
+            ...collectClientToolNameList(clientTools),
+            ...collectToolNameList(bundleMcpRuntime?.tools ?? []),
           ],
         })
       : undefined;
@@ -2139,12 +2141,7 @@ export async function runEmbeddedAttempt(
       // bundled/plugin tools. Used as the raw-name set for the trusted local
       // media passthrough gate: a normalized alias is not sufficient — the
       // emitted tool name must match an exact registration of this run.
-      const builtinToolNames = new Set(
-        uncompactedEffectiveTools.flatMap((tool) => {
-          const name = (tool.name ?? "").trim();
-          return name ? [name] : [];
-        }),
-      );
+      const builtinToolNames = new Set(collectToolNameList(uncompactedEffectiveTools));
       // Admission-time conflict check only against non-plugin core tools, to
       // preserve prior behavior where client tools may coexist with unrelated
       // plugin tool names. MEDIA passthrough is still gated by the raw-name
@@ -2913,7 +2910,7 @@ export async function runEmbeddedAttempt(
             const activeSubagentPromptAddition = buildActiveSubagentSystemPromptAddition({
               cfg: params.config,
               controllerSessionKey: params.sessionKey,
-              hasSessionsYield: effectiveTools.some((tool) => tool.name === "sessions_yield"),
+              hasSessionsYield: collectRegisteredToolNames(effectiveTools).has("sessions_yield"),
             });
             if (activeSubagentPromptAddition) {
               setActiveSessionSystemPrompt(
@@ -2963,7 +2960,7 @@ export async function runEmbeddedAttempt(
               sessionKey: params.sessionKey,
               messages: activeSession.messages,
               tokenBudget: params.contextTokenBudget,
-              availableTools: new Set(effectiveTools.map((tool) => tool.name)),
+              availableTools: new Set(collectToolNameList(effectiveTools)),
               citationsMode: params.config?.memory?.citations,
               modelId: params.modelId,
               ...(params.prompt !== undefined ? { prompt: params.prompt } : {}),

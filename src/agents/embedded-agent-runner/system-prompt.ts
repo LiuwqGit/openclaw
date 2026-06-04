@@ -15,6 +15,7 @@ import type { AgentSession } from "../sessions/index.js";
 import { buildConfiguredAgentSystemPrompt } from "../system-prompt-config.js";
 import type { ProviderSystemPromptContribution } from "../system-prompt-contribution.js";
 import type { PromptMode, SilentReplyPromptMode } from "../system-prompt.types.js";
+import { collectToolNameList } from "./tool-name-allowlist.js";
 import type { EmbeddedSandboxInfo } from "./types.js";
 import type { ReasoningLevel, ThinkLevel } from "./utils.js";
 
@@ -111,7 +112,7 @@ export function buildEmbeddedSystemPrompt(params: {
     runtimeInfo: params.runtimeInfo,
     messageToolHints: params.messageToolHints,
     sandboxInfo: params.sandboxInfo,
-    toolNames: params.tools.map((tool) => tool.name),
+    toolNames: collectToolNameList(params.tools),
     modelAliasLines: params.modelAliasLines,
     userTimezone: params.userTimezone,
     userTime: params.userTime,

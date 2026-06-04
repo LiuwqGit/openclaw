@@ -169,6 +169,7 @@ import { applySystemPromptToSession, buildEmbeddedSystemPrompt } from "./system-
 import {
   collectAllowedToolNames,
   collectRegisteredToolNames,
+  collectToolNameList,
   toSessionToolAllowlist,
 } from "./tool-name-allowlist.js";
 import { splitSdkTools } from "./tool-split.js";
@@ -851,7 +852,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
       ? await createBundleMcpToolRuntime({
           workspaceDir: effectiveWorkspace,
           cfg: params.config,
-          reservedToolNames: tools.map((tool) => tool.name),
+          reservedToolNames: collectToolNameList(tools),
         })
       : undefined;
     const bundleLspRuntime = toolsEnabled
@@ -859,8 +860,8 @@ async function compactEmbeddedAgentSessionDirectOnce(
           workspaceDir: effectiveWorkspace,
           cfg: params.config,
           reservedToolNames: [
-            ...tools.map((tool) => tool.name),
-            ...(bundleMcpRuntime?.tools.map((tool) => tool.name) ?? []),
+            ...collectToolNameList(tools),
+            ...collectToolNameList(bundleMcpRuntime?.tools ?? []),
           ],
         })
       : undefined;

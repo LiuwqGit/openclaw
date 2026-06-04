@@ -168,6 +168,32 @@ describe("buildEmbeddedSystemPrompt", () => {
     expect(prompt).toContain("Subagent-only command guidance.");
   });
 
+  it("skips unreadable tool names while building prompt tool guidance", () => {
+    const badTool = Object.defineProperty({}, "name", {
+      get() {
+        throw new Error("revoked name");
+      },
+    });
+
+    const prompt = buildEmbeddedSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      reasoningTagHint: false,
+      runtimeInfo: {
+        host: "local",
+        os: "darwin",
+        arch: "arm64",
+        node: process.version,
+        model: "gpt-5.4",
+        provider: "openai",
+      },
+      tools: [badTool as never, { name: "sessions_spawn" } as never],
+      modelAliasLines: [],
+      userTimezone: "UTC",
+    });
+
+    expect(prompt).toContain("- sessions_spawn");
+  });
+
   it("can omit base memory guidance for non-legacy context engines", () => {
     registerMemoryPromptSection(() => ["## Memory Recall", "Use memory carefully.", ""]);
 

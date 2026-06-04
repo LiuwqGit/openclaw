@@ -11,8 +11,10 @@ import {
 import type { ClientToolDefinition } from "./run/params.js";
 import {
   collectAllowedToolNames,
+  collectClientToolNameList,
   collectCoreBuiltinToolNames,
   collectRegisteredToolNames,
+  collectToolNameList,
   AGENT_RESERVED_TOOL_NAMES,
   toSessionToolAllowlist,
 } from "./tool-name-allowlist.js";
@@ -34,6 +36,70 @@ describe("tool name allowlists", () => {
     });
 
     expect([...names]).toEqual(["read", "memory_search", "image_generate"]);
+  });
+
+  it("skips unreadable local and client tool names", () => {
+    const badTool = Object.defineProperty({}, "name", {
+      get() {
+        throw new Error("revoked name");
+      },
+    });
+    const badClientTool = Object.defineProperty({}, "function", {
+      get() {
+        throw new Error("revoked function");
+      },
+    });
+
+    const names = collectAllowedToolNames({
+      tools: [badTool as never, createStubTool("read")],
+      clientTools: [
+        badClientTool as never,
+        {
+          type: "function",
+          function: {
+            name: "image_generate",
+            description: "Generate an image",
+            parameters: { type: "object", properties: {} },
+          },
+        },
+      ],
+    });
+
+    expect([...names]).toEqual(["read", "image_generate"]);
+  });
+
+  it("builds ordered tool name lists without unreadable entries", () => {
+    const badTool = Object.defineProperty({}, "name", {
+      get() {
+        throw new Error("revoked name");
+      },
+    });
+
+    expect(
+      collectToolNameList([createStubTool("read"), badTool as never, createStubTool("exec")]),
+    ).toEqual(["read", "exec"]);
+  });
+
+  it("builds ordered client tool name lists without unreadable entries", () => {
+    const badClientTool = Object.defineProperty({}, "function", {
+      get() {
+        throw new Error("revoked function");
+      },
+    });
+
+    expect(
+      collectClientToolNameList([
+        badClientTool as never,
+        {
+          type: "function",
+          function: {
+            name: "image_generate",
+            description: "Generate an image",
+            parameters: { type: "object", properties: {} },
+          },
+        },
+      ]),
+    ).toEqual(["image_generate"]);
   });
 
   it("builds a stable agent session allowlist from custom tool names", () => {

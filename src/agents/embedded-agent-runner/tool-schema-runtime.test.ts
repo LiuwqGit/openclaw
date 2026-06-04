@@ -1,6 +1,6 @@
 // Tool schema runtime tests cover provider plugin schema normalization and
 // compact diagnostics for invalid provider-facing tool schemas.
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   // Hoisted mocks let the module under test import logger/provider runtime once
@@ -26,6 +26,10 @@ const { logProviderToolSchemaDiagnostics, normalizeProviderToolSchemas } =
   await import("./tool-schema-runtime.js");
 
 describe("tool schema runtime diagnostics", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("stays quiet when a provider reports no diagnostics", () => {
     mocks.inspectProviderToolSchemasWithPlugin.mockReturnValueOnce([]);
 
@@ -84,6 +88,41 @@ describe("tool schema runtime diagnostics", () => {
         diagnostics: [
           { index: 0, tool: "alpha", violations: ["one", "two"], violationCount: 2 },
           { index: 1, tool: "beta", violations: ["one"], violationCount: 1 },
+        ],
+      },
+    );
+  });
+
+  it("formats diagnostics when a tool name getter is unreadable", () => {
+    mocks.inspectProviderToolSchemasWithPlugin.mockReturnValueOnce([
+      { toolName: "tool[0]", toolIndex: 0, violations: ["tool[0].name is unreadable"] },
+    ]);
+    const badTool = Object.defineProperty({}, "name", {
+      get() {
+        throw new Error("revoked name");
+      },
+    });
+
+    logProviderToolSchemaDiagnostics({
+      provider: "example",
+      tools: [badTool, { name: "beta" }] as never,
+    });
+
+    expect(mocks.log.warn).toHaveBeenCalledTimes(1);
+    expect(mocks.log.warn).toHaveBeenCalledWith(
+      "provider tool schema diagnostics: 1 tool for example: tool[0] (1 violation)",
+      {
+        provider: "example",
+        toolCount: 2,
+        diagnosticCount: 1,
+        tools: ["0:tool[0]", "1:beta"],
+        diagnostics: [
+          {
+            index: 0,
+            tool: "tool[0]",
+            violations: ["tool[0].name is unreadable"],
+            violationCount: 1,
+          },
         ],
       },
     );

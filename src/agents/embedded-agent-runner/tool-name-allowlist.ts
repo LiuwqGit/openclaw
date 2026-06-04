@@ -20,16 +20,58 @@ function addName(names: Set<string>, value: unknown): void {
   }
 }
 
+function readToolName(tool: { name?: string }): string | undefined {
+  try {
+    return tool.name;
+  } catch {
+    return undefined;
+  }
+}
+
+function readClientToolName(tool: ClientToolDefinition): string | undefined {
+  try {
+    return tool.function?.name;
+  } catch {
+    return undefined;
+  }
+}
+
+function addToolName(names: Set<string>, tool: { name?: string }): void {
+  addName(names, readToolName(tool));
+}
+
+export function collectToolNameList(tools: Array<{ name?: string }>): string[] {
+  const names: string[] = [];
+  for (const tool of tools) {
+    const name = readToolName(tool)?.trim();
+    if (name) {
+      names.push(name);
+    }
+  }
+  return names;
+}
+
+export function collectClientToolNameList(tools: readonly ClientToolDefinition[] = []): string[] {
+  const names: string[] = [];
+  for (const tool of tools) {
+    const name = readClientToolName(tool)?.trim();
+    if (name) {
+      names.push(name);
+    }
+  }
+  return names;
+}
+
 export function collectAllowedToolNames(params: {
   tools: AgentTool[];
   clientTools?: ClientToolDefinition[];
 }): Set<string> {
   const names = new Set<string>();
   for (const tool of params.tools) {
-    addName(names, tool.name);
+    addToolName(names, tool);
   }
   for (const tool of params.clientTools ?? []) {
-    addName(names, tool.function?.name);
+    addName(names, readClientToolName(tool));
   }
   return names;
 }
@@ -40,7 +82,7 @@ export function collectAllowedToolNames(params: {
 export function collectRegisteredToolNames(tools: Array<{ name?: string }>): Set<string> {
   const names = new Set<string>();
   for (const tool of tools) {
-    addName(names, tool.name);
+    addToolName(names, tool);
   }
   return names;
 }
@@ -54,7 +96,7 @@ export function collectCoreBuiltinToolNames(
     if (options?.isPluginTool?.(tool)) {
       continue;
     }
-    addName(names, tool.name);
+    addToolName(names, tool);
   }
   return names;
 }
