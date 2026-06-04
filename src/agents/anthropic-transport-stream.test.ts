@@ -1237,6 +1237,16 @@ describe("anthropic transport stream", () => {
             execute: async () => ({ content: [{ type: "text", text: "bad" }] }),
           },
           {
+            name: "revoked_schema_tool",
+            description: "revoked nested schema",
+            parameters: Object.defineProperty({ type: "object" }, "properties", {
+              enumerable: true,
+              get() {
+                throw new Error("schema revoked");
+              },
+            }),
+          },
+          {
             name: "good_plugin_tool",
             description: "valid schema",
             parameters: {
@@ -1261,6 +1271,76 @@ describe("anthropic transport stream", () => {
     expect(requireRecord(tool.input_schema, "input schema").properties).toEqual({
       query: { type: "string" },
     });
+  });
+
+  it("fails closed when any tool choice has no surviving tools", async () => {
+    const result = await runTransportStream(
+      makeAnthropicTransportModel(),
+      {
+        messages: [{ role: "user", content: "hello" }],
+        tools: [
+          {
+            name: "revoked_schema_tool",
+            description: "revoked nested schema",
+            parameters: Object.defineProperty({ type: "object" }, "properties", {
+              enumerable: true,
+              get() {
+                throw new Error("schema revoked");
+              },
+            }),
+          },
+        ],
+      } as unknown as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+        toolChoice: "any",
+      } as AnthropicStreamOptions,
+    );
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toContain(
+      'Anthropic transport toolChoice "any" requires at least one available tool',
+    );
+    expect(guardedFetchMock).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when a forced tool choice is filtered out", async () => {
+    const result = await runTransportStream(
+      makeAnthropicTransportModel(),
+      {
+        messages: [{ role: "user", content: "hello" }],
+        tools: [
+          {
+            name: "revoked_schema_tool",
+            description: "revoked nested schema",
+            parameters: Object.defineProperty({ type: "object" }, "properties", {
+              enumerable: true,
+              get() {
+                throw new Error("schema revoked");
+              },
+            }),
+          },
+          {
+            name: "good_plugin_tool",
+            description: "valid schema",
+            parameters: {
+              type: "object",
+              properties: {},
+            },
+          },
+        ],
+      } as unknown as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+        toolChoice: { type: "tool", name: "revoked_schema_tool" },
+      } as AnthropicStreamOptions,
+    );
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toContain(
+      'Anthropic transport forced toolChoice "revoked_schema_tool" is unavailable after tool schema filtering',
+    );
+    expect(guardedFetchMock).not.toHaveBeenCalled();
   });
 
   it("coerces replayed malformed tool-call args to an object for Anthropic payloads", async () => {

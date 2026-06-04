@@ -117,6 +117,24 @@ type MutableAssistantOutput = {
 };
 
 const EMPTY_ANTHROPIC_MESSAGES_FALLBACK_TEXT = ".";
+const ANTHROPIC_TRANSPORT_TOOL_SCHEMA_MAX_DEPTH = 24;
+const ANTHROPIC_TRANSPORT_TOOL_SCHEMA_MAX_NODES = 1_000;
+const ANTHROPIC_TRANSPORT_TOOL_SCHEMA_INVALID = Symbol("anthropic-transport-tool-schema-invalid");
+
+type AnthropicTransportToolSchemaCloneState = {
+  seen: WeakSet<object>;
+  nodes: number;
+};
+
+type AnthropicTransportToolSnapshot = {
+  name: string;
+  description: string;
+  inputSchema: {
+    type: "object";
+    properties: Record<string, unknown>;
+    required: string[];
+  };
+};
 
 function isClaudeOpus47OrNewerModel(modelId: string): boolean {
   return (
@@ -248,11 +266,16 @@ function toClaudeCodeName(name: string): string {
 function fromClaudeCodeName(name: string, tools: Context["tools"] | undefined): string {
   if (tools && tools.length > 0) {
     const lowerName = normalizeLowercaseStringOrEmpty(name);
-    const matchedTool = tools.find(
-      (tool) => normalizeLowercaseStringOrEmpty(tool.name) === lowerName,
-    );
-    if (matchedTool) {
-      return matchedTool.name;
+    for (const tool of tools) {
+      let toolName: unknown;
+      try {
+        toolName = tool.name;
+      } catch {
+        continue;
+      }
+      if (typeof toolName === "string" && normalizeLowercaseStringOrEmpty(toolName) === lowerName) {
+        return toolName;
+      }
     }
   }
   return name;
@@ -479,40 +502,246 @@ function ensureNonEmptyAnthropicMessages(messages: Array<Record<string, unknown>
     : [{ role: "user", content: EMPTY_ANTHROPIC_MESSAGES_FALLBACK_TEXT }];
 }
 
-function convertAnthropicTools(tools: Context["tools"], isOAuthToken: boolean) {
+function snapshotAnthropicTransportTools(
+  tools: Context["tools"],
+  isOAuthToken: boolean,
+): AnthropicTransportToolSnapshot[] {
   if (!tools) {
     return [];
   }
-  const converted: Array<{
-    name: string;
-    description?: string;
-    input_schema: {
-      type: "object";
-      properties: unknown;
-      required: unknown;
-    };
-  }> = [];
+  const snapshots: AnthropicTransportToolSnapshot[] = [];
   for (const tool of tools) {
     // Main quarantine happens when plugin tools materialize; this keeps Anthropic
     // safe for direct/custom tool arrays that bypass the plugin registry.
-    const parameters =
-      tool.parameters && typeof tool.parameters === "object" && !Array.isArray(tool.parameters)
-        ? (tool.parameters as Record<string, unknown>)
-        : undefined;
-    if (!parameters) {
-      continue;
+    const snapshot = snapshotAnthropicTransportTool(tool, isOAuthToken);
+    if (snapshot) {
+      snapshots.push(snapshot);
     }
-    converted.push({
-      name: isOAuthToken ? toClaudeCodeName(tool.name) : tool.name,
-      description: tool.description,
-      input_schema: {
-        type: "object",
-        properties: parameters.properties || {},
-        required: parameters.required || [],
-      },
-    });
   }
-  return converted;
+  return snapshots;
+}
+
+function snapshotAnthropicTransportTool(
+  tool: NonNullable<Context["tools"]>[number],
+  isOAuthToken: boolean,
+): AnthropicTransportToolSnapshot | undefined {
+  let name: unknown;
+  let description: unknown;
+  let parameters: unknown;
+  try {
+    name = tool.name;
+    description = tool.description;
+    parameters = tool.parameters;
+  } catch {
+    return undefined;
+  }
+  if (typeof name !== "string" || name.length === 0 || typeof description !== "string") {
+    return undefined;
+  }
+  const inputSchema = cloneAnthropicTransportToolSchemaObject(parameters);
+  if (!inputSchema) {
+    return undefined;
+  }
+  return {
+    name: isOAuthToken ? toClaudeCodeName(name) : name,
+    description,
+    inputSchema,
+  };
+}
+
+function convertAnthropicTools(tools: readonly AnthropicTransportToolSnapshot[]) {
+  return tools.map((tool) => ({
+    name: tool.name,
+    description: tool.description,
+    input_schema: tool.inputSchema,
+  }));
+}
+
+function cloneAnthropicTransportToolSchemaObject(
+  schema: unknown,
+): AnthropicTransportToolSnapshot["inputSchema"] | undefined {
+  if (!isAnthropicTransportToolSchemaRecord(schema)) {
+    return undefined;
+  }
+  let propertiesInput: unknown;
+  let requiredInput: unknown;
+  try {
+    propertiesInput = Reflect.get(schema, "properties") ?? {};
+    requiredInput = Reflect.get(schema, "required") ?? [];
+  } catch {
+    return undefined;
+  }
+  const properties = cloneAnthropicTransportToolSchemaValue(
+    propertiesInput,
+    {
+      seen: new WeakSet(),
+      nodes: 0,
+    },
+    0,
+  );
+  if (
+    properties === ANTHROPIC_TRANSPORT_TOOL_SCHEMA_INVALID ||
+    !isAnthropicTransportToolSchemaRecord(properties)
+  ) {
+    return undefined;
+  }
+  const required = cloneAnthropicTransportToolRequiredList(requiredInput);
+  if (!required) {
+    return undefined;
+  }
+  return {
+    type: "object",
+    properties,
+    required,
+  };
+}
+
+function cloneAnthropicTransportToolSchemaValue(
+  value: unknown,
+  state: AnthropicTransportToolSchemaCloneState,
+  depth: number,
+): unknown {
+  try {
+    return cloneAnthropicTransportToolSchemaValueUnsafe(value, state, depth);
+  } catch {
+    return ANTHROPIC_TRANSPORT_TOOL_SCHEMA_INVALID;
+  }
+}
+
+function cloneAnthropicTransportToolSchemaValueUnsafe(
+  value: unknown,
+  state: AnthropicTransportToolSchemaCloneState,
+  depth: number,
+): unknown {
+  if (value === null || typeof value === "string" || typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : ANTHROPIC_TRANSPORT_TOOL_SCHEMA_INVALID;
+  }
+  if (typeof value !== "object") {
+    return ANTHROPIC_TRANSPORT_TOOL_SCHEMA_INVALID;
+  }
+  if (
+    depth >= ANTHROPIC_TRANSPORT_TOOL_SCHEMA_MAX_DEPTH ||
+    state.nodes >= ANTHROPIC_TRANSPORT_TOOL_SCHEMA_MAX_NODES
+  ) {
+    return ANTHROPIC_TRANSPORT_TOOL_SCHEMA_INVALID;
+  }
+  if (state.seen.has(value)) {
+    return ANTHROPIC_TRANSPORT_TOOL_SCHEMA_INVALID;
+  }
+  state.seen.add(value);
+  try {
+    state.nodes += 1;
+    if (state.nodes > ANTHROPIC_TRANSPORT_TOOL_SCHEMA_MAX_NODES) {
+      return ANTHROPIC_TRANSPORT_TOOL_SCHEMA_INVALID;
+    }
+    if (isAnthropicTransportToolSchemaArray(value)) {
+      const result: unknown[] = [];
+      for (const item of value) {
+        const clonedItem = cloneAnthropicTransportToolSchemaValueUnsafe(item, state, depth + 1);
+        if (clonedItem === ANTHROPIC_TRANSPORT_TOOL_SCHEMA_INVALID) {
+          return ANTHROPIC_TRANSPORT_TOOL_SCHEMA_INVALID;
+        }
+        result.push(clonedItem);
+      }
+      return result;
+    }
+    if (!isAnthropicTransportToolSchemaRecord(value)) {
+      return ANTHROPIC_TRANSPORT_TOOL_SCHEMA_INVALID;
+    }
+    const result: Record<string, unknown> = {};
+    let entries: Array<[string, unknown]>;
+    try {
+      entries = Object.entries(value);
+    } catch {
+      return ANTHROPIC_TRANSPORT_TOOL_SCHEMA_INVALID;
+    }
+    for (const [key, entry] of entries) {
+      const clonedEntry = cloneAnthropicTransportToolSchemaValueUnsafe(entry, state, depth + 1);
+      if (clonedEntry === ANTHROPIC_TRANSPORT_TOOL_SCHEMA_INVALID) {
+        return ANTHROPIC_TRANSPORT_TOOL_SCHEMA_INVALID;
+      }
+      if (key === "__proto__") {
+        Object.defineProperty(result, key, {
+          value: clonedEntry,
+          enumerable: true,
+          configurable: true,
+          writable: true,
+        });
+        continue;
+      }
+      result[key] = clonedEntry;
+    }
+    return result;
+  } finally {
+    state.seen.delete(value);
+  }
+}
+
+function cloneAnthropicTransportToolRequiredList(value: unknown): string[] | undefined {
+  if (!isAnthropicTransportToolSchemaArray(value)) {
+    return undefined;
+  }
+  try {
+    const required: string[] = [];
+    for (const entry of value) {
+      if (typeof entry !== "string") {
+        return undefined;
+      }
+      required.push(entry);
+    }
+    return required;
+  } catch {
+    return undefined;
+  }
+}
+
+function isAnthropicTransportToolSchemaArray(value: unknown): value is unknown[] {
+  try {
+    return Array.isArray(value);
+  } catch {
+    return false;
+  }
+}
+
+function isAnthropicTransportToolSchemaRecord(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== "object" || isAnthropicTransportToolSchemaArray(value)) {
+    return false;
+  }
+  try {
+    const prototype = Object.getPrototypeOf(value);
+    return prototype === Object.prototype || prototype === null;
+  } catch {
+    return false;
+  }
+}
+
+function resolveAnthropicTransportToolChoice(
+  choice: AnthropicTransportOptions["toolChoice"],
+  tools: readonly AnthropicTransportToolSnapshot[],
+  isOAuthToken: boolean,
+): Record<string, unknown> | undefined {
+  if (!choice) {
+    return undefined;
+  }
+  if (typeof choice === "string") {
+    if (choice === "any" && tools.length === 0) {
+      throw new Error('Anthropic transport toolChoice "any" requires at least one available tool');
+    }
+    return { type: choice };
+  }
+  if (choice.type === "tool") {
+    const requestedName = isOAuthToken ? toClaudeCodeName(choice.name) : choice.name;
+    if (!tools.some((tool) => tool.name === requestedName)) {
+      throw new Error(
+        `Anthropic transport forced toolChoice "${choice.name}" is unavailable after tool schema filtering`,
+      );
+    }
+    return { ...choice, name: requestedName };
+  }
+  return choice;
 }
 
 function parseAnthropicToolCallArguments(inputJson: string): unknown {
@@ -838,6 +1067,7 @@ function buildAnthropicParams(
     max_tokens: maxTokens,
     stream: true,
   };
+  const toolSnapshots = snapshotAnthropicTransportTools(context.tools, isOAuthToken);
   if (isOAuthToken) {
     params.system = [
       {
@@ -867,8 +1097,8 @@ function buildAnthropicParams(
   if (options?.stop !== undefined && options.stop.length > 0) {
     params.stop_sequences = options.stop;
   }
-  if (context.tools) {
-    params.tools = convertAnthropicTools(context.tools, isOAuthToken);
+  if (toolSnapshots.length > 0) {
+    params.tools = convertAnthropicTools(toolSnapshots);
   }
   if (model.reasoning) {
     if (options?.thinkingEnabled) {
@@ -890,9 +1120,13 @@ function buildAnthropicParams(
   if (options?.metadata && typeof options.metadata.user_id === "string") {
     params.metadata = { user_id: options.metadata.user_id };
   }
-  if (options?.toolChoice) {
-    params.tool_choice =
-      typeof options.toolChoice === "string" ? { type: options.toolChoice } : options.toolChoice;
+  const toolChoice = resolveAnthropicTransportToolChoice(
+    options?.toolChoice,
+    toolSnapshots,
+    isOAuthToken,
+  );
+  if (toolChoice) {
+    params.tool_choice = toolChoice;
   }
   applyAnthropicPayloadPolicyToParams(params, payloadPolicy);
   return params;
