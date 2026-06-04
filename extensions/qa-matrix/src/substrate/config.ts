@@ -39,6 +39,10 @@ type MatrixQaToolConfigOverrides = {
   deny?: string[];
 };
 
+type MatrixQaAudioConfigOverrides = NonNullable<
+  NonNullable<NonNullable<OpenClawConfig["tools"]>["media"]>["audio"]
+>;
+
 type MatrixQaGroupConfigOverrides = {
   allowBots?: MatrixQaAllowBotsMode;
   enabled?: boolean;
@@ -99,6 +103,7 @@ export type MatrixQaConfigOverrides = {
   textChunkLimit?: number;
   threadBindings?: MatrixQaThreadBindingsConfigOverrides;
   threadReplies?: MatrixQaThreadRepliesMode;
+  audio?: MatrixQaAudioConfigOverrides;
   toolProfile?: "coding" | "messaging" | "minimal";
 };
 
@@ -615,15 +620,35 @@ export function buildMatrixQaConfig(
         }
       : {};
 
+  const toolsConfig =
+    params.overrides?.toolProfile || params.overrides?.audio
+      ? {
+          ...baseCfg.tools,
+          ...(params.overrides?.toolProfile
+            ? {
+                profile: params.overrides.toolProfile,
+              }
+            : {}),
+          ...(params.overrides?.audio
+            ? {
+                media: {
+                  ...baseCfg.tools?.media,
+                  audio: {
+                    ...baseCfg.tools?.media?.audio,
+                    ...params.overrides.audio,
+                  },
+                },
+              }
+            : {}),
+        }
+      : undefined;
+
   return {
     ...baseCfg,
     ...approvalForwardingConfig,
-    ...(params.overrides?.toolProfile
+    ...(toolsConfig
       ? {
-          tools: {
-            ...baseCfg.tools,
-            profile: params.overrides.toolProfile,
-          },
+          tools: toolsConfig,
         }
       : {}),
     ...(params.overrides?.agentDefaults
