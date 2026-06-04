@@ -154,9 +154,7 @@ export {
   resolveActiveEmbeddedRunSessionId,
   setActiveEmbeddedRun,
 };
-export type {
-  AbortAndDrainEmbeddedAgentRunResult as AbortAndDrainAgentHarnessRunResult,
-};
+export type { AbortAndDrainEmbeddedAgentRunResult as AbortAndDrainAgentHarnessRunResult };
 
 /**
  * @deprecated Active-run queueing is an internal runtime concern. This legacy
@@ -179,8 +177,11 @@ export {
 export {
   filterProviderNormalizableTools,
   inspectRuntimeToolInputSchemas,
+  projectRuntimeCompatibleToolInputSchemas,
   projectRuntimeToolInputSchema,
   type RuntimeToolInputSchemaJson,
+  type RuntimeToolInputSchemaProjectedTool,
+  type RuntimeToolInputSchemaProjectionInspection,
   type RuntimeToolInputSchemaProjection,
   type RuntimeToolSchemaDiagnostic,
 } from "../agents/tool-schema-projection.js";
