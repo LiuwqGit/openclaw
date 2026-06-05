@@ -55,6 +55,8 @@ type CodexToolResultHookContext = Omit<CodexDynamicToolHookContext, "config">;
 
 type ProjectedCodexDynamicTool = {
   tool: AnyAgentTool;
+  name: string;
+  description: string;
   inputSchema: JsonValue;
 };
 
@@ -111,19 +113,22 @@ export function createCodexDynamicToolBridge(params: {
   const registeredProjection = params.registeredTools
     ? projectCodexDynamicTools(params.registeredTools)
     : availableProjection;
-  const availableTools = availableProjection.tools.map(({ tool, inputSchema }) => {
-    if (isToolWrappedWithBeforeToolCallHook(tool)) {
-      setBeforeToolCallDiagnosticsEnabled(tool, false);
-      return { tool, inputSchema };
-    }
-    return {
-      tool: wrapToolWithBeforeToolCallHook(tool, params.hookContext, { emitDiagnostics: false }),
-      inputSchema,
-    };
-  });
-  const toolMap = new Map(availableTools.map(({ tool }) => [tool.name, tool]));
-  const registeredTools = registeredProjection.tools.map(({ tool }) => tool);
-  const registeredToolNames = new Set(registeredTools.map((tool) => tool.name));
+  const availableTools = availableProjection.tools.map(
+    ({ tool, name, description, inputSchema }) => {
+      if (isToolWrappedWithBeforeToolCallHook(tool)) {
+        setBeforeToolCallDiagnosticsEnabled(tool, false);
+        return { tool, name, description, inputSchema };
+      }
+      return {
+        tool: wrapToolWithBeforeToolCallHook(tool, params.hookContext, { emitDiagnostics: false }),
+        name,
+        description,
+        inputSchema,
+      };
+    },
+  );
+  const toolMap = new Map(availableTools.map((entry) => [entry.name, entry]));
+  const registeredToolNames = new Set(registeredProjection.tools.map((entry) => entry.name));
   const quarantinedTools = dedupeQuarantinedDynamicTools([
     ...availableProjection.quarantinedTools,
     ...registeredProjection.quarantinedTools,
@@ -152,17 +157,19 @@ export function createCodexDynamicToolBridge(params: {
   ]);
 
   return {
-    availableSpecs: availableTools.map(({ tool, inputSchema }) =>
+    availableSpecs: availableTools.map(({ name, description, inputSchema }) =>
       createCodexDynamicToolSpec({
-        tool,
+        name,
+        description,
         inputSchema,
         loading: params.loading ?? "searchable",
         directToolNames,
       }),
     ),
-    specs: registeredProjection.tools.map(({ tool, inputSchema }) =>
+    specs: registeredProjection.tools.map(({ name, description, inputSchema }) =>
       createCodexDynamicToolSpec({
-        tool,
+        name,
+        description,
         inputSchema,
         loading: params.loading ?? "searchable",
         directToolNames,
@@ -170,8 +177,8 @@ export function createCodexDynamicToolBridge(params: {
     ),
     telemetry,
     handleToolCall: async (call, options) => {
-      const tool = toolMap.get(call.tool);
-      if (!tool) {
+      const entry = toolMap.get(call.tool);
+      if (!entry) {
         if (registeredToolNames.has(call.tool)) {
           return {
             contentItems: [
@@ -188,6 +195,7 @@ export function createCodexDynamicToolBridge(params: {
           success: false,
         };
       }
+      const { tool, name: toolName } = entry;
       const args = jsonObjectToRecord(call.arguments);
       const startedAt = Date.now();
       const signal = composeAbortSignals(params.signal, options?.signal);
@@ -203,7 +211,7 @@ export function createCodexDynamicToolBridge(params: {
           threadId: call.threadId,
           turnId: call.turnId,
           toolCallId: call.callId,
-          toolName: tool.name,
+          toolName,
           args,
           isError: rawIsError,
           result: rawResult,
@@ -212,13 +220,13 @@ export function createCodexDynamicToolBridge(params: {
           threadId: call.threadId,
           turnId: call.turnId,
           toolCallId: call.callId,
-          toolName: tool.name,
+          toolName,
           args,
           result: middlewareResult,
         });
         const resultIsError = rawIsError || isToolResultError(result);
         collectToolTelemetry({
-          toolName: tool.name,
+          toolName,
           args,
           result,
           mediaTrustResult: rawResult,
@@ -226,7 +234,7 @@ export function createCodexDynamicToolBridge(params: {
           isError: resultIsError,
         });
         void runAgentHarnessAfterToolCallHook({
-          toolName: tool.name,
+          toolName,
           toolCallId: call.callId,
           runId: toolResultHookContext.runId,
           agentId: toolResultHookContext.agentId,
@@ -259,14 +267,14 @@ export function createCodexDynamicToolBridge(params: {
         return withSideEffectEvidence(response, terminalType !== "blocked");
       } catch (error) {
         collectToolTelemetry({
-          toolName: tool.name,
+          toolName,
           args,
           result: undefined,
           telemetry,
           isError: true,
         });
         void runAgentHarnessAfterToolCallHook({
-          toolName: tool.name,
+          toolName,
           toolCallId: call.callId,
           runId: toolResultHookContext.runId,
           agentId: toolResultHookContext.agentId,
@@ -297,18 +305,57 @@ export function createCodexDynamicToolBridge(params: {
   };
 }
 
-function createCodexDynamicToolSpec(params: {
+function createCodexStableDynamicTool(params: {
   tool: AnyAgentTool;
+  name: string;
+  description: string;
+  inputSchema: JsonValue;
+}): AnyAgentTool {
+  const stable = Object.create(params.tool) as AnyAgentTool;
+  try {
+    for (const key of Reflect.ownKeys(params.tool)) {
+      if (key === "name" || key === "description" || key === "parameters") {
+        continue;
+      }
+      const descriptor = Reflect.getOwnPropertyDescriptor(params.tool, key);
+      if (descriptor) {
+        Object.defineProperty(stable, key, descriptor);
+      }
+    }
+  } catch {
+    // Descriptor traps are already handled by tool projection; keep the stable
+    // Codex-facing fields so bridge construction can still proceed.
+  }
+  Object.defineProperties(stable, {
+    name: stableToolPropertyDescriptor(params.name),
+    description: stableToolPropertyDescriptor(params.description),
+    parameters: stableToolPropertyDescriptor(params.inputSchema),
+  });
+  return stable;
+}
+
+function stableToolPropertyDescriptor(value: unknown): PropertyDescriptor {
+  return {
+    configurable: true,
+    enumerable: true,
+    value,
+    writable: true,
+  };
+}
+
+function createCodexDynamicToolSpec(params: {
+  name: string;
+  description: string;
   inputSchema: JsonValue;
   loading: CodexDynamicToolsLoading;
   directToolNames: ReadonlySet<string>;
 }): CodexDynamicToolSpec {
   const base = {
-    name: params.tool.name,
-    description: params.tool.description,
+    name: params.name,
+    description: params.description,
     inputSchema: params.inputSchema,
   };
-  if (params.loading === "direct" || params.directToolNames.has(params.tool.name)) {
+  if (params.loading === "direct" || params.directToolNames.has(params.name)) {
     return base;
   }
   return {
@@ -325,15 +372,41 @@ function projectCodexDynamicTools(tools: readonly AnyAgentTool[]): {
   const projection = projectRuntimeCompatibleToolInputSchemas(tools, {
     schemaLabel: "inputSchema",
   });
-  return {
-    tools: projection.tools.map(({ tool, schema }) => ({
-      tool,
-      inputSchema: schema as JsonValue,
-    })),
-    quarantinedTools: projection.diagnostics.map((diagnostic) => ({
+  const projectedTools: ProjectedCodexDynamicTool[] = [];
+  const quarantinedTools: CodexDynamicToolSchemaQuarantine[] = projection.diagnostics.map(
+    (diagnostic) => ({
       tool: diagnostic.toolName,
       violations: diagnostic.violations,
-    })),
+    }),
+  );
+  for (const { tool, toolName, schema } of projection.tools) {
+    let description: string;
+    try {
+      const rawDescription = tool.description;
+      description = typeof rawDescription === "string" ? rawDescription : "";
+    } catch {
+      quarantinedTools.push({
+        tool: toolName,
+        violations: [`${toolName}.description is unreadable`],
+      });
+      continue;
+    }
+    const inputSchema = schema as JsonValue;
+    projectedTools.push({
+      tool: createCodexStableDynamicTool({
+        tool,
+        name: toolName,
+        description,
+        inputSchema,
+      }),
+      name: toolName,
+      description,
+      inputSchema,
+    });
+  }
+  return {
+    tools: projectedTools,
+    quarantinedTools,
   };
 }
 

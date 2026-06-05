@@ -25,6 +25,7 @@ export type RuntimeToolInputSchemaProjectedTool<
   TTool extends Pick<AnyAgentTool, "name" | "parameters">,
 > = {
   readonly tool: TTool;
+  readonly toolName: string;
   readonly schema: RuntimeToolInputSchemaJson;
 };
 
@@ -275,7 +276,7 @@ function projectToolSchema<TTool extends Pick<AnyAgentTool, "name" | "parameters
   toolIndex: number,
   options: RuntimeToolProjectionOptions,
 ):
-  | { ok: true; tool: TTool; schema: RuntimeToolInputSchemaJson }
+  | { ok: true; tool: TTool; toolName: string; schema: RuntimeToolInputSchemaJson }
   | { ok: false; diagnostic: RuntimeToolSchemaDiagnostic } {
   const schemaLabel = options.schemaLabel ?? "parameters";
   const nameRead = readToolProjectionField(tool, "name");
@@ -311,7 +312,7 @@ function projectToolSchema<TTool extends Pick<AnyAgentTool, "name" | "parameters
       },
     };
   }
-  return { ok: true, tool, schema: projection.schema };
+  return { ok: true, tool, toolName, schema: projection.schema };
 }
 
 function inspectToolEntries<TTool extends Pick<AnyAgentTool, "name" | "parameters">>(
@@ -365,7 +366,11 @@ export function projectRuntimeCompatibleToolInputSchemas<
     }
     const projection = projectToolSchema(entry.tool, entry.toolIndex, options);
     if (projection.ok) {
-      projectedTools.push({ tool: projection.tool, schema: projection.schema });
+      projectedTools.push({
+        tool: projection.tool,
+        toolName: projection.toolName,
+        schema: projection.schema,
+      });
       continue;
     }
     diagnostics.push(projection.diagnostic);

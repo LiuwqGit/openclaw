@@ -400,6 +400,93 @@ describe("createCodexDynamicToolBridge", () => {
     expect(badExecute).not.toHaveBeenCalled();
   });
 
+  it("snapshots projected dynamic tool names before bridge wrapping", async () => {
+    const execute = vi.fn(async () => textToolResult("sent"));
+    const volatileTool = createTool({
+      name: "message",
+      execute,
+    });
+    let nameReads = 0;
+    Object.defineProperty(volatileTool, "name", {
+      enumerable: true,
+      get() {
+        nameReads += 1;
+        if (nameReads > 1) {
+          throw new Error("message name getter revoked");
+        }
+        return "message";
+      },
+    });
+
+    const bridge = createCodexDynamicToolBridge({
+      tools: [volatileTool],
+      signal: new AbortController().signal,
+    });
+
+    expect(bridge.availableSpecs.map((tool) => tool.name)).toEqual(["message"]);
+    expect(bridge.specs.map((tool) => tool.name)).toEqual(["message"]);
+    await expect(handleMessageToolCall(bridge, { text: "hello" })).resolves.toEqual(
+      expect.objectContaining({ success: true }),
+    );
+    expect(execute).toHaveBeenCalled();
+  });
+
+  it("snapshots dynamic tool descriptions with a single descriptor read", () => {
+    const volatileTool = createTool({ name: "message" });
+    let descriptionReads = 0;
+    Object.defineProperty(volatileTool, "description", {
+      enumerable: true,
+      get() {
+        descriptionReads += 1;
+        if (descriptionReads > 1) {
+          throw new Error("message description getter revoked");
+        }
+        return "Send a message.";
+      },
+    });
+
+    const bridge = createCodexDynamicToolBridge({
+      tools: [volatileTool],
+      signal: new AbortController().signal,
+    });
+
+    expect(bridge.specs).toEqual([
+      expect.objectContaining({
+        name: "message",
+        description: "Send a message.",
+      }),
+    ]);
+  });
+
+  it("quarantines unreadable dynamic tool descriptions before spec construction", () => {
+    const badExecute = vi.fn();
+    const badTool = createTool({
+      name: "dofbot_move_angles",
+      execute: badExecute,
+    });
+    Object.defineProperty(badTool, "description", {
+      enumerable: true,
+      get() {
+        throw new Error("dofbot description getter exploded");
+      },
+    });
+
+    const bridge = createCodexDynamicToolBridge({
+      tools: [badTool, createTool({ name: "message" })],
+      signal: new AbortController().signal,
+    });
+
+    expect(bridge.availableSpecs.map((tool) => tool.name)).toEqual(["message"]);
+    expect(bridge.specs.map((tool) => tool.name)).toEqual(["message"]);
+    expect(bridge.telemetry.quarantinedTools).toEqual([
+      {
+        tool: "dofbot_move_angles",
+        violations: ["dofbot_move_angles.description is unreadable"],
+      },
+    ]);
+    expect(badExecute).not.toHaveBeenCalled();
+  });
+
   it("can expose all dynamic tools directly for compatibility", () => {
     const bridge = createCodexDynamicToolBridge({
       tools: [createTool({ name: "web_search" }), createTool({ name: "message" })],

@@ -191,6 +191,7 @@ describe("runtime tool input schema projection", () => {
       tools: [
         {
           tool: healthy,
+          toolName: "healthy",
           schema: { type: "object", properties: { query: { type: "string" } } },
         },
       ],
