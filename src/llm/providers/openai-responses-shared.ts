@@ -667,19 +667,26 @@ export async function processResponsesStream<TApi extends Api>(
     } else if (event.type === "response.function_call_arguments.done") {
       if (currentItem?.type === "function_call" && currentBlock?.type === "toolCall") {
         const previousPartialJson = currentBlock.partialJson;
-        currentBlock.partialJson = event.arguments;
-        currentBlock.arguments = parseStreamingJson(currentBlock.partialJson);
+        const doneArguments = typeof event.arguments === "string" ? event.arguments : undefined;
 
-        if (event.arguments.startsWith(previousPartialJson)) {
-          const delta = event.arguments.slice(previousPartialJson.length);
-          if (delta.length > 0) {
-            stream.push({
-              type: "toolcall_delta",
-              contentIndex: blockIndex(),
-              delta,
-              partial: output,
-            });
+        if (doneArguments !== undefined && doneArguments.length > 0) {
+          currentBlock.partialJson = doneArguments;
+          currentBlock.arguments = parseStreamingJson(currentBlock.partialJson);
+
+          if (doneArguments.startsWith(previousPartialJson)) {
+            const delta = doneArguments.slice(previousPartialJson.length);
+            if (delta.length > 0) {
+              stream.push({
+                type: "toolcall_delta",
+                contentIndex: blockIndex(),
+                delta,
+                partial: output,
+              });
+            }
           }
+        } else {
+          // LM Studio and some proxies emit done without arguments after deltas.
+          currentBlock.arguments = parseStreamingJson(previousPartialJson);
         }
       }
     } else if (event.type === "response.output_item.done") {

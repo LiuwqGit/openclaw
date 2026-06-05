@@ -1,8 +1,8 @@
 // OpenAI Responses shared tests cover tool conversion and response item mapping.
 import type { Tool as OpenAIResponsesTool } from "openai/resources/responses/responses.js";
-import { describe, expect, it } from "vitest";
-import type { Context, Model, Tool } from "../types.js";
-import { convertResponsesMessages } from "./openai-responses-shared.js";
+import { describe, expect, it, vi } from "vitest";
+import type { AssistantMessage, Context, Model, Tool } from "../types.js";
+import { convertResponsesMessages, processResponsesStream } from "./openai-responses-shared.js";
 import { convertResponsesTools } from "./openai-responses-tools.js";
 
 type ResponsesFunctionTool = Extract<OpenAIResponsesTool, { type: "function" }>;
@@ -31,6 +31,134 @@ const proxyOpenAIModel = {
   name: "Custom Model",
   baseUrl: "https://proxy.example.com/v1",
 } satisfies Model<"openai-responses">;
+
+async function* streamChunks(chunks: readonly unknown[]) {
+  for (const chunk of chunks) {
+    yield chunk;
+  }
+}
+
+function createResponsesAssistantOutput(model: Model<"openai-responses">): AssistantMessage {
+  return {
+    role: "assistant",
+    content: [],
+    api: model.api,
+    provider: model.provider,
+    model: model.id,
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: Date.now(),
+  };
+}
+
+describe("processResponsesStream", () => {
+  it("preserves streamed tool call arguments when done event omits arguments", async () => {
+    const model = proxyOpenAIModel;
+    const output = createResponsesAssistantOutput(model);
+
+    await processResponsesStream(
+      streamChunks([
+        {
+          type: "response.output_item.added",
+          item: {
+            type: "function_call",
+            id: "fc_1",
+            call_id: "call_1",
+            name: "read",
+            arguments: "",
+          },
+        },
+        { type: "response.function_call_arguments.delta", delta: '{"path":' },
+        { type: "response.function_call_arguments.delta", delta: '"/tmp/file.txt"}' },
+        { type: "response.function_call_arguments.done" },
+        {
+          type: "response.output_item.done",
+          item: {
+            type: "function_call",
+            id: "fc_1",
+            call_id: "call_1",
+            name: "read",
+          },
+        },
+        {
+          type: "response.completed",
+          response: { id: "resp_1", status: "completed" },
+        },
+      ]),
+      output,
+      { push: vi.fn() },
+      model,
+    );
+
+    expect(output.stopReason).toBe("toolUse");
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_1|fc_1",
+        name: "read",
+        arguments: { path: "/tmp/file.txt" },
+      },
+    ]);
+  });
+
+  it("still applies full arguments from done events when providers include them", async () => {
+    const model = proxyOpenAIModel;
+    const output = createResponsesAssistantOutput(model);
+
+    await processResponsesStream(
+      streamChunks([
+        {
+          type: "response.output_item.added",
+          item: {
+            type: "function_call",
+            id: "fc_2",
+            call_id: "call_2",
+            name: "exec",
+            arguments: "",
+          },
+        },
+        { type: "response.function_call_arguments.delta", delta: '{"command":' },
+        {
+          type: "response.function_call_arguments.done",
+          arguments: '{"command":"echo hi"}',
+        },
+        {
+          type: "response.output_item.done",
+          item: {
+            type: "function_call",
+            id: "fc_2",
+            call_id: "call_2",
+            name: "exec",
+            arguments: '{"command":"echo hi"}',
+          },
+        },
+        {
+          type: "response.completed",
+          response: { id: "resp_2", status: "completed" },
+        },
+      ]),
+      output,
+      { push: vi.fn() },
+      model,
+    );
+
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_2|fc_2",
+        name: "exec",
+        arguments: { command: "echo hi" },
+      },
+    ]);
+  });
+});
 
 describe("convertResponsesTools", () => {
   it("enables native strict OpenAI Responses tools and normalizes schemas", () => {
