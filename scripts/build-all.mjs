@@ -132,8 +132,15 @@ export const BUILD_ALL_STEPS = [
         "scripts/lib/copy-assets.ts",
         "src/auto-reply/reply/export-html",
       ],
-      outputs: ["dist/auto-reply/reply/export-html"],
+      outputs: ["dist/export-html"],
     },
+  },
+  {
+    label: "verify-export-html-templates",
+    kind: "node",
+    args: ["--experimental-strip-types", "scripts/verify-export-html-templates.ts"],
+    // Always run verification after copy to ensure build integrity
+    cache: undefined,
   },
   {
     label: "ui:build",
