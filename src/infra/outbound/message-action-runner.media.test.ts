@@ -273,6 +273,44 @@ describe("runMessageAction media behavior", () => {
     vi.mocked(loadWebMedia).mockImplementation(actualLoadWebMedia);
   });
 
+  it("materializes buffer-only send attachments into outbound media paths", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "workspace",
+          source: "test",
+          plugin: workspacePlugin,
+        },
+      ]),
+    );
+
+    const result = await runMessageAction({
+      cfg: workspaceConfig,
+      action: "send",
+      params: {
+        channel: "workspace",
+        target: "12345678",
+        message: "artifact attached",
+        buffer: Buffer.from("artifact bytes").toString("base64"),
+        filename: "artifact.txt",
+        contentType: "text/plain",
+      },
+    });
+
+    expect(result.kind).toBe("send");
+    if (result.kind !== "send") {
+      throw new Error("expected send result");
+    }
+    expect(result.sendResult?.mediaUrl).toBeTypeOf("string");
+    await expect(fs.readFile(String(result.sendResult?.mediaUrl), "utf8")).resolves.toBe(
+      "artifact bytes",
+    );
+
+    const sendArgs = firstMockArg(channelResolutionMocks.executeSendAction, "executeSendAction");
+    expect(sendArgs.mediaUrl).toBe(result.sendResult?.mediaUrl);
+    expect(sendArgs.mediaUrls).toEqual([result.sendResult?.mediaUrl]);
+  });
+
   it("forwards asVoice from send actions into core delivery", async () => {
     setActivePluginRegistry(
       createTestRegistry([

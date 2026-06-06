@@ -17,6 +17,7 @@ vi.mock("../../channels/plugins/message-action-discovery.js", () => ({
 import {
   collectActionMediaSourceHints,
   hydrateAttachmentParamsForAction,
+  materializeSendBufferMediaParams,
   normalizeSandboxMediaList,
   normalizeSandboxMediaParams,
   resolveExtraActionMediaSourceParamKeys,
@@ -643,5 +644,58 @@ describe("message action sandbox media hydration", () => {
       await fs.rm(sandboxRoot, { recursive: true, force: true });
       await fs.rm(outsideRoot, { recursive: true, force: true });
     }
+  });
+
+  it("materializes buffer-only send params into outbound media paths", async () => {
+    const args: Record<string, unknown> = {
+      buffer: Buffer.from("artifact bytes").toString("base64"),
+      filename: "artifact.txt",
+      contentType: "text/plain",
+    };
+
+    await materializeSendBufferMediaParams({
+      cfg,
+      channel: "workspace",
+      args,
+    });
+
+    expect(typeof args.media).toBe("string");
+    expect(args.media).toBe(args.mediaUrl);
+    expect(args.mediaUrls).toEqual([args.media]);
+    await expect(fs.readFile(String(args.media), "utf8")).resolves.toBe("artifact bytes");
+  });
+
+  it("skips send buffer materialization when an explicit media source is present", async () => {
+    const args: Record<string, unknown> = {
+      buffer: Buffer.from("ignored").toString("base64"),
+      mediaUrl: "https://example.com/pic.png",
+    };
+
+    await materializeSendBufferMediaParams({
+      cfg,
+      channel: "workspace",
+      args,
+    });
+
+    expect(args.mediaUrl).toBe("https://example.com/pic.png");
+    expect(args.media).toBeUndefined();
+  });
+
+  it("hydrates send actions through buffer materialization", async () => {
+    const args: Record<string, unknown> = {
+      buffer: Buffer.from("send path").toString("base64"),
+      contentType: "text/plain",
+    };
+
+    await hydrateAttachmentParamsForAction({
+      cfg,
+      channel: "workspace",
+      args,
+      action: "send",
+      mediaPolicy: { mode: "host" },
+    });
+
+    expect(typeof args.mediaUrl).toBe("string");
+    await expect(fs.readFile(String(args.mediaUrl), "utf8")).resolves.toBe("send path");
   });
 });

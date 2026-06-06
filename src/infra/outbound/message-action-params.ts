@@ -18,6 +18,7 @@ import {
   type OutboundMediaAccess,
   type OutboundMediaReadFile,
 } from "../../media/load-options.js";
+import { resolveOutboundAttachmentFromBuffer } from "../../media/outbound-attachment.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import { resolveSnakeCaseParamKey } from "../../param-key.js";
 import { readBooleanParam as readBooleanParamShared } from "../../plugin-sdk/boolean-param.js";
@@ -93,6 +94,89 @@ function hasExplicitAttachmentPayload(
     const entry = resolveMediaParamEntry(args, key);
     return Boolean(entry && normalizeOptionalString(entry.value));
   });
+}
+
+function hasExplicitSendMediaSource(
+  args: Record<string, unknown>,
+  extraParamKeys?: readonly string[],
+): boolean {
+  if (
+    buildActionMediaSourceParamKeys(extraParamKeys).some((key) => {
+      const entry = resolveMediaParamEntry(args, key);
+      return Boolean(entry && normalizeOptionalString(entry.value));
+    })
+  ) {
+    return true;
+  }
+  const mediaUrls = readStringArrayParam(args, "mediaUrls");
+  if (mediaUrls?.some((value) => normalizeOptionalString(value))) {
+    return true;
+  }
+  for (const source of collectStructuredAttachmentSources(args)) {
+    if (normalizeOptionalString(source.value)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function decodeAttachmentBuffer(base64: string): Buffer {
+  return Buffer.from(base64, "base64");
+}
+
+/** Materializes buffer-only `send` params into outbound media paths before channel delivery. */
+export async function materializeSendBufferMediaParams(params: {
+  cfg: OpenClawConfig;
+  channel: ChannelId;
+  accountId?: string | null;
+  args: Record<string, unknown>;
+  extraParamKeys?: readonly string[];
+}): Promise<void> {
+  if (hasExplicitSendMediaSource(params.args, params.extraParamKeys)) {
+    return;
+  }
+  const rawBuffer = readStringParam(params.args, "buffer", { trim: false });
+  if (!rawBuffer) {
+    return;
+  }
+  const normalized = normalizeBase64Payload({
+    base64: rawBuffer,
+    contentType: readStringParam(params.args, "contentType") ?? undefined,
+  });
+  if (!normalized.base64) {
+    return;
+  }
+  const contentType =
+    readStringParam(params.args, "contentType") ??
+    readStringParam(params.args, "mimeType") ??
+    normalized.contentType;
+  const filename =
+    readStringParam(params.args, "filename") ??
+    inferAttachmentFilename({
+      contentType: contentType ?? undefined,
+    });
+  const maxBytes = resolveAttachmentMaxBytes({
+    cfg: params.cfg,
+    channel: params.channel,
+    accountId: params.accountId,
+  });
+  const staged = await resolveOutboundAttachmentFromBuffer(
+    decodeAttachmentBuffer(normalized.base64),
+    maxBytes ?? Number.MAX_SAFE_INTEGER,
+    {
+      contentType: contentType ?? undefined,
+      filename,
+    },
+  );
+  params.args.media = staged.path;
+  params.args.mediaUrl = staged.path;
+  params.args.mediaUrls = [staged.path];
+  if (staged.contentType && !readStringParam(params.args, "contentType")) {
+    params.args.contentType = staged.contentType;
+  }
+  if (filename && !readStringParam(params.args, "filename")) {
+    params.args.filename = filename;
+  }
 }
 
 function collectStructuredAttachmentSources(
@@ -538,6 +622,16 @@ export async function hydrateAttachmentParamsForAction(params: {
   extraParamKeys?: readonly string[];
 }): Promise<void> {
   const shouldHydrateUploadFile = params.action === "upload-file";
+  if (params.action === "send") {
+    await materializeSendBufferMediaParams({
+      cfg: params.cfg,
+      channel: params.channel,
+      accountId: params.accountId,
+      args: params.args,
+      extraParamKeys: params.extraParamKeys,
+    });
+    return;
+  }
   // Reply gets the same hydration as sendAttachment so threaded sends with
   // an attachment go through the resolver's localRoots/sandbox/size checks
   // instead of forwarding raw paths to the channel runtime. Reply has its
