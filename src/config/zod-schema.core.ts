@@ -340,6 +340,19 @@ const ModelMediaInputSchema = z
   })
   .strict();
 
+const ThinkingLevelMapValueSchema = z.union([z.string(), z.null()]);
+const ThinkingLevelMapSchema = z
+  .object({
+    off: ThinkingLevelMapValueSchema.optional(),
+    minimal: ThinkingLevelMapValueSchema.optional(),
+    low: ThinkingLevelMapValueSchema.optional(),
+    medium: ThinkingLevelMapValueSchema.optional(),
+    high: ThinkingLevelMapValueSchema.optional(),
+    xhigh: ThinkingLevelMapValueSchema.optional(),
+    max: ThinkingLevelMapValueSchema.optional(),
+  })
+  .strict();
+
 const ModelDefinitionSchema = z
   .object({
     id: z.string().min(1),
@@ -347,6 +360,7 @@ const ModelDefinitionSchema = z
     api: ModelApiSchema.optional(),
     baseUrl: z.string().min(1).optional(),
     reasoning: z.boolean().optional(),
+    thinkingLevelMap: ThinkingLevelMapSchema.optional(),
     input: z
       .array(
         z.union([z.literal("text"), z.literal("image"), z.literal("video"), z.literal("audio")]),

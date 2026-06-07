@@ -487,4 +487,65 @@ describe("config schema regressions", () => {
 
     expect(res.ok).toBe(true);
   });
+
+  it("accepts thinkingLevelMap on persisted provider model entries (Foundry onboarding)", () => {
+    const res = validateConfigObject({
+      models: {
+        providers: {
+          "microsoft-foundry": {
+            baseUrl: "https://example.openai.azure.com/openai/v1",
+            models: [
+              {
+                id: "gpt-5.4",
+                name: "gpt-5.4",
+                api: "openai-responses",
+                reasoning: true,
+                thinkingLevelMap: {
+                  off: "none",
+                  minimal: null,
+                  low: "low",
+                  medium: "medium",
+                  high: "high",
+                  xhigh: "xhigh",
+                  max: null,
+                },
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128000,
+                maxTokens: 16384,
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects unknown thinkingLevelMap keys on persisted provider model entries", () => {
+    const res = validateConfigObject({
+      models: {
+        providers: {
+          "microsoft-foundry": {
+            baseUrl: "https://example.openai.azure.com/openai/v1",
+            models: [
+              {
+                id: "gpt-5.4",
+                name: "gpt-5.4",
+                thinkingLevelMap: {
+                  adaptive: "high",
+                },
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128000,
+                maxTokens: 16384,
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+  });
 });

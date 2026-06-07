@@ -1103,4 +1103,25 @@ describe("microsoft-foundry plugin", () => {
     ]);
     expect(result.defaultModel).toBe("microsoft-foundry/deployment-gpt5");
   });
+
+  it("emits only allowed thinkingLevelMap keys for Entra ID reasoning model onboarding", () => {
+    const allowedKeys = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+    const result = buildFoundryAuthResult({
+      profileId: "microsoft-foundry:entra",
+      apiKey: "__entra_id_dynamic__",
+      endpoint: "https://example.services.ai.azure.com",
+      modelId: "gpt-5.4",
+      modelNameHint: "gpt-5.4",
+      api: "openai-responses",
+      authMethod: "entra-id",
+    });
+
+    const thinkingLevelMap =
+      result.configPatch?.models?.providers?.["microsoft-foundry"]?.models[0]?.thinkingLevelMap;
+    expect(thinkingLevelMap).toBeDefined();
+    for (const [key, value] of Object.entries(thinkingLevelMap ?? {})) {
+      expect(allowedKeys.has(key)).toBe(true);
+      expect(value === null || typeof value === "string").toBe(true);
+    }
+  });
 });
