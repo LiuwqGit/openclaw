@@ -44,7 +44,12 @@ export type McpOAuthCredentialsStatus = {
   hasLastAuthorizationUrl: boolean;
 };
 
-const DEFAULT_REDIRECT_URL = "http://localhost:8989/oauth/callback";
+const LEGACY_DEFAULT_REDIRECT_URL = "http://127.0.0.1:8989/oauth/callback";
+const LOCALHOST_REDIRECT_URL = "http://localhost:8989/oauth/callback";
+
+export function isMcpOAuthRedirectRegistrationError(error: unknown): boolean {
+  return /invalid_client_metadata|redirect_uri/i.test(String(error));
+}
 
 function oauthStorePath(serverName: string, serverUrl: string): string {
   const safeServerName = sanitizeServerName(serverName, new Set<string>());
@@ -66,8 +71,12 @@ async function writeStore(filePath: string, store: McpOAuthStore): Promise<void>
   await fs.chmod(filePath, 0o600).catch(() => {});
 }
 
+function resolveOAuthRedirectUrl(config: McpOAuthConfig): string {
+  return normalizeOptionalString(config.redirectUrl) ?? LEGACY_DEFAULT_REDIRECT_URL;
+}
+
 function buildOAuthClientMetadata(config: McpOAuthConfig): OAuthClientMetadata {
-  const redirectUrl = normalizeOptionalString(config.redirectUrl) ?? DEFAULT_REDIRECT_URL;
+  const redirectUrl = resolveOAuthRedirectUrl(config);
   return {
     client_name: "OpenClaw MCP",
     redirect_uris: [redirectUrl],
@@ -90,7 +99,7 @@ export function createMcpOAuthClientProvider(params: {
 }): OAuthClientProvider {
   const config = params.config ?? {};
   const filePath = oauthStorePath(params.serverName, params.serverUrl);
-  const redirectUrl = normalizeOptionalString(config.redirectUrl) ?? DEFAULT_REDIRECT_URL;
+  const redirectUrl = resolveOAuthRedirectUrl(config);
   const allowAuthorizationRedirect =
     params.allowAuthorizationRedirect ?? Boolean(params.onAuthorizationUrl);
   const assertAuthorizationRedirectAllowed = () => {
@@ -197,8 +206,7 @@ export async function readMcpOAuthCredentialsStatus(params: {
   };
 }
 
-/** Runs the MCP OAuth login flow, returning whether it authorized or needs redirect. */
-export async function runMcpOAuthLogin(params: {
+async function runMcpOAuthLoginAttempt(params: {
   serverName: string;
   serverUrl: string;
   config?: McpOAuthConfig;
@@ -219,4 +227,32 @@ export async function runMcpOAuthLogin(params: {
     },
   );
   return result === "AUTHORIZED" ? "authorized" : "redirect";
+}
+
+/** Runs the MCP OAuth login flow, returning whether it authorized or needs redirect. */
+export async function runMcpOAuthLogin(params: {
+  serverName: string;
+  serverUrl: string;
+  config?: McpOAuthConfig;
+  authorizationCode?: string;
+  fetchFn?: FetchLike;
+  onAuthorizationUrl?: (url: URL) => void | Promise<void>;
+}): Promise<"authorized" | "redirect"> {
+  try {
+    return await runMcpOAuthLoginAttempt(params);
+  } catch (error) {
+    if (
+      !normalizeOptionalString(params.config?.redirectUrl) &&
+      isMcpOAuthRedirectRegistrationError(error)
+    ) {
+      return await runMcpOAuthLoginAttempt({
+        ...params,
+        config: {
+          ...params.config,
+          redirectUrl: LOCALHOST_REDIRECT_URL,
+        },
+      });
+    }
+    throw error;
+  }
 }

@@ -112,25 +112,28 @@ function normalizeSchemaMap(value: unknown): unknown {
   );
 }
 
+function compilesUnicodePattern(pattern: string): boolean {
+  try {
+    const probe = new RegExp(pattern, "u");
+    void probe;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Repair JSON Schema regex patterns that fail TypeBox's unicode RegExp compile. */
 export function repairJsonSchemaPatternForUnicodeRegExp(pattern: string): string {
-  try {
-    new RegExp(pattern, "u");
+  if (compilesUnicodePattern(pattern)) {
     return pattern;
-  } catch {
-    const repaired = pattern.replace(/\\([^\\])/g, (match, ch: string) => {
-      if (ch === ":" || ch === "/") {
-        return ch;
-      }
-      return match;
-    });
-    try {
-      new RegExp(repaired, "u");
-      return repaired;
-    } catch {
-      return pattern;
-    }
   }
+  const repaired = pattern.replace(/\\([^\\])/g, (match, ch: string) => {
+    if (ch === ":" || ch === "/") {
+      return ch;
+    }
+    return match;
+  });
+  return compilesUnicodePattern(repaired) ? repaired : pattern;
 }
 
 function normalizeSchemaDependencies(value: unknown): unknown {

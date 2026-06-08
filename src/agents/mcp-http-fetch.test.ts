@@ -202,16 +202,7 @@ describe("MCP HTTP fetch helpers", () => {
       status = 400;
       statusText = "Bad Request";
       headers = new Headers({ "content-type": "application/json" });
-      body = new ReadableStream({
-        start(controller) {
-          controller.enqueue(
-            new TextEncoder().encode(
-              '{"error":"invalid_client_metadata","error_description":"bad redirect"}',
-            ),
-          );
-          controller.close();
-        },
-      });
+      body = null;
       get ok() {
         return false;
       }

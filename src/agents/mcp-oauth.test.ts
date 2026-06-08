@@ -2,7 +2,19 @@
 import fs from "node:fs/promises";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
-import { clearMcpOAuthCredentials, createMcpOAuthClientProvider } from "./mcp-oauth.js";
+import { vi } from "vitest";
+import {
+  clearMcpOAuthCredentials,
+  createMcpOAuthClientProvider,
+  isMcpOAuthRedirectRegistrationError,
+  runMcpOAuthLogin,
+} from "./mcp-oauth.js";
+
+const authMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@modelcontextprotocol/sdk/client/auth.js", () => ({
+  auth: authMock,
+}));
 
 describe("MCP OAuth provider", () => {
   it("stores token state under the OpenClaw state directory with restricted permissions", async () => {
@@ -66,14 +78,42 @@ describe("MCP OAuth provider", () => {
     );
   });
 
-  it("defaults OAuth redirect URI to localhost for authorization-server compatibility", () => {
+  it("keeps the legacy loopback redirect as the default for upgrade compatibility", () => {
     const provider = createMcpOAuthClientProvider({
       serverName: "Calendly",
       serverUrl: "https://mcp.calendly.com/",
     });
 
-    expect(provider.clientMetadata.redirect_uris).toEqual(["http://localhost:8989/oauth/callback"]);
-    expect(provider.redirectUrl).toBe("http://localhost:8989/oauth/callback");
+    expect(provider.clientMetadata.redirect_uris).toEqual(["http://127.0.0.1:8989/oauth/callback"]);
+    expect(provider.redirectUrl).toBe("http://127.0.0.1:8989/oauth/callback");
+  });
+
+  it("detects redirect registration failures for localhost fallback", () => {
+    expect(
+      isMcpOAuthRedirectRegistrationError(
+        new Error("HTTP 400: invalid_client_metadata redirect_uri must be localhost"),
+      ),
+    ).toBe(true);
+    expect(isMcpOAuthRedirectRegistrationError(new Error("unauthorized"))).toBe(false);
+  });
+
+  it("retries MCP OAuth login with localhost after redirect registration rejection", async () => {
+    authMock.mockReset();
+    authMock
+      .mockRejectedValueOnce(new Error("invalid_client_metadata: redirect_uri rejected"))
+      .mockResolvedValueOnce("AUTHORIZED");
+
+    await expect(
+      runMcpOAuthLogin({
+        serverName: "Calendly",
+        serverUrl: "https://mcp.calendly.com/",
+      }),
+    ).resolves.toBe("authorized");
+
+    expect(authMock).toHaveBeenCalledTimes(2);
+    expect(authMock.mock.calls[1]?.[0]?.clientMetadata.redirect_uris).toEqual([
+      "http://localhost:8989/oauth/callback",
+    ]);
   });
 
   it("does not start hidden authorization flows without an authorization callback", async () => {
