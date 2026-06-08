@@ -56,6 +56,14 @@ function resolveFetchRequest(input: RequestInfo | URL, init?: RequestInit) {
   };
 }
 
+function ensureGlobalFetchResponse(response: Response): Response {
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
+
 function buildManagedMcpResponse(
   response: Response,
   release: () => Promise<void>,
@@ -63,7 +71,7 @@ function buildManagedMcpResponse(
 ): Response {
   if (!response.body) {
     void release();
-    return response;
+    return ensureGlobalFetchResponse(response);
   }
 
   const source = response.body;
@@ -107,11 +115,13 @@ function buildManagedMcpResponse(
     },
   });
   managedMcpResponseCleanupRegistry.register(wrappedBody, { finalize }, cleanupRegistrationToken);
-  return new Response(wrappedBody, {
-    status: response.status,
-    statusText: response.statusText,
-    headers: response.headers,
-  });
+  return ensureGlobalFetchResponse(
+    new Response(wrappedBody, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    }),
+  );
 }
 
 /** Builds an MCP fetch function with optional TLS/client-cert dispatcher support. */

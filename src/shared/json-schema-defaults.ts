@@ -112,6 +112,27 @@ function normalizeSchemaMap(value: unknown): unknown {
   );
 }
 
+/** Repair JSON Schema regex patterns that fail TypeBox's unicode RegExp compile. */
+export function repairJsonSchemaPatternForUnicodeRegExp(pattern: string): string {
+  try {
+    new RegExp(pattern, "u");
+    return pattern;
+  } catch {
+    const repaired = pattern.replace(/\\([^\\])/g, (match, ch: string) => {
+      if (ch === ":" || ch === "/") {
+        return ch;
+      }
+      return match;
+    });
+    try {
+      new RegExp(repaired, "u");
+      return repaired;
+    } catch {
+      return pattern;
+    }
+  }
+}
+
 function normalizeSchemaDependencies(value: unknown): unknown {
   if (!isRecord(value)) {
     return value;
@@ -173,6 +194,20 @@ function normalizeJsonSchemaNode(schema: unknown): unknown {
     Object.entries(normalizedSchema).map(([key, value]) => {
       if (key === "$dynamicRef" && normalizedSchema.$ref === undefined) {
         return ["$ref", value];
+      }
+      if (key === "pattern" && typeof value === "string") {
+        return [key, repairJsonSchemaPatternForUnicodeRegExp(value)];
+      }
+      if (key === "patternProperties" && isRecord(value)) {
+        return [
+          key,
+          Object.fromEntries(
+            Object.entries(value).map(([pattern, propertySchema]) => [
+              repairJsonSchemaPatternForUnicodeRegExp(pattern),
+              normalizeJsonSchemaNode(propertySchema),
+            ]),
+          ),
+        ];
       }
       if (schemaMapKeywords.has(key)) {
         return [key, normalizeSchemaMap(value)];

@@ -66,6 +66,16 @@ describe("MCP OAuth provider", () => {
     );
   });
 
+  it("defaults OAuth redirect URI to localhost for authorization-server compatibility", () => {
+    const provider = createMcpOAuthClientProvider({
+      serverName: "Calendly",
+      serverUrl: "https://mcp.calendly.com/",
+    });
+
+    expect(provider.clientMetadata.redirect_uris).toEqual(["http://localhost:8989/oauth/callback"]);
+    expect(provider.redirectUrl).toBe("http://localhost:8989/oauth/callback");
+  });
+
   it("does not start hidden authorization flows without an authorization callback", async () => {
     // Normal agent/tool execution must not open browser auth flows implicitly;
     // operators use the explicit mcp login command instead.

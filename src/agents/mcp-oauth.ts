@@ -44,7 +44,7 @@ export type McpOAuthCredentialsStatus = {
   hasLastAuthorizationUrl: boolean;
 };
 
-const DEFAULT_REDIRECT_URL = "http://127.0.0.1:8989/oauth/callback";
+const DEFAULT_REDIRECT_URL = "http://localhost:8989/oauth/callback";
 
 function oauthStorePath(serverName: string, serverUrl: string): string {
   const safeServerName = sanitizeServerName(serverName, new Set<string>());
