@@ -149,15 +149,17 @@ function normalizeSchemaDependencies(value: unknown): unknown {
 }
 
 function normalizePatternProperties(value: Record<string, unknown>): Record<string, unknown> {
-  const normalized: Record<string, unknown> = {};
+  const normalized = new Map<string, unknown>();
   for (const [pattern, propertySchema] of Object.entries(value)) {
     const repairedPattern = repairJsonSchemaPatternForUnicodeRegExp(pattern);
     const repairedSchema = normalizeJsonSchemaNode(propertySchema);
-    const existingSchema = normalized[repairedPattern];
-    normalized[repairedPattern] =
-      existingSchema === undefined ? repairedSchema : { allOf: [existingSchema, repairedSchema] };
+    const existingSchema = normalized.get(repairedPattern);
+    normalized.set(
+      repairedPattern,
+      existingSchema === undefined ? repairedSchema : { allOf: [existingSchema, repairedSchema] },
+    );
   }
-  return normalized;
+  return Object.fromEntries(normalized);
 }
 
 function expandJsonSchemaTypeArray(schema: Record<string, unknown>): Record<string, unknown> {

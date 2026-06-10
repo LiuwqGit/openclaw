@@ -19,4 +19,18 @@ describe("normalizeJsonSchemaForTypeBox", () => {
       },
     });
   });
+
+  it.each(["constructor", "toString", "__proto__"])(
+    "preserves pattern property key %s",
+    (pattern) => {
+      const normalized = normalizeJsonSchemaForTypeBox({
+        type: "object",
+        patternProperties: Object.fromEntries([[pattern, { type: "string" }]]),
+      });
+
+      expect(normalized).toMatchObject({
+        patternProperties: Object.fromEntries([[pattern, { type: "string" }]]),
+      });
+    },
+  );
 });

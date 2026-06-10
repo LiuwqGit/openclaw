@@ -274,14 +274,15 @@ export async function runMcpOAuthLogin(params: {
       !normalizeOptionalString(params.config?.redirectUrl) &&
       isMcpOAuthRedirectRegistrationError(error)
     ) {
-      await writeStore(filePath, { ...store, redirectUrl: LOCALHOST_REDIRECT_URL });
-      return await runMcpOAuthLoginAttempt({
+      const result = await runMcpOAuthLoginAttempt({
         ...params,
         config: {
           ...params.config,
           redirectUrl: LOCALHOST_REDIRECT_URL,
         },
       });
+      await writeStore(filePath, { ...store, redirectUrl: LOCALHOST_REDIRECT_URL });
+      return result;
     }
     throw error;
   }

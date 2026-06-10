@@ -131,6 +131,34 @@ describe("MCP OAuth provider", () => {
     expect(authMock).toHaveBeenCalledOnce();
   });
 
+  it("does not persist localhost when the fallback attempt fails", async () => {
+    await withTempHome(
+      async (home) => {
+        authMock.mockReset();
+        authMock
+          .mockRejectedValueOnce(new Error("invalid_client_metadata: redirect_uri rejected"))
+          .mockRejectedValueOnce(new Error("localhost redirect also rejected"));
+
+        await expect(
+          runMcpOAuthLogin({
+            serverName: "Calendly",
+            serverUrl: "https://mcp.calendly.com/",
+          }),
+        ).rejects.toThrow("localhost redirect also rejected");
+
+        await expect(fs.readdir(`${home}/.openclaw/mcp-oauth`)).rejects.toThrow();
+      },
+      {
+        prefix: "openclaw-mcp-oauth-localhost-failure-",
+        skipSessionCleanup: true,
+        env: {
+          OPENCLAW_CONFIG_PATH: undefined,
+          OPENCLAW_STATE_DIR: undefined,
+        },
+      },
+    );
+  });
+
   it("persists localhost redirect for a later code exchange login", async () => {
     await withTempHome(
       async (home) => {
