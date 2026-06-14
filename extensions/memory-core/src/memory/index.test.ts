@@ -504,6 +504,43 @@ describe("memory index", () => {
     }
   });
 
+  it("keeps status clean when local provider alias resolves to indexed modelPath", async () => {
+    const customModelPath = "/models/custom-embed.gguf";
+    const dbPath = path.join(workspaceDir, "index-local-alias-modelpath-status.sqlite");
+    const indexCfg = createCfg({
+      storePath: dbPath,
+      provider: "local",
+      local: { modelPath: customModelPath },
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const indexManager = await getFreshManager(indexCfg);
+    await indexManager.sync({ reason: "test", force: true });
+    await indexManager.close?.();
+
+    const statusCfg = createCfg({
+      storePath: dbPath,
+      provider: "local-home",
+      fallback: "none",
+      providerAliases: {
+        "local-home": {
+          api: "local",
+          models: [],
+        },
+      },
+      local: { modelPath: customModelPath },
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const statusManager = await getFreshManager(statusCfg, "status");
+    try {
+      const status = statusManager.status();
+
+      expect(status.dirty).toBe(false);
+      expect(status.custom?.indexIdentity).toEqual({ status: "valid" });
+    } finally {
+      await statusManager.close?.();
+    }
+  });
+
   it("keeps status clean when configured provider alias resolves to indexed adapter", async () => {
     const dbPath = path.join(workspaceDir, "index-provider-alias-status.sqlite");
     const oldCfg = createCfg({
