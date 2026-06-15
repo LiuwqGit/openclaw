@@ -53,3 +53,25 @@ export function normalizeMention(text: string, mention: string | undefined): str
 
   return normalizedLines.map((line) => line.text).join("\n");
 }
+
+/** True when an inbound post should be dropped after mention normalization left no body text. */
+export function shouldDropEmptyNormalizedMattermostBody(params: {
+  bodyText: string;
+  wasMentioned: boolean;
+  rawText: string;
+  botUsername?: string;
+}): boolean {
+  if (params.bodyText.trim()) {
+    return false;
+  }
+  if (params.wasMentioned) {
+    return false;
+  }
+  const botUsername = params.botUsername?.trim();
+  if (!botUsername) {
+    return true;
+  }
+  const normalizedRaw = params.rawText.toLowerCase();
+  const normalizedBot = botUsername.toLowerCase();
+  return !normalizedRaw.includes(`@${normalizedBot}`);
+}

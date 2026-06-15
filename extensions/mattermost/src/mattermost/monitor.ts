@@ -69,6 +69,7 @@ import {
   formatInboundFromLabel,
   normalizeMention,
   resolveThreadSessionKeys,
+  shouldDropEmptyNormalizedMattermostBody,
 } from "./monitor-helpers.js";
 import { resolveOncharPrefixes, stripOncharPrefix } from "./monitor-onchar.js";
 import { createMattermostMonitorResources, type MattermostMediaInfo } from "./monitor-resources.js";
@@ -1526,9 +1527,16 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         const bodySource = oncharTriggered ? oncharResult.stripped : rawText;
         const baseText = [bodySource, mediaPlaceholder].filter(Boolean).join("\n").trim();
         const bodyText = normalizeMention(baseText, botUsername);
-        if (!bodyText) {
+        if (
+          shouldDropEmptyNormalizedMattermostBody({
+            bodyText,
+            wasMentioned,
+            rawText,
+            botUsername,
+          })
+        ) {
           logVerboseMessage(
-            `mattermost: drop group message (empty body after normalization channel=${channelId} sender=${senderId})`,
+            `mattermost: drop message (empty body after normalization channel=${channelId} sender=${senderId} wasMentioned=${wasMentioned})`,
           );
           return;
         }

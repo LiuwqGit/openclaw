@@ -1,6 +1,6 @@
 // Mattermost tests cover monitor helpers plugin behavior.
 import { describe, expect, it } from "vitest";
-import { normalizeMention } from "./monitor-helpers.js";
+import { normalizeMention, shouldDropEmptyNormalizedMattermostBody } from "./monitor-helpers.js";
 
 describe("normalizeMention", () => {
   it("returns trimmed text when no mention provided", () => {
@@ -79,5 +79,65 @@ describe("normalizeMention", () => {
     const input = "@echobot\n    code line 1\n    code line 2";
     const result = normalizeMention(input, "echobot");
     expect(result).toBe("    code line 1\n    code line 2");
+  });
+});
+
+describe("shouldDropEmptyNormalizedMattermostBody", () => {
+  it("drops truly empty posts with no bot mention", () => {
+    expect(
+      shouldDropEmptyNormalizedMattermostBody({
+        bodyText: "",
+        wasMentioned: false,
+        rawText: "   ",
+        botUsername: "openclaw",
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps group bare bot mentions after normalization clears the body", () => {
+    const rawText = "@openclaw";
+    expect(normalizeMention(rawText, "openclaw")).toBe("");
+    expect(
+      shouldDropEmptyNormalizedMattermostBody({
+        bodyText: "",
+        wasMentioned: true,
+        rawText,
+        botUsername: "openclaw",
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps direct bare bot mentions when wasMentioned is false", () => {
+    const rawText = "@openclaw";
+    expect(
+      shouldDropEmptyNormalizedMattermostBody({
+        bodyText: "",
+        wasMentioned: false,
+        rawText,
+        botUsername: "openclaw",
+      }),
+    ).toBe(false);
+  });
+
+  it("drops empty posts that mention someone else but not the bot", () => {
+    expect(
+      shouldDropEmptyNormalizedMattermostBody({
+        bodyText: "",
+        wasMentioned: false,
+        rawText: "@alice",
+        botUsername: "openclaw",
+      }),
+    ).toBe(true);
+  });
+
+  it("does not drop when normalized body still has text", () => {
+    expect(
+      shouldDropEmptyNormalizedMattermostBody({
+        bodyText: "hello",
+        wasMentioned: false,
+        rawText: "@openclaw hello",
+        botUsername: "openclaw",
+      }),
+    ).toBe(false);
   });
 });
