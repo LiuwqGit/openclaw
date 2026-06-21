@@ -110,6 +110,10 @@ function clearActiveDeferralPolls(): void {
   activeDeferralPolls.clear();
 }
 
+export function isGatewayRestartPending(): boolean {
+  return pendingRestartPreparing || hasUnconsumedRestartSignal();
+}
+
 export function resetGatewayRestartStateForInProcessRestart(): void {
   clearActiveDeferralPolls();
   clearPendingScheduledRestart();

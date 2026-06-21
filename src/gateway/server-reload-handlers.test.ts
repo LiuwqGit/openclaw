@@ -62,6 +62,7 @@ const hoisted = vi.hoisted(() => ({
   clearCurrentProviderAuthState: vi.fn(() => {}),
   warmCurrentProviderAuthStateOffMainThread: vi.fn(async (_cfg: OpenClawConfig) => {}),
   disposeAllSessionMcpRuntimes: vi.fn(async () => {}),
+  gatewayRestartPending: { value: false },
 }));
 
 vi.mock("../hooks/gmail-watcher.js", () => ({
@@ -146,6 +147,16 @@ vi.mock("../agents/agent-bundle-mcp-tools.js", () => ({
   disposeAllSessionMcpRuntimes: hoisted.disposeAllSessionMcpRuntimes,
 }));
 
+vi.mock("../infra/restart.js", async () => {
+  const actual = await vi.importActual<typeof import("../infra/restart.js")>(
+    "../infra/restart.js",
+  );
+  return {
+    ...actual,
+    isGatewayRestartPending: () => hoisted.gatewayRestartPending.value,
+  };
+});
+
 function createReloadHandlersForTest(
   logReload = { info: vi.fn(), warn: vi.fn() },
   channels?: {
@@ -154,7 +165,6 @@ function createReloadHandlersForTest(
   },
 ) {
   const cron = { start: vi.fn(async () => {}), stop: vi.fn() };
-  const heartbeatRunner = {
     stop: vi.fn(),
     updateConfig: vi.fn(),
   };
@@ -722,6 +732,105 @@ describe("gateway restart deferral preflight", () => {
 
     expect(stopChannel).toHaveBeenCalledWith("discord", undefined, { manual: false });
     expect(startChannel).toHaveBeenCalledWith("discord");
+  });
+
+  it("cancels deferred channel reload when gateway restart becomes pending during deferral polling", async () => {
+    const previousSkipChannels = process.env.OPENCLAW_SKIP_CHANNELS;
+    const previousSkipProviders = process.env.OPENCLAW_SKIP_PROVIDERS;
+    delete process.env.OPENCLAW_SKIP_CHANNELS;
+    delete process.env.OPENCLAW_SKIP_PROVIDERS;
+    hoisted.gatewayRestartPending.value = false;
+    const startChannel = vi.fn(async () => {});
+    const stopChannel = vi.fn(async () => {});
+    const logReload = { info: vi.fn(), warn: vi.fn() };
+    const { applyHotReload } = createGatewayReloadHandlers({
+      deps: {} as never,
+      broadcast: vi.fn(),
+      getState: () => ({
+        hooksConfig: {} as never,
+        hookClientIpConfig: {} as never,
+        heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() } as never,
+        cronState: {
+          cron: { start: vi.fn(async () => {}), stop: vi.fn() },
+          storePath: "/tmp/cron.json",
+          cronEnabled: false,
+        } as never,
+        channelHealthMonitor: null,
+      }),
+      setState: vi.fn(),
+      startChannel,
+      stopChannel,
+      reloadPlugins: vi.fn(
+        async (): Promise<GatewayPluginReloadResult> => ({
+          restartChannels: new Set(),
+          activeChannels: new Set(),
+        }),
+      ),
+      logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      logChannels: { info: vi.fn(), error: vi.fn() },
+      logCron: { error: vi.fn() },
+      logReload,
+      createHealthMonitor: () => null,
+    });
+    hoisted.activeEmbeddedRunCount.value = 1;
+    vi.useFakeTimers();
+    const reloadPromise = applyHotReload(
+      {
+        changedPaths: ["channels.discord.token"],
+        restartGateway: false,
+        restartReasons: [],
+        hotReasons: ["channels.discord.token"],
+        reloadHooks: false,
+        restartGmailWatcher: false,
+        restartCron: false,
+        restartHeartbeat: false,
+        restartHealthMonitor: false,
+        reloadPlugins: false,
+        restartChannels: new Set(["discord"]),
+        disposeMcpRuntimes: false,
+        noopPaths: [],
+      },
+      {
+        gateway: { reload: { deferralTimeoutMs: 0 } },
+        channels: { discord: { token: "token" } },
+      },
+    );
+    try {
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(500);
+      expect(stopChannel).not.toHaveBeenCalled();
+      expect(startChannel).not.toHaveBeenCalled();
+      expect(logReload.warn).toHaveBeenCalledWith(
+        expect.stringContaining("deferring until 1"),
+      );
+
+      // Simulate gateway restart becoming pending during deferral
+      hoisted.gatewayRestartPending.value = true;
+      await vi.advanceTimersByTimeAsync(500);
+      await reloadPromise;
+    } finally {
+      hoisted.activeEmbeddedRunCount.value = 0;
+      hoisted.gatewayRestartPending.value = false;
+      await vi.advanceTimersByTimeAsync(500).catch(() => {});
+      vi.useRealTimers();
+      await reloadPromise.catch(() => {});
+      if (previousSkipChannels === undefined) {
+        delete process.env.OPENCLAW_SKIP_CHANNELS;
+      } else {
+        process.env.OPENCLAW_SKIP_CHANNELS = previousSkipChannels;
+      }
+      if (previousSkipProviders === undefined) {
+        delete process.env.OPENCLAW_SKIP_PROVIDERS;
+      } else {
+        process.env.OPENCLAW_SKIP_PROVIDERS = previousSkipProviders;
+      }
+    }
+
+    expect(stopChannel).not.toHaveBeenCalled();
+    expect(startChannel).not.toHaveBeenCalled();
+    expect(logReload.info).toHaveBeenCalledWith(
+      expect.stringContaining("gateway restart is now in progress"),
+    );
   });
 
   it("logs active task run ids before waiting and when forcing after timeout", async () => {

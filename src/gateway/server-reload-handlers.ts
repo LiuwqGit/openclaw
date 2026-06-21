@@ -24,6 +24,7 @@ import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import {
   deferGatewayRestartUntilIdle,
   emitGatewayRestart,
+  isGatewayRestartPending,
   resolveGatewayRestartDeferralTimeoutMs,
   setGatewaySigusr1RestartPolicy,
 } from "../infra/restart.js";
@@ -287,6 +288,12 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     if (initial.totalActive <= 0) {
       return;
     }
+    if (isGatewayRestartPending()) {
+      params.logReload.info(
+        `config change requires channel reload (${[...channels].join(", ")}) — skipping because gateway restart is pending`,
+      );
+      return;
+    }
     const channelNames = [...channels].join(", ");
     const initialDetails = formatActiveDetails(initial);
     params.logReload.warn(
@@ -304,6 +311,12 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         const timer = setTimeout(resolve, CHANNEL_RELOAD_DEFERRAL_POLL_MS);
         timer.unref?.();
       });
+      if (isGatewayRestartPending()) {
+        params.logReload.info(
+          `channel reload deferred — skipping because gateway restart is now in progress`,
+        );
+        return;
+      }
       const current = getActiveCounts();
       if (current.totalActive <= 0) {
         params.logReload.info("active operations and replies completed; reloading channels now");
@@ -495,6 +508,12 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         }
         const restartChannel = async (name: ChannelKind) => {
           if (plan.reloadPlugins && activePluginChannelsAfterReload?.has(name) === false) {
+            return;
+          }
+          if (isGatewayRestartPending()) {
+            params.logChannels.info(
+              `skipping ${name} channel restart — gateway restart is in progress`,
+            );
             return;
           }
           params.logChannels.info(`restarting ${name} channel`);
