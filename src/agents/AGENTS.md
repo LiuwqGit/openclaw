@@ -33,7 +33,39 @@ signals, not just runner noise.
 
 ## Verification
 
-- For agent performance changes, record seconds and RSS before/after in the
+- For agent performance changes, record seconds and RSS before and after in the
   handoff or benchmark report.
 - If the change touches lazy-loading, plugin runtime imports, or bundled
   artifacts, run `pnpm build`.
+
+## Sub-agent Launch Authorization (user-explicit vs. resolved default)
+
+When forwarding a sub-agent model/provider to the gateway `agent` call (or to
+any privileged dispatch surface that escalates scope or internal
+authorization), gate the escalation on the **user-explicit** trigger, not on
+whatever the planner happens to resolve.
+
+Concrete anchors in this area:
+
+- `src/agents/subagent-spawn.ts:1565` — child gateway `agent` launch call.
+- `src/agents/subagent-spawn-plan.ts:resolveSubagentModelAndThinkingPlan` —
+  always returns a value (default model, inherited override, or explicit user
+  input); `resolvedModel` truthiness is not proof of an explicit request.
+- `src/gateway/server-methods/agent.ts:1131` — gateway rejects `provider` /
+  `model` request overrides unless the caller has admin scope or internal
+  `allowModelOverride`.
+- `src/gateway/server-plugins.ts:144` — plugin sub-agent path: `allowModelOverride`
+  is the same authorization seam from the plugin side.
+
+The trigger that justifies admin scope or a synthetic admin client is the
+caller's explicit param (e.g. `params.model?.trim()`, a non-empty
+`modelOverride?.trim()` from the tool call, a non-empty CLI flag). Default
+model, configured model, or inherited override are **not** explicit. Forward
+the planner's `resolvedModel` only when the explicit param was truthy; do not
+forward when the planner resolved a default. New launch/override paths in
+this directory must follow the same gate — if a path escalates scope or
+authorization based on a planner value, name the explicit trigger in the spec's
+"证明可行性评估" before opening the PR. The ClawSweeper review will treat
+"default spawns receive override authorization" and "in-process dispatch
+forces a synthetic admin client" as P1 merge blockers when this gate is on
+the planner output.
