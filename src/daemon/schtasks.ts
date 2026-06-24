@@ -1127,6 +1127,13 @@ async function shouldFallbackScheduledTaskLaunch(params: {
         .join("|"),
     };
   };
+  const manageGatewayPort = shouldManageGatewayListenerPort(params.env);
+  const configuredPort = resolveConfiguredGatewayPort(params.env);
+  const baselineGatewayPids =
+    manageGatewayPort && configuredPort
+      ? findVerifiedGatewayListenerPidsOnPortSync(configuredPort)
+      : [];
+
 
   const hasLaunchEvidence = async (): Promise<boolean> => {
     const command = await readScheduledTaskCommand(params.env).catch(() => null);
@@ -1137,8 +1144,12 @@ async function shouldFallbackScheduledTaskLaunch(params: {
       resolveConfiguredGatewayPort(params.env);
     const manageGatewayPort = shouldManageGatewayListenerPort(params.env);
     if (manageGatewayPort && taskPort) {
-      const listenerPids = await resolveScheduledTaskGatewayListenerPids(taskPort);
-      if (listenerPids.length > 0) {
+      const listenerPids = findVerifiedGatewayListenerPidsOnPortSync(taskPort);
+      if (baselineGatewayPids.length > 0) {
+        if (listenerPids.some((pid) => !baselineGatewayPids.includes(pid))) {
+          return true;
+        }
+      } else if (listenerPids.length > 0) {
         return true;
       }
     }
