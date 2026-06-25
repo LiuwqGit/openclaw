@@ -723,6 +723,7 @@ export async function runGatewayLoop(params: {
     gatewayLog.info("signal SIGUSR1 received");
     void (async () => {
       const {
+        abortPendingChannelReloads,
         consumeGatewayRestartIntentPayloadSync,
         consumeGatewaySigusr1RestartIntent,
         consumeGatewaySigusr1RestartAuthorization,
@@ -734,6 +735,7 @@ export async function runGatewayLoop(params: {
       const restartIntent = consumeGatewayRestartIntentPayloadSync();
       if (restartIntent) {
         if (consumeGatewaySigusr1RestartAuthorization()) {
+          abortPendingChannelReloads();
           markGatewaySigusr1RestartHandled();
         }
         request("restart", "SIGUSR1", restartIntent.reason ?? "gateway.restart", restartIntent);
@@ -741,6 +743,7 @@ export async function runGatewayLoop(params: {
       }
       const authorized = consumeGatewaySigusr1RestartAuthorization();
       if (!authorized) {
+        abortPendingChannelReloads();
         markGatewaySigusr1RestartHandled();
         if (!isGatewaySigusr1RestartExternallyAllowed()) {
           gatewayLog.warn(
@@ -762,6 +765,7 @@ export async function runGatewayLoop(params: {
         scheduleGatewaySigusr1Restart({ delayMs: 0, reason: "SIGUSR1" });
         return;
       }
+      abortPendingChannelReloads();
       const sigusr1RestartIntent = consumeGatewaySigusr1RestartIntent();
       const restartReason = peekGatewaySigusr1RestartReason();
       markGatewaySigusr1RestartHandled();

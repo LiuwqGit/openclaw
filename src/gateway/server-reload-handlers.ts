@@ -29,6 +29,23 @@ import {
   setGatewaySigusr1RestartPolicy,
 } from "../infra/restart.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
+
+// Durable flag that survives the transient SIGUSR1 restart signal window.
+// Set by abortPendingChannelReloads() (called from the SIGUSR1 handler BEFORE
+// markGatewaySigusr1RestartHandled consumes the transient signal), so the
+// deferred channel reload sees it even after isGatewayRestartPending() has
+// returned false. Reset at the top of createGatewayReloadHandlers.
+let pendingChannelReloadAborted = false;
+
+/** Signal any in-progress deferred channel reload to abort immediately.
+ *  Call from the SIGUSR1 handler before markGatewaySigusr1RestartHandled(). */
+export function abortPendingChannelReloads(): void {
+  pendingChannelReloadAborted = true;
+}
+
+function isChannelReloadCancelled(): boolean {
+  return isGatewayRestartPending() || pendingChannelReloadAborted;
+}
 import {
   clearSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshot,
@@ -209,6 +226,7 @@ type ManagedGatewayConfigReloaderParams = Omit<
 };
 
 export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) {
+  pendingChannelReloadAborted = false;
   const getActiveCounts = () => {
     const queueSize = getTotalQueueSize();
     const pendingReplies = getTotalPendingReplies();
@@ -288,7 +306,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     if (initial.totalActive <= 0) {
       return;
     }
-    if (isGatewayRestartPending()) {
+    if (isChannelReloadCancelled()) {
       params.logReload.info(
         `config change requires channel reload (${[...channels].join(", ")}) — skipping because gateway restart is pending`,
       );
@@ -311,7 +329,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         const timer = setTimeout(resolve, CHANNEL_RELOAD_DEFERRAL_POLL_MS);
         timer.unref?.();
       });
-      if (isGatewayRestartPending()) {
+      if (isChannelReloadCancelled()) {
         params.logReload.info(
           `channel reload deferred — skipping because gateway restart is now in progress`,
         );
@@ -510,7 +528,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           if (plan.reloadPlugins && activePluginChannelsAfterReload?.has(name) === false) {
             return;
           }
-          if (isGatewayRestartPending()) {
+          if (isChannelReloadCancelled()) {
             params.logChannels.info(
               `skipping ${name} channel restart — gateway restart is in progress`,
             );
@@ -519,6 +537,15 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           params.logChannels.info(`restarting ${name} channel`);
           if (!channelsStoppedBeforePluginReload.has(name)) {
             await params.stopChannel(name, undefined, { manual: false });
+          }
+          // Recheck cancellation after stop: SIGUSR1 may have been accepted
+          // while stop was in flight. Starting the channel would collide with
+          // the in-process restart's own startChannel on the same port.
+          if (isChannelReloadCancelled()) {
+            params.logChannels.info(
+              `skipping ${name} channel start after stop — gateway restart is in progress`,
+            );
+            return;
           }
           await params.startChannel(name);
         };
