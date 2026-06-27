@@ -359,10 +359,21 @@ function resolveSimpleBedrockOptions(
 ): BedrockOptions {
   const base = buildBaseOptions(model, options, undefined);
   if (usesClaudeFable5BedrockContract(model)) {
+    const reasoning = options?.reasoning ?? "high";
+    const adjusted = adjustMaxTokensForThinking(
+      base.maxTokens,
+      model.maxTokens,
+      reasoning,
+      options?.thinkingBudgets,
+    );
     return {
       ...base,
-      reasoning: options?.reasoning ?? "high",
-      thinkingBudgets: options?.thinkingBudgets,
+      maxTokens: adjusted.maxTokens,
+      reasoning,
+      thinkingBudgets: {
+        ...options?.thinkingBudgets,
+        [clampReasoning(reasoning)!]: adjusted.thinkingBudget,
+      },
     } satisfies BedrockOptions;
   }
   if (!options?.reasoning) {
@@ -378,10 +389,20 @@ function resolveSimpleBedrockOptions(
 
   if (isAnthropicClaudeModel(model)) {
     if (supportsAdaptiveThinking(model)) {
+      const adjusted = adjustMaxTokensForThinking(
+        base.maxTokens,
+        model.maxTokens,
+        options.reasoning,
+        options.thinkingBudgets,
+      );
       return {
         ...base,
+        maxTokens: adjusted.maxTokens,
         reasoning: options.reasoning,
-        thinkingBudgets: options.thinkingBudgets,
+        thinkingBudgets: {
+          ...options.thinkingBudgets,
+          [clampReasoning(options.reasoning)!]: adjusted.thinkingBudget,
+        },
       } satisfies BedrockOptions;
     }
 
