@@ -254,6 +254,54 @@ describe("Bedrock thinking effort mapping", () => {
       ),
     ).toBe("xhigh");
   });
+
+  it("derives maxTokens from model.maxTokens for adaptive-thinking Claude models", () => {
+    const model = bedrockModel({
+      id: "us.anthropic.claude-opus-4-8",
+      name: "Claude Opus 4.8",
+      maxTokens: 200_000,
+    });
+    const options = testing.resolveSimpleBedrockOptions(model, {
+      reasoning: "high",
+    });
+
+    // adaptive-thinking branch must call adjustMaxTokensForThinking,
+    // which uses model.maxTokens (200k) when no explicit caller cap is set.
+    expect(options.maxTokens).toBeGreaterThan(4096);
+    expect(options.maxTokens).toBe(200_000);
+    expect(options.thinkingBudgets?.high).toBeGreaterThan(0);
+  });
+
+  it("honors explicit caller maxTokens even for adaptive-thinking models", () => {
+    const model = bedrockModel({
+      id: "us.anthropic.claude-opus-4-8",
+      name: "Claude Opus 4.8",
+      maxTokens: 200_000,
+    });
+    const options = testing.resolveSimpleBedrockOptions(model, {
+      reasoning: "high",
+      maxTokens: 8000,
+    });
+
+    // Explicit caller cap (8000 + thinking budget fits inside model cap 200k)
+    expect(options.maxTokens).toBeGreaterThan(4096);
+    expect(options.maxTokens).toBeLessThan(200_000);
+  });
+
+  it("handles adaptive thinking with medium effort correctly", () => {
+    const model = bedrockModel({
+      id: "us.anthropic.claude-opus-4-8",
+      name: "Claude Opus 4.8",
+      maxTokens: 200_000,
+    });
+    const options = testing.resolveSimpleBedrockOptions(model, {
+      reasoning: "medium",
+    });
+
+    expect(options.maxTokens).toBe(200_000);
+    expect(options.reasoning).toBe("medium");
+    expect(options.thinkingBudgets?.medium).toBeGreaterThan(0);
+  });
 });
 
 describe("Bedrock Fable contract", () => {
@@ -314,6 +362,30 @@ describe("Bedrock Fable contract", () => {
       },
       additionalModelResponseFieldPaths: ["/stop_details"],
     });
+  });
+
+  it("derives maxTokens from model.maxTokens for Fable 5 option resolution", () => {
+    const model = fableModel();
+    const options = testing.resolveSimpleBedrockOptions(model, { reasoning: "high" });
+
+    // Fable 5 branch must call adjustMaxTokensForThinking which uses
+    // model.maxTokens (128_000) when no explicit caller cap is set.
+    expect(options.maxTokens).toBeGreaterThan(4096);
+    expect(options.maxTokens).toBe(128_000);
+    expect(options.reasoning).toBe("high");
+    expect(options.thinkingBudgets?.high).toBeGreaterThan(0);
+  });
+
+  it("honors explicit caller maxTokens for Fable 5", () => {
+    const model = fableModel();
+    const options = testing.resolveSimpleBedrockOptions(model, {
+      reasoning: "high",
+      maxTokens: 16000,
+    });
+
+    // 16000 + thinking budget (16384) fits inside 128_000
+    expect(options.maxTokens).toBeGreaterThan(4096);
+    expect(options.maxTokens).toBeLessThan(128_000);
   });
 
   it("preserves explicit tool disabling", async () => {
@@ -492,7 +564,7 @@ describe("Bedrock canonical Claude aliases", () => {
       const command = send.mock.calls[0]?.[0] as { input?: Record<string, unknown> };
       expect(command.input).toMatchObject({
         modelId: "production-claude",
-        inferenceConfig: {},
+        inferenceConfig: { maxTokens: expect.any(Number) },
         additionalModelRequestFields: {
           thinking: { type: "adaptive", display: "summarized" },
           output_config: { effort: expectedEffort },
