@@ -741,7 +741,9 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
       wrapper({ provider: "opencode-go", id: "glm-4.6" } as any, {} as any, {} as any),
     );
     expect(downstream).toBeDefined();
-    if (!downstream) return;
+      if (!downstream) {
+        return;
+      }
 
     const received: AnyEvent[] = [];
     const consumer = (async () => {
