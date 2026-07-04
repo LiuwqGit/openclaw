@@ -2940,7 +2940,7 @@ export async function runCodexAppServerAttempt(
   let activeTurnId = "";
   let abortListener: (() => void) | undefined;
   let closeCleanup: (() => void) | undefined;
-  let handle: Record<string, unknown> | undefined;
+  let handle: Parameters<typeof setActiveEmbeddedRun>[1] | undefined;
   let freezeRunTerminalOutcome: (() => void) | undefined;
   try {
     turnIdRef.current = turn.turn.id;
