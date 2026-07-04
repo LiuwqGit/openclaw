@@ -32,7 +32,7 @@ function parseChoice(raw: string, options?: { allowStyle?: boolean }): SlackChoi
   const doubleColonIndex = trimmed.indexOf("::");
   if (doubleColonIndex !== -1) {
     // Explicit syntax: Label::value[:style]
-    let label = trimmed.slice(0, doubleColonIndex).trim();
+    const label = trimmed.slice(0, doubleColonIndex).trim();
     let value = trimmed.slice(doubleColonIndex + 2).trim();
 
     if (!label || !value) {
