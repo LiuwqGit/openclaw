@@ -27,32 +27,50 @@ function parseChoice(raw: string, options?: { allowStyle?: boolean }): SlackChoi
     return null;
   }
 
-  // Support both legacy single-colon and new double-colon syntax
-  // New syntax: "Label::value[:style]" allows colons in labels (e.g., times like "9:00")
-  // Legacy syntax: "Label:value[:style]" for backward compatibility
-
-  let label: string;
-  let value: string;
-
-  // Try double-colon separator first (new explicit syntax)
+  // Support explicit double-colon syntax for unambiguous parsing
+  // "Label::value[:style]" - allows colons in labels (e.g., times like "9:00")
   const doubleColonIndex = trimmed.indexOf("::");
   if (doubleColonIndex !== -1) {
-    // New syntax: split at ::
-    label = trimmed.slice(0, doubleColonIndex).trim();
-    value = trimmed.slice(doubleColonIndex + 2).trim();
-  } else {
-    // Legacy syntax: split at first colon (preserves existing behavior)
-    const delimiter = trimmed.indexOf(":");
-    if (delimiter === -1) {
-      return {
-        label: trimmed,
-        value: trimmed,
-      };
+    // Explicit syntax: Label::value[:style]
+    let label = trimmed.slice(0, doubleColonIndex).trim();
+    let value = trimmed.slice(doubleColonIndex + 2).trim();
+
+    if (!label || !value) {
+      return null;
     }
-    label = trimmed.slice(0, delimiter).trim();
-    value = trimmed.slice(delimiter + 1).trim();
+
+    // Handle style suffix
+    if (options?.allowStyle) {
+      const styleDelimiter = value.lastIndexOf(":");
+      if (styleDelimiter !== -1) {
+        const maybeStyle = normalizeLowercaseStringOrEmpty(value.slice(styleDelimiter + 1));
+        if (
+          maybeStyle === "primary" ||
+          maybeStyle === "secondary" ||
+          maybeStyle === "success" ||
+          maybeStyle === "danger"
+        ) {
+          const unstyledValue = value.slice(0, styleDelimiter).trim();
+          if (unstyledValue) {
+            value = unstyledValue;
+            return { label, value, style: maybeStyle };
+          }
+        }
+      }
+    }
+    return { label, value };
   }
 
+  // Legacy syntax: Label:value[:style] - preserves existing behavior (split at first colon)
+  const delimiter = trimmed.indexOf(":");
+  if (delimiter === -1) {
+    return {
+      label: trimmed,
+      value: trimmed,
+    };
+  }
+  const label = trimmed.slice(0, delimiter).trim();
+  let value = trimmed.slice(delimiter + 1).trim();
   if (!label || !value) {
     return null;
   }
