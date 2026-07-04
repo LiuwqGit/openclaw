@@ -26,37 +26,44 @@ function parseChoice(raw: string, options?: { allowStyle?: boolean }): SlackChoi
   if (!trimmed) {
     return null;
   }
-  const delimiter = trimmed.indexOf(":");
-  if (delimiter === -1) {
-    return {
-      label: trimmed,
-      value: trimmed,
-    };
-  }
-  const label = trimmed.slice(0, delimiter).trim();
-  let value = trimmed.slice(delimiter + 1).trim();
-  if (!label || !value) {
-    return null;
-  }
+
   let style: SlackChoice["style"];
+  let workingString = trimmed;
+
+  // First, strip optional style suffix (e.g., ":primary", ":danger") from the end
   if (options?.allowStyle) {
-    const styleDelimiter = value.lastIndexOf(":");
+    const styleDelimiter = workingString.lastIndexOf(":");
     if (styleDelimiter !== -1) {
-      const maybeStyle = normalizeLowercaseStringOrEmpty(value.slice(styleDelimiter + 1));
+      const maybeStyle = normalizeLowercaseStringOrEmpty(workingString.slice(styleDelimiter + 1));
       if (
         maybeStyle === "primary" ||
         maybeStyle === "secondary" ||
         maybeStyle === "success" ||
         maybeStyle === "danger"
       ) {
-        const unstyledValue = value.slice(0, styleDelimiter).trim();
-        if (unstyledValue) {
-          value = unstyledValue;
+        const potentialLabel = workingString.slice(0, styleDelimiter).trim();
+        if (potentialLabel) {
+          workingString = potentialLabel;
           style = maybeStyle;
         }
       }
     }
   }
+
+  // Now split the remaining string at the last colon to support labels containing colons (e.g., times)
+  const delimiter = workingString.lastIndexOf(":");
+  if (delimiter === -1) {
+    return {
+      label: workingString,
+      value: workingString,
+    };
+  }
+  const label = workingString.slice(0, delimiter).trim();
+  const value = workingString.slice(delimiter + 1).trim();
+  if (!label || !value) {
+    return null;
+  }
+
   return style ? { label, value, style } : { label, value };
 }
 

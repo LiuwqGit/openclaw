@@ -94,4 +94,74 @@ describe("compileSlackInteractiveReplies", () => {
     );
     expect(result.interactive).toBeUndefined();
   });
+
+  it("handles button labels containing colons (e.g., times) by splitting at the last colon", () => {
+    const result = compileSlackInteractiveReplies({
+      text: "[[slack_buttons: Fr 10.07. 9:00:slot_fr_0900, Mo 13.07. 10:45:slot_mo_1045]]",
+    });
+
+    expect(result.interactive).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Fr 10.07. 9:00",
+              value: "slot_fr_0900",
+            },
+            {
+              label: "Mo 13.07. 10:45",
+              value: "slot_mo_1045",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("preserves style suffix when value contains a colon-like pattern", () => {
+    // Format is Label:value:style, so "Morning Meeting:slot_9am:primary" should work
+    const result = compileSlackInteractiveReplies({
+      text: "[[slack_buttons: Morning Meeting at 9:00:slot_9am:primary]]",
+    });
+
+    expect(result.interactive).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Morning Meeting at 9:00",
+              value: "slot_9am",
+              style: "primary",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("handles single-colon entries unchanged for backward compatibility", () => {
+    const result = compileSlackInteractiveReplies({
+      text: "[[slack_buttons: Retry:retry, Ignore:ignore]]",
+    });
+
+    expect(result.interactive).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Retry",
+              value: "retry",
+            },
+            {
+              label: "Ignore",
+              value: "ignore",
+            },
+          ],
+        },
+      ],
+    });
+  });
 });
