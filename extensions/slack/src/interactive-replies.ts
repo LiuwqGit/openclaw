@@ -27,74 +27,43 @@ function parseChoice(raw: string, options?: { allowStyle?: boolean }): SlackChoi
     return null;
   }
 
-  // Support explicit double-colon syntax for unambiguous parsing
-  // "Label::value[:style]" - allows colons in labels (e.g., times like "9:00")
-  const doubleColonIndex = trimmed.indexOf("::");
-  if (doubleColonIndex !== -1) {
-    // Explicit syntax: Label::value[:style]
-    const label = trimmed.slice(0, doubleColonIndex).trim();
-    let value = trimmed.slice(doubleColonIndex + 2).trim();
+  // Step 1: 先尝试剥离可选的风格后缀（:primary|secondary|success|danger）
+  let working = trimmed;
+  let style: SlackChoice["style"] | undefined;
 
-    if (!label || !value) {
-      return null;
-    }
-
-    // Handle style suffix
-    if (options?.allowStyle) {
-      const styleDelimiter = value.lastIndexOf(":");
-      if (styleDelimiter !== -1) {
-        const maybeStyle = normalizeLowercaseStringOrEmpty(value.slice(styleDelimiter + 1));
-        if (
-          maybeStyle === "primary" ||
-          maybeStyle === "secondary" ||
-          maybeStyle === "success" ||
-          maybeStyle === "danger"
-        ) {
-          const unstyledValue = value.slice(0, styleDelimiter).trim();
-          if (unstyledValue) {
-            value = unstyledValue;
-            return { label, value, style: maybeStyle };
-          }
-        }
-      }
-    }
-    return { label, value };
-  }
-
-  // Legacy syntax: Label:value[:style] - preserves existing behavior (split at first colon)
-  const delimiter = trimmed.indexOf(":");
-  if (delimiter === -1) {
-    return {
-      label: trimmed,
-      value: trimmed,
-    };
-  }
-  const label = trimmed.slice(0, delimiter).trim();
-  let value = trimmed.slice(delimiter + 1).trim();
-  if (!label || !value) {
-    return null;
-  }
-
-  let style: SlackChoice["style"];
   if (options?.allowStyle) {
-    const styleDelimiter = value.lastIndexOf(":");
+    const styleDelimiter = working.lastIndexOf(":");
     if (styleDelimiter !== -1) {
-      const maybeStyle = normalizeLowercaseStringOrEmpty(value.slice(styleDelimiter + 1));
+      const maybeStyle = normalizeLowercaseStringOrEmpty(working.slice(styleDelimiter + 1));
       if (
         maybeStyle === "primary" ||
         maybeStyle === "secondary" ||
         maybeStyle === "success" ||
         maybeStyle === "danger"
       ) {
-        const unstyledValue = value.slice(0, styleDelimiter).trim();
-        if (unstyledValue) {
-          value = unstyledValue;
+        const unstyled = working.slice(0, styleDelimiter).trim();
+        if (unstyled) {
+          working = unstyled;
           style = maybeStyle;
         }
       }
     }
   }
-  return style ? { label, value, style } : { label, value };
+
+  // Step 2: 在剥离风格后的字符串上，按最后一个冒号切分 label/value
+  const delimiter = working.lastIndexOf(":");
+  if (delimiter === -1) {
+    // 没有冒号：label 与 value 相同（与原逻辑保持一致）
+    return { label: working, value: working, ...(style ? { style } : {}) };
+  }
+
+  const label = working.slice(0, delimiter).trim();
+  const value = working.slice(delimiter + 1).trim();
+  if (!label || !value) {
+    return null;
+  }
+
+  return { label, value, ...(style ? { style } : {}) };
 }
 
 function parseChoices(
