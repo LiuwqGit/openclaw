@@ -748,12 +748,6 @@ export async function runCodexAppServerAttempt(
             config: params.config,
           }).modelProvider,
           signal: runAbortController.signal,
-      onPreToolUseFailure: (failure) => {
-        const projector = projectorRef.current;
-        if (projector) {
-          projector.recordNativeToolPreToolUseFailure(failure);
-        }
-      },
 
         })
       : "unsupported";
@@ -1512,6 +1506,12 @@ export async function runCodexAppServerAttempt(
       startupTimeoutMs,
       turnStartTimeoutMs: params.timeoutMs,
       signal: runAbortController.signal,
+      onPreToolUseFailure: (failure) => {
+        const projector = projectorRef.current;
+        if (projector) {
+          projector.recordNativeToolPreToolUseFailure(failure);
+        }
+      },
     });
     return {
       configPatch: nativeHookRelay
@@ -2996,7 +2996,7 @@ export async function runCodexAppServerAttempt(
           nativeHookRelay.shouldRelayEvent("post_tool_use"),
         trajectoryRecorder,
         onNativeToolResultRecorded: maybeAnnounceFastModeAutoOff,
-        runAbortSignal: runAbortController.signal,
+      },
     );
     if (
       isTerminalTurnStatus(turn.turn.status) ||
