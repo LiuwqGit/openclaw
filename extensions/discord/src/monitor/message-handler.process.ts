@@ -301,6 +301,10 @@ async function processDiscordMessageInner(
     messageId: message.id,
     reactionContext: ackReactionContext,
   });
+  const statusReactionTiming = {
+    ...DEFAULT_TIMING,
+    ...cfg.messages?.statusReactions?.timing,
+  };
   let statusReactionTarget = `${messageChannelId}/${message.id}`;
   let statusReactionsActive = statusReactionsEnabled;
   let statusReactions = createStatusReactionController({
@@ -308,7 +312,7 @@ async function processDiscordMessageInner(
     adapter: discordAdapter,
     initialEmoji: ackReaction,
     emojis: cfg.messages?.statusReactions?.emojis,
-    timing: cfg.messages?.statusReactions?.timing,
+    timing: statusReactionTiming,
     onError: (err) => {
       logAckFailure({
         log: logVerbose,
@@ -318,7 +322,6 @@ async function processDiscordMessageInner(
       });
     },
   });
-  const resolvedTiming = { ...DEFAULT_TIMING, ...cfg.messages?.statusReactions?.timing };
   const resolveTrackedReactionChannelId = async (
     args: Record<string, unknown>,
   ): Promise<string> => {
@@ -394,7 +397,7 @@ async function processDiscordMessageInner(
       adapter: trackedAdapter,
       initialEmoji: emoji,
       emojis: cfg.messages?.statusReactions?.emojis,
-      timing: cfg.messages?.statusReactions?.timing,
+      timing: statusReactionTiming,
       onError: (err) => {
         logAckFailure({
           log: logVerbose,
@@ -1333,8 +1336,8 @@ async function processDiscordMessageInner(
           void (async () => {
             await sleep(
               dispatchError || finalDeliveryFailed
-                ? resolvedTiming.errorHoldMs
-                : resolvedTiming.doneHoldMs,
+                ? statusReactionTiming.errorHoldMs
+                : statusReactionTiming.doneHoldMs,
             );
             await statusReactions.clear();
           })();

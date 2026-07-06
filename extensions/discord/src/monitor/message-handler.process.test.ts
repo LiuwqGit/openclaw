@@ -1256,90 +1256,69 @@ describe("processDiscordMessage ack reactions", () => {
     });
   });
 
-  it("uses configured statusReactions.timing.doneHoldMs/errorHoldMs instead of DEFAULT_TIMING", async () => {
-    vi.useFakeTimers();
-    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-      await params?.replyOptions?.onReasoningStream?.();
-      return createNoQueuedDispatchResult();
-    });
+  it.each([
+    {
+      outcome: "done",
+      timingKey: "doneHoldMs",
+      configuredHoldMs: 2_000,
+      terminalEmoji: DEFAULT_EMOJIS.done,
+    },
+    {
+      outcome: "error",
+      timingKey: "errorHoldMs",
+      configuredHoldMs: 4_000,
+      terminalEmoji: DEFAULT_EMOJIS.error,
+    },
+  ] as const)(
+    "uses configured statusReactions.timing.$timingKey for $outcome cleanup",
+    async ({ outcome, timingKey, configuredHoldMs, terminalEmoji }) => {
+      vi.useFakeTimers();
+      dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+        if (outcome === "done") {
+          await params?.replyOptions?.onReasoningStream?.();
+          return createNoQueuedDispatchResult();
+        }
+        return {
+          queuedFinal: false,
+          counts: { final: 0, tool: 0, block: 0 },
+          failedCounts: { final: 1 },
+        };
+      });
 
-    const ctx = await createAutomaticSourceDeliveryContext({
-      cfg: {
-        messages: {
-          ackReaction: "👀",
-          removeAckAfterReply: true,
-          statusReactions: {
-            timing: { doneHoldMs: 2_000, debounceMs: 0 },
+      const ctx = await createAutomaticSourceDeliveryContext({
+        cfg: {
+          messages: {
+            ackReaction: "👀",
+            removeAckAfterReply: true,
+            statusReactions: {
+              timing: { [timingKey]: configuredHoldMs, debounceMs: 0 },
+            },
           },
+          session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
         },
-        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
-      },
-    });
+      });
 
-    await runProcessDiscordMessage(ctx);
+      await runProcessDiscordMessage(ctx);
+      expect(getReactionEmojis()).toContain(terminalEmoji);
 
-    expect(getReactionEmojis()).toContain(DEFAULT_EMOJIS.done);
+      await vi.advanceTimersByTimeAsync(configuredHoldMs - 1);
+      expect(sendMocks.removeReactionDiscord).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        terminalEmoji,
+        expect.anything(),
+      );
 
-    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.doneHoldMs);
-    expect(sendMocks.removeReactionDiscord).not.toHaveBeenCalledWith(
-      expect.anything(),
-      expect.anything(),
-      DEFAULT_EMOJIS.done,
-      expect.anything(),
-    );
-
-    await vi.advanceTimersByTimeAsync(2_000 - DEFAULT_TIMING.doneHoldMs);
-    await vi.runAllTimersAsync();
-    expect(sendMocks.removeReactionDiscord).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.anything(),
-      DEFAULT_EMOJIS.done,
-      expect.anything(),
-    );
-  });
-
-  it("uses configured statusReactions.timing.errorHoldMs for error terminal cleanup", async () => {
-    vi.useFakeTimers();
-    dispatchInboundMessage.mockResolvedValueOnce({
-      queuedFinal: false,
-      counts: { final: 0, tool: 0, block: 0 },
-      failedCounts: { final: 1 },
-    });
-
-    const ctx = await createAutomaticSourceDeliveryContext({
-      cfg: {
-        messages: {
-          ackReaction: "👀",
-          removeAckAfterReply: true,
-          statusReactions: {
-            timing: { errorHoldMs: 4_000, debounceMs: 0 },
-          },
-        },
-        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
-      },
-    });
-
-    await runProcessDiscordMessage(ctx);
-
-    expect(getReactionEmojis()).toContain(DEFAULT_EMOJIS.error);
-
-    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.errorHoldMs);
-    expect(sendMocks.removeReactionDiscord).not.toHaveBeenCalledWith(
-      expect.anything(),
-      expect.anything(),
-      DEFAULT_EMOJIS.error,
-      expect.anything(),
-    );
-
-    await vi.advanceTimersByTimeAsync(4_000 - DEFAULT_TIMING.errorHoldMs);
-    await vi.runAllTimersAsync();
-    expect(sendMocks.removeReactionDiscord).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.anything(),
-      DEFAULT_EMOJIS.error,
-      expect.anything(),
-    );
-  });
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.runAllTimersAsync();
+      expect(sendMocks.removeReactionDiscord).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        terminalEmoji,
+        expect.anything(),
+      );
+    },
+  );
 });
 
 describe("processDiscordMessage session routing", () => {
