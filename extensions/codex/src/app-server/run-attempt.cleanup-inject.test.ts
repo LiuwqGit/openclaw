@@ -2,7 +2,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   createParams,
-  createStartedThreadHarness,
   runCodexAppServerAttempt,
   setupRunAttemptTestHooks,
   tempDir,
@@ -16,10 +15,7 @@ describe("Codex app-server cleanup window", () => {
     // `await completion` to right after turn acceptance) allows the single
     // cleanup finally to fire for every resource — not just the shared-client
     // lease — when a synchronous throw lands in the post-turn-accept setup.
-    const params = createParams(
-      tempDir + "/session.json",
-      tempDir + "/workspace",
-    );
+    const params = createParams(tempDir + "/session.json", tempDir + "/workspace");
     const detachBackend = vi.fn();
     params.replyOperation = {
       attachBackend: vi.fn().mockImplementation(() => {
@@ -28,9 +24,9 @@ describe("Codex app-server cleanup window", () => {
       detachBackend,
     } as unknown as NonNullable<typeof params.replyOperation>;
 
-    await expect(
-      runCodexAppServerAttempt(params),
-    ).rejects.toThrow("inject: post-turn-accept setup failure");
+    await expect(runCodexAppServerAttempt(params)).rejects.toThrow(
+      "inject: post-turn-accept setup failure",
+    );
 
     // The expanded try boundary means the cleanup finally runs and calls
     // detachBackend even though attachBackend threw — because `handle` was

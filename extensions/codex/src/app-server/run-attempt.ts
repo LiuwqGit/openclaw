@@ -49,6 +49,7 @@ import {
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
+import type { ReplyBackendHandle } from "../../../auto-reply/reply/reply-run-registry.js";
 import {
   resolveCodexAppServerForModelProvider,
   resolveCodexAppServerForOpenClawToolPolicy,
@@ -2940,7 +2941,7 @@ export async function runCodexAppServerAttempt(
   let activeTurnId = "";
   let abortListener: (() => void) | undefined;
   let closeCleanup: (() => void) | undefined;
-  let handle: Parameters<typeof setActiveEmbeddedRun>[1] | undefined;
+  let handle: (Parameters<typeof setActiveEmbeddedRun>[1] & ReplyBackendHandle) | undefined;
   let freezeRunTerminalOutcome: (() => void) | undefined;
   try {
     turnIdRef.current = turn.turn.id;
@@ -3539,11 +3540,15 @@ export async function runCodexAppServerAttempt(
       }
     }
     await releaseSandboxExecEnvironment();
-    runAbortController.signal.removeEventListener("abort", abortListener);
+    if (abortListener) {
+      runAbortController.signal.removeEventListener("abort", abortListener);
+    }
     steeringQueueRef.current?.cancel();
     freezeRunTerminalOutcome();
-    params.replyOperation?.detachBackend(handle);
-    clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
+    if (handle) {
+      params.replyOperation?.detachBackend(handle);
+      clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
+    }
   }
 }
 
