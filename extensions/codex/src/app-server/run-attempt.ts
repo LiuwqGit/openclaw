@@ -34,6 +34,7 @@ import {
   supportsModelTools,
   runAgentCleanupStep,
   type FastModeAutoProgressState,
+  type EmbeddedAgentQueueHandle,
   type EmbeddedRunAttemptParams,
   type EmbeddedRunAttemptResult,
   type NativeHookRelayEvent,
@@ -2940,7 +2941,7 @@ export async function runCodexAppServerAttempt(
   let activeTurnId = "";
   let abortListener: (() => void) | undefined;
   let closeCleanup: (() => void) | undefined;
-  let handle: Record<string, unknown> | undefined;
+  let handle: EmbeddedAgentQueueHandle | undefined;
   let freezeRunTerminalOutcome: (() => void) | undefined;
   try {
     turnIdRef.current = turn.turn.id;
