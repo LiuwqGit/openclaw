@@ -3303,7 +3303,7 @@ export async function runCodexAppServerAttempt(
     } else {
       codexModelCallDiagnostics.emitCompleted(result);
     }
-    await mirrorTranscriptBestEffort({
+    const assistantTranscriptOwned = await mirrorTranscriptBestEffort({
       params,
       agentId: sessionAgentId,
       notifyUserMessagePersisted,
@@ -3477,6 +3477,7 @@ export async function runCodexAppServerAttempt(
       promptErrorSource: finalPromptErrorSource,
       ...(codexAppServerFailure ? { codexAppServerFailure } : {}),
       ...(promptTimeoutOutcome ? { promptTimeoutOutcome } : {}),
+      ...(assistantTranscriptOwned ? { assistantTranscriptOwned: true } : {}),
       systemPromptReport,
     };
   } finally {
