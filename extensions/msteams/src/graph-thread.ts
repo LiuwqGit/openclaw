@@ -135,8 +135,17 @@ export async function fetchThreadReplies(
   messageId: string,
   maxReplies = 50,
 ): Promise<GraphThreadMessage[]> {
+  // Always fetch full 50-item pages to ensure we get the newest replies when paginating.
+  // The final result is sliced to the requested maxReplies after selecting newest replies.
   const top = Math.min(Math.max(maxReplies, 1), 50);
-  const path = `/teams/${encodeURIComponent(groupId)}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(messageId)}/replies?$top=${top}&$select=id,from,body,createdDateTime`;
+  const pageTop = 50; // Always fetch full pages to maximize pagination efficiency
+
+  // NOTE: Graph replies endpoint returns oldest-first and does not support $orderby.
+  // When a thread has more than `top` replies, this function paginates through
+  // all pages via `fetchAllGraphPages` and returns the newest `top` replies
+  // (sorted chronologically), so the agent sees the most relevant recent context.
+  // Pagination is bounded by `MAX_REPLY_PAGES` (50 pages × up to 50 per page = 2500 replies).
+  const path = `/teams/${encodeURIComponent(groupId)}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(messageId)}/replies?$top=${pageTop}&$select=id,from,body,createdDateTime`;
 
   // Paginate through all reply pages, bounded by MAX_REPLY_PAGES (2500 total).
   const { items } = await fetchAllGraphPages<GraphThreadMessage>({
@@ -155,9 +164,9 @@ export async function fetchThreadReplies(
   const sorted = items.toSorted((a, b) =>
     (b.createdDateTime ?? "").localeCompare(a.createdDateTime ?? ""),
   );
-  return sorted.slice(0, top).toSorted((a, b) =>
-    (a.createdDateTime ?? "").localeCompare(b.createdDateTime ?? ""),
-  );
+  return sorted
+    .slice(0, top)
+    .toSorted((a, b) => (a.createdDateTime ?? "").localeCompare(b.createdDateTime ?? ""));
 }
 
 /**
