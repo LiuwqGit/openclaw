@@ -17,8 +17,6 @@ import {
   type AbortAndDrainEmbeddedAgentRunResult,
   type EmbeddedAgentQueueMessageOptions,
 } from "../agents/embedded-agent-runner/runs.js";
-// eslint-disable-next-line no-unused-vars -- Used in type export
-import type { EmbeddedAgentQueueHandle } from "../agents/embedded-agent-runner/runs.js";
 import type { SandboxFsBridge } from "../agents/sandbox/fs-bridge.js";
 import { formatToolDetail, resolveToolDisplay } from "../agents/tool-display.js";
 import type { ImageContent } from "../llm/types.js";
@@ -61,7 +59,6 @@ export type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
 } from "../agents/embedded-agent-runner/run/types.js";
-export type { EmbeddedAgentQueueHandle } from "../agents/embedded-agent-runner/runs.js";
 export type {
   ContextEngine as HarnessContextEngine,
   ContextEngineHostCapability,

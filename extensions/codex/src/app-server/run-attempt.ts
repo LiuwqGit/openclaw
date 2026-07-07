@@ -1275,6 +1275,14 @@ export async function runCodexAppServerAttempt(
       if (typeof mirrorIdentity === "string" && mirrorIdentity.startsWith("codex-app-server:")) {
         return false;
       }
+
+      const mirrorOrigin =
+        meta && typeof meta === "object" && !Array.isArray(meta)
+          ? (meta as Record<string, unknown>).mirrorOrigin
+          : undefined;
+      if (mirrorOrigin === "codex-app-server") {
+        return false;
+      }
       const timestamp =
         typeof message.timestamp === "number"
           ? message.timestamp
@@ -2980,7 +2988,7 @@ export async function runCodexAppServerAttempt(
           nativeHookRelay.shouldRelayEvent("post_tool_use"),
         trajectoryRecorder,
         onNativeToolResultRecorded: maybeAnnounceFastModeAutoOff,
-      },
+        runAbortSignal: runAbortController.signal,
     );
     if (
       isTerminalTurnStatus(turn.turn.status) ||
@@ -3098,13 +3106,13 @@ export async function runCodexAppServerAttempt(
       });
       resolveCompletion?.();
     };
-    runAbortController.signal.addEventListener("abort", abortListener, { once: true });
+    runAbortController.signal.addEventListener("abort", abortListener!, { once: true });
     if (runAbortController.signal.aborted) {
-      abortListener();
+      abortListener!();
     }
 
-    params.replyOperation?.attachBackend(handle);
-    setActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
+    params.replyOperation?.attachBackend(handle!);
+    setActiveEmbeddedRun(params.sessionId, handle!, params.sessionKey, params.sessionFile);
 
     await completion;
     // Timeout completion can win while a received notification is still being
@@ -3541,11 +3549,11 @@ export async function runCodexAppServerAttempt(
       }
     }
     await releaseSandboxExecEnvironment();
-    runAbortController.signal.removeEventListener("abort", abortListener);
+    runAbortController.signal.removeEventListener("abort", abortListener!);
     steeringQueueRef.current?.cancel();
-    freezeRunTerminalOutcome();
-    params.replyOperation?.detachBackend(handle);
-    clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
+    freezeRunTerminalOutcome?.();
+    params.replyOperation?.detachBackend(handle!);
+    clearActiveEmbeddedRun(params.sessionId, handle!, params.sessionKey, params.sessionFile);
   }
 }
 
