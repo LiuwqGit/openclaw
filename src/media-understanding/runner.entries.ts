@@ -18,6 +18,7 @@ import {
   collectProviderApiKeysForExecution,
   executeWithApiKeyRotation,
 } from "../agents/api-key-rotation.js";
+import { resolveBundledStaticCatalogModel } from "../agents/embedded-agent-runner/model.static-catalog.js";
 import { CUSTOM_LOCAL_AUTH_MARKER } from "../agents/model-auth-markers.js";
 import {
   mergeModelProviderRequestOverrides,
@@ -37,6 +38,8 @@ import { writeExternalFileWithinRoot } from "../infra/fs-safe.js";
 import { resolveProxyFetchFromEnv } from "../infra/net/proxy-fetch.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runFfmpeg } from "../media/media-services.js";
+import type { ImageCompressionPolicy } from "../media/web-media.js";
+import { effectiveImageBytesCap, optimizeImageBufferForWebMedia } from "../media/web-media.js";
 import {
   getOfficialExternalPluginCatalogManifest,
   listOfficialExternalProviderCatalogEntries,
@@ -426,6 +429,71 @@ function resolveEntryRunOptions(params: {
   };
 }
 
+/**
+ * Resolves image compression policy from agent defaults config and
+ * (when available) the selected provider/model catalog mediaInput.image limits.
+ *
+ * Config-only policy (agents.defaults) provides a preferred resize side but
+ * does not set hard maxSidePx/maxPixels caps, so oversized images from
+ * media-understanding paths can still bypass provider limits. When provider
+ * and model are known the model catalog's mediaInput.image entries add the
+ * same hard caps the image tool already applies.
+ */
+export function resolveImageCompressionPolicyFromConfig(
+  cfg: OpenClawConfig,
+  opts?: {
+    provider?: string;
+    model?: string;
+    agentDir?: string;
+    workspaceDir?: string;
+  },
+): ImageCompressionPolicy {
+  const quality = cfg.agents?.defaults?.imageQuality;
+  const imageMaxDimensionPx = cfg.agents?.defaults?.imageMaxDimensionPx;
+  const policy: ImageCompressionPolicy = { quality };
+  const models: ImageCompressionPolicy["models"] = [];
+
+  if (imageMaxDimensionPx) {
+    models.push({ preferredSidePx: imageMaxDimensionPx });
+  }
+
+  // Merge model-catalog mediaInput.image limits when provider/model are known.
+  // These are the same hard caps the image tool resolves, keeping both paths
+  // consistent and preventing oversized images from reaching the provider.
+  if (opts?.provider && opts?.model) {
+    const catalogModel = resolveBundledStaticCatalogModel({
+      provider: opts.provider,
+      modelId: opts.model,
+      cfg,
+      ...(opts.workspaceDir ? { workspaceDir: opts.workspaceDir } : {}),
+      includeRuntimeDiscovery: true,
+    });
+    const imageLimits = catalogModel?.mediaInput?.image;
+    if (imageLimits) {
+      const catalogPolicy: ImageCompressionPolicy["models"] = [{}];
+      const entry = catalogPolicy[0]!;
+      if (imageLimits.maxSidePx) {
+        entry.maxSidePx = imageLimits.maxSidePx;
+      }
+      if (imageLimits.maxPixels) {
+        entry.maxPixels = imageLimits.maxPixels;
+      }
+      if (imageLimits.preferredSidePx) {
+        entry.preferredSidePx = imageLimits.preferredSidePx;
+      }
+      if (imageLimits.maxBytes) {
+        entry.maxBytes = imageLimits.maxBytes;
+      }
+      models.push(entry);
+    }
+  }
+
+  if (models.length > 0) {
+    policy.models = models;
+  }
+  return policy;
+}
+
 function resolveMediaRequestOverrides(config: MediaUnderstandingConfig | undefined): {
   prompt?: string;
   language?: string;
@@ -780,17 +848,40 @@ export async function runProviderEntry(params: {
       maxBytes,
       timeoutMs,
     });
-    const normalizedMedia = await normalizeImageDescriptionInput({
+
+    // Resolve image compression policy from config and model catalog to ensure
+    // media:// references follow the same resize ladder as the image tool
+    // (agents.defaults + provider/model mediaInput.image limits).
+    const imageCompression = resolveImageCompressionPolicyFromConfig(cfg, {
+      provider: requestProviderId,
+      model: modelId,
+      agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
+    });
+
+    // Optimize the image buffer before provider execution, applying the configured
+    // compression policy (agents.defaults.imageMaxDimensionPx/imageQuality).
+    const effectiveCap = effectiveImageBytesCap(maxBytes, imageCompression) ?? maxBytes;
+    const optimizedMedia = await optimizeImageBufferForWebMedia({
       buffer: media.buffer,
+      contentType: media.mime,
       fileName: media.fileName,
-      mime: media.mime,
-      maxBytes,
+      maxBytes: effectiveCap,
+      imageCompression,
+    });
+
+    const normalizedMedia = await normalizeImageDescriptionInput({
+      buffer: optimizedMedia.buffer,
+      fileName: optimizedMedia.fileName ?? media.fileName,
+      mime: optimizedMedia.contentType,
+      maxBytes: effectiveCap,
+      imageCompression,
     });
     const requestOverrides = resolveMediaRequestOverrides(params.config);
     const provider = getMediaUnderstandingProvider(requestProviderId, params.providerRegistry);
     const imageInput = {
       buffer: normalizedMedia.buffer,
-      fileName: media.fileName,
+      fileName: optimizedMedia.fileName ?? media.fileName,
       mime: normalizedMedia.mime,
       model: modelId,
       provider: requestProviderId,

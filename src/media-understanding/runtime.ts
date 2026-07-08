@@ -5,6 +5,7 @@ import { kindFromMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import type { OpenClawConfig } from "../config/types.js";
 import { readLocalFileSafely } from "../infra/fs-safe.js";
+import { effectiveImageBytesCap, optimizeImageBufferForWebMedia } from "../media/web-media.js";
 import { DEFAULT_MAX_BYTES } from "./defaults.constants.js";
 import { normalizeImageDescriptionInput } from "./image-input-normalize.js";
 import { describeImageWithModel } from "./image-runtime.js";
@@ -14,7 +15,11 @@ import {
   normalizeMediaProviderId,
 } from "./provider-registry.js";
 import { resolveMediaRuntimeTimeoutMs } from "./resolve.js";
-import { findDecisionReason, normalizeDecisionReason } from "./runner.entries.js";
+import {
+  findDecisionReason,
+  normalizeDecisionReason,
+  resolveImageCompressionPolicyFromConfig,
+} from "./runner.entries.js";
 import {
   buildProviderRegistry,
   createMediaAttachmentCache,
@@ -256,15 +261,35 @@ export async function prepareImageDescriptionInput(params: PrepareImageDescripti
     cfg: params.cfg,
     timeoutMs,
   });
-  const normalizedImage = await normalizeImageDescriptionInput({
+
+  // Resolve image compression policy to ensure explicit model calls follow the same
+  // resize ladder as the image tool (agents.defaults + provider/model mediaInput.image limits).
+  const imageCompression = resolveImageCompressionPolicyFromConfig(params.cfg, {
+    provider: params.provider,
+    model: params.model,
+  });
+
+  // Optimize the image buffer before provider execution.
+  const effectiveCap =
+    effectiveImageBytesCap(DEFAULT_MAX_BYTES.image, imageCompression) ?? DEFAULT_MAX_BYTES.image;
+  const optimizedImage = await optimizeImageBufferForWebMedia({
     buffer: image.buffer,
+    contentType: image.mime,
     fileName: image.fileName,
-    mime: image.mime,
-    maxBytes: DEFAULT_MAX_BYTES.image,
+    maxBytes: effectiveCap,
+    imageCompression,
+  });
+
+  const normalizedImage = await normalizeImageDescriptionInput({
+    buffer: optimizedImage.buffer,
+    fileName: optimizedImage.fileName ?? image.fileName,
+    mime: optimizedImage.contentType,
+    maxBytes: effectiveCap,
+    imageCompression,
   });
   return {
     buffer: normalizedImage.buffer,
-    fileName: image.fileName,
+    fileName: optimizedImage.fileName ?? image.fileName,
     mime: normalizedImage.mime,
   };
 }
