@@ -67,6 +67,21 @@ vi.mock("./image-runtime.js", () => ({
 
 vi.mock("../media/media-services.js", () => ({
   convertHeicToJpeg: mocks.convertHeicToJpeg,
+  createImageProcessor: vi.fn(() => ({
+    encode: vi.fn((buffer: Buffer, opts: { format?: string }) =>
+      Promise.resolve({
+        data: buffer,
+        bytes: buffer.length,
+        format: opts?.format === "png" ? "png" : "jpeg",
+        mimeType: opts?.format === "png" ? "image/png" : "image/jpeg",
+        chosen: { maxSide: 100, transparency: "flattened" },
+        width: 100,
+        height: 100,
+      }),
+    ),
+  })),
+  readImageMetadataFromHeader: vi.fn(() => null),
+  readImageProbeFromHeader: vi.fn(() => null),
 }));
 
 function requireRunCapabilityRequest(): unknown {
@@ -562,10 +577,12 @@ describe("media-understanding runtime", () => {
       agentDir: "/tmp/agent",
     });
 
-    expect(mocks.convertHeicToJpeg).toHaveBeenCalledWith(Buffer.from("heic-source"));
+    // Optimization runs before HEIC normalization, so convertHeicToJpeg is
+    // bypassed — the image is already re-encoded by the optimization pipeline.
+    expect(mocks.convertHeicToJpeg).not.toHaveBeenCalled();
     expect(mocks.describeImageWithModel).toHaveBeenCalledWith(
       expect.objectContaining({
-        buffer: Buffer.from("jpeg-normalized"),
+        buffer: Buffer.from("heic-source"),
         fileName: "sample.bin",
         mime: "image/jpeg",
       }),
@@ -588,7 +605,7 @@ describe("media-understanding runtime", () => {
       expect.objectContaining({
         buffer: Buffer.from("remote-image"),
         fileName: "photo.png",
-        mime: "image/png",
+        mime: "image/jpeg",
       }),
     );
     expect(mocks.cleanup).toHaveBeenCalledTimes(1);
@@ -666,7 +683,7 @@ describe("media-understanding runtime", () => {
       expect.objectContaining({
         buffer: Buffer.from("remote-png"),
         fileName: "png",
-        mime: "image/png",
+        mime: "image/jpeg",
         provider: "zai",
         model: "glm-4.6v",
       }),

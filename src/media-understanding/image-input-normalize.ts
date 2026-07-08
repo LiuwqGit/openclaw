@@ -1,6 +1,7 @@
 // Image input normalization converts HEIC/HEIF payloads through the shared
 // input-file media path before provider execution.
 import { extractImageContentFromSource, normalizeMimeType } from "../media/input-files.js";
+import type { ImageCompressionPolicy } from "../media/web-media.js";
 import { DEFAULT_MAX_BYTES } from "./defaults.constants.js";
 
 const HEIC_MIME_RE = /^image\/hei[cf]$/i;
@@ -21,6 +22,7 @@ export async function normalizeImageDescriptionInput(params: {
   fileName?: string;
   mime?: string;
   maxBytes?: number;
+  imageCompression?: ImageCompressionPolicy;
 }): Promise<{ buffer: Buffer; mime?: string }> {
   if (!isHeicInput(params)) {
     return { buffer: params.buffer, mime: params.mime };
