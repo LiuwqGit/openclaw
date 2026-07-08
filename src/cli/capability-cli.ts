@@ -1091,6 +1091,8 @@ async function runImageDescribe(params: {
             ...(isRemoteUrl ? { mediaUrl: resolvedPath } : {}),
             cfg,
             timeoutMs: params.timeoutMs,
+            provider: activeModel.provider,
+            model: activeModel.model,
           })
         : undefined;
       const result =

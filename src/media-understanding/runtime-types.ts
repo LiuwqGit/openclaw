@@ -74,7 +74,10 @@ export type PreparedImageDescriptionInput = {
 export type PrepareImageDescriptionInputParams = Pick<
   DescribeImageFileWithModelParams,
   "filePath" | "mediaUrl" | "mime" | "cfg" | "timeoutMs"
->;
+> & {
+  provider?: string;
+  model?: string;
+};
 
 export type DescribePreparedImageWithModelParams = Omit<
   DescribeImageFileWithModelParams,
