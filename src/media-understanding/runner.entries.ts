@@ -18,6 +18,7 @@ import {
   collectProviderApiKeysForExecution,
   executeWithApiKeyRotation,
 } from "../agents/api-key-rotation.js";
+import { resolveModelAsync } from "../agents/embedded-agent-runner/model.js";
 import { resolveBundledStaticCatalogModel } from "../agents/embedded-agent-runner/model.static-catalog.js";
 import { CUSTOM_LOCAL_AUTH_MARKER } from "../agents/model-auth-markers.js";
 import {
@@ -38,7 +39,8 @@ import { writeExternalFileWithinRoot } from "../infra/fs-safe.js";
 import { resolveProxyFetchFromEnv } from "../infra/net/proxy-fetch.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runFfmpeg } from "../media/media-services.js";
-import type { ImageCompressionPolicy } from "../media/web-media.js";
+import type { ImageCompressionModelPolicy, ImageCompressionPolicy } from "../media/web-media.js";
+import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { effectiveImageBytesCap, optimizeImageBufferForWebMedia } from "../media/web-media.js";
 import {
   getOfficialExternalPluginCatalogManifest,
@@ -431,15 +433,25 @@ function resolveEntryRunOptions(params: {
 
 /**
  * Resolves image compression policy from agent defaults config and
- * (when available) the selected provider/model catalog mediaInput.image limits.
+ * (when available) the selected provider/model mediaInput.image limits.
  *
  * Config-only policy (agents.defaults) provides a preferred resize side but
  * does not set hard maxSidePx/maxPixels caps, so oversized images from
  * media-understanding paths can still bypass provider limits. When provider
- * and model are known the model catalog's mediaInput.image entries add the
- * same hard caps the image tool already applies.
+ * and model are known this merges three sources — the same contract the
+ * image tool already follows:
+ *
+ * 1. Configured model limits (openclaw.json providers.*.models[].mediaInput.image)
+ *    via resolveModelAsync with skipProviderRuntimeHooks.
+ * 2. Bundled static catalog limits (resolveBundledStaticCatalogModel) as
+ *    safety-net fallback.
+ * 3. Runtime-discovered limits (plugin hooks querying provider APIs) via
+ *    resolveModelAsync without skipProviderRuntimeHooks.
+ *
+ * Configured overrides take priority (matching mergeImageCompressionPolicies
+ * contract in image-tool.ts); bundled static fills missing fields.
  */
-export function resolveImageCompressionPolicyFromConfig(
+export async function resolveImageCompressionPolicyFromConfig(
   cfg: OpenClawConfig,
   opts?: {
     provider?: string;
@@ -447,7 +459,7 @@ export function resolveImageCompressionPolicyFromConfig(
     agentDir?: string;
     workspaceDir?: string;
   },
-): ImageCompressionPolicy {
+): Promise<ImageCompressionPolicy> {
   const quality = cfg.agents?.defaults?.imageQuality;
   const imageMaxDimensionPx = cfg.agents?.defaults?.imageMaxDimensionPx;
   const policy: ImageCompressionPolicy = { quality };
@@ -457,32 +469,100 @@ export function resolveImageCompressionPolicyFromConfig(
     models.push({ preferredSidePx: imageMaxDimensionPx });
   }
 
-  // Merge model-catalog mediaInput.image limits when provider/model are known.
-  // These are the same hard caps the image tool resolves, keeping both paths
-  // consistent and preventing oversized images from reaching the provider.
+  // Merge model metadata limits when provider/model are known, matching the
+  // image tool's 3-source merge so configured, bundled-static, and
+  // runtime-discovered mediaInput.image limits feed one shared policy.
   if (opts?.provider && opts?.model) {
-    const catalogModel = resolveBundledStaticCatalogModel({
-      provider: opts.provider,
-      modelId: opts.model,
-      cfg,
-      ...(opts.workspaceDir ? { workspaceDir: opts.workspaceDir } : {}),
-      includeRuntimeDiscovery: true,
-    });
-    const imageLimits = catalogModel?.mediaInput?.image;
-    if (imageLimits) {
-      const catalogPolicy: ImageCompressionPolicy["models"] = [{}];
-      const entry = catalogPolicy[0]!;
-      if (imageLimits.maxSidePx) {
-        entry.maxSidePx = imageLimits.maxSidePx;
+    let imagePolicy: ImageCompressionModelPolicy | undefined;
+
+    try {
+      // Source 1: Configured model limits (openclaw.json) + bundled static
+      // catalog fallback. Skip runtime hooks so only static metadata is resolved.
+      const resolved = await resolveModelAsync(
+        opts.provider,
+        opts.model,
+        opts.agentDir,
+        cfg,
+        {
+          allowBundledStaticCatalogFallback: true,
+          skipProviderRuntimeHooks: true,
+          skipAgentDiscovery: true,
+          workspaceDir: opts.workspaceDir,
+        },
+      );
+      const resolvedImage = (resolved.model as ProviderRuntimeModel | undefined)?.mediaInput?.image;
+
+      // Source 2: Bundled static catalog (safety net when resolveModelAsync
+      // cannot find the model in any configured registry but the static
+      // catalog still knows the model's limits).
+      const catalogModel = resolveBundledStaticCatalogModel({
+        provider: opts.provider,
+        modelId: opts.model,
+        cfg,
+        ...(opts.workspaceDir ? { workspaceDir: opts.workspaceDir } : {}),
+        includeRuntimeDiscovery: true,
+      });
+      const catalogImage = catalogModel?.mediaInput?.image;
+
+      // Merge: configured/resolved takes priority (mirrors
+      // mergeImageCompressionPolicies where staticPolicy overrides runtimePolicy).
+      imagePolicy = { ...catalogImage, ...resolvedImage };
+
+      // Source 3: Runtime-discovered limits (plugin hooks querying provider
+      // APIs). Only query when no hard dimension limits exist yet (mirrors the
+      // image tool's imageCompressionPolicyHasDimensionLimit guard).
+      const hasHardLimit =
+        imagePolicy?.maxSidePx != null || imagePolicy?.maxPixels != null;
+      if (!hasHardLimit) {
+        try {
+          const runtimeResolved = await resolveModelAsync(
+            opts.provider,
+            opts.model,
+            opts.agentDir,
+            cfg,
+            {
+              allowBundledStaticCatalogFallback: true,
+              skipProviderRuntimeHooks: false,
+              skipAgentDiscovery: true,
+              workspaceDir: opts.workspaceDir,
+            },
+          );
+          const runtimeImage = (
+            runtimeResolved.model as ProviderRuntimeModel | undefined
+          )?.mediaInput?.image;
+          if (runtimeImage) {
+            imagePolicy = { ...imagePolicy, ...runtimeImage };
+          }
+        } catch {
+          // Runtime discovery is best-effort; keep static policy on failure.
+        }
       }
-      if (imageLimits.maxPixels) {
-        entry.maxPixels = imageLimits.maxPixels;
+    } catch {
+      // resolveModelAsync may fail in environments without full agent
+      // discovery; fall back to bundled static catalog only.
+      const catalogModel = resolveBundledStaticCatalogModel({
+        provider: opts.provider,
+        modelId: opts.model,
+        cfg,
+        ...(opts.workspaceDir ? { workspaceDir: opts.workspaceDir } : {}),
+        includeRuntimeDiscovery: true,
+      });
+      imagePolicy = catalogModel?.mediaInput?.image;
+    }
+
+    if (imagePolicy) {
+      const entry: ImageCompressionModelPolicy = {};
+      if (imagePolicy.maxSidePx) {
+        entry.maxSidePx = imagePolicy.maxSidePx;
       }
-      if (imageLimits.preferredSidePx) {
-        entry.preferredSidePx = imageLimits.preferredSidePx;
+      if (imagePolicy.maxPixels) {
+        entry.maxPixels = imagePolicy.maxPixels;
       }
-      if (imageLimits.maxBytes) {
-        entry.maxBytes = imageLimits.maxBytes;
+      if (imagePolicy.preferredSidePx) {
+        entry.preferredSidePx = imagePolicy.preferredSidePx;
+      }
+      if (imagePolicy.maxBytes) {
+        entry.maxBytes = imagePolicy.maxBytes;
       }
       models.push(entry);
     }
@@ -852,7 +932,7 @@ export async function runProviderEntry(params: {
     // Resolve image compression policy from config and model catalog to ensure
     // media:// references follow the same resize ladder as the image tool
     // (agents.defaults + provider/model mediaInput.image limits).
-    const imageCompression = resolveImageCompressionPolicyFromConfig(cfg, {
+    const imageCompression = await resolveImageCompressionPolicyFromConfig(cfg, {
       provider: requestProviderId,
       model: modelId,
       agentDir: params.agentDir,
