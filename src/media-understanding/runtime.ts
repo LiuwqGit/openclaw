@@ -264,7 +264,7 @@ export async function prepareImageDescriptionInput(params: PrepareImageDescripti
 
   // Resolve image compression policy to ensure explicit model calls follow the same
   // resize ladder as the image tool (agents.defaults + provider/model mediaInput.image limits).
-  const imageCompression = await resolveImageCompressionPolicyFromConfig(params.cfg, {
+  const imageCompression = resolveImageCompressionPolicyFromConfig(params.cfg, {
     provider: params.provider,
     model: params.model,
   });
