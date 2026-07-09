@@ -78,6 +78,10 @@ vi.mock("../media/media-services.js", () => ({
   readImageProbeFromHeader: vi.fn(() => null),
 }));
 
+vi.mock("../agents/embedded-agent-runner/model.js", () => ({
+  resolveModelAsync: vi.fn(async () => ({})),
+}));
+
 function requireRunCapabilityRequest(): unknown {
   // File API tests verify the normalized request handed to runCapability, not
   // just the public return shape.
