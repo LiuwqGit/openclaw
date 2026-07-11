@@ -1250,6 +1250,35 @@ describe("Integration: saveSessionStore with pruning", () => {
     expect(loaded["session-74"]).toBeUndefined();
   });
 
+  it("explicit loadSessionStore maintenance prunes stale entries even when below maxEntries", async () => {
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      stale1: makeEntry(now - 31 * DAY_MS),
+      stale2: makeEntry(now - 14 * DAY_MS),
+      recent: makeEntry(now - 1 * DAY_MS),
+      newest: makeEntry(now),
+    };
+    await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
+
+    const loaded = loadSessionStore(storePath, {
+      skipCache: true,
+      runMaintenance: true,
+      maintenanceConfig: {
+        ...ENFORCED_MAINTENANCE_OVERRIDE,
+        maxEntries: 500,
+        pruneAfterMs: 7 * DAY_MS,
+      },
+    });
+
+    // stale entries older than 7 days should be pruned,
+    // recent/newest should survive regardless of being below maxEntries
+    expect(loaded.stale1).toBeUndefined();
+    expect(loaded.stale2).toBeUndefined();
+    expect(loaded).toHaveProperty("recent");
+    expect(loaded).toHaveProperty("newest");
+    expect(Object.keys(loaded)).toHaveLength(2);
+  });
+
   it("explicit loadSessionStore maintenance preserves channel, thread, and topic session pointers", async () => {
     const now = Date.now();
     const channelKey = "agent:main:slack:channel:C123";
