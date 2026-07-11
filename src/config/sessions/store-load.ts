@@ -438,7 +438,7 @@ export function loadSessionStore(
     const beforeCount = Object.keys(store).length;
     let pruned = 0;
     let capped = 0;
-    if (maintenance.mode === "enforce" && beforeCount > maintenance.maxEntries) {
+    if (maintenance.mode === "enforce") {
       const preserveSessionKeys = collectSessionMaintenancePreserveKeys();
       pruned = pruneStaleEntries(store, maintenance.pruneAfterMs, {
         log: false,
