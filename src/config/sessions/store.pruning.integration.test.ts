@@ -1255,7 +1255,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     const store: Record<string, SessionEntry> = {
       stale1: makeEntry(now - 31 * DAY_MS),
       stale2: makeEntry(now - 14 * DAY_MS),
-      recent: makeEntry(now - 1 * DAY_MS),
+      recent: makeEntry(now - DAY_MS),
       newest: makeEntry(now),
     };
     await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
