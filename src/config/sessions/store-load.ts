@@ -479,12 +479,6 @@ export function loadSessionStore(
           preserveKeys: preserveSessionKeys,
         });
       }
-    }
-    if (maintenance.mode === "enforce" && Object.keys(store).length > maintenance.maxEntries) {
-      const preserveSessionKeys = collectSessionMaintenancePreserveKeysForStore({
-        storePath,
-        store,
-      });
       pruned = pruneStaleEntries(store, maintenance.pruneAfterMs, {
         log: false,
         preserveKeys: preserveSessionKeys,
