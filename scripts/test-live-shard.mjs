@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnPnpmRunner } from "./pnpm-runner.mjs";
 import {
+  forwardSignalToVitestProcessGroup,
   installVitestProcessGroupCleanup,
   shouldUseDetachedVitestProcessGroup,
 } from "./vitest-process-group.mjs";
@@ -32,6 +33,8 @@ const OPTIONAL_LIVE_SHARD_FILE_ENVS = new Map([
   ["test/image-generation.infer-cli.live.test.ts", ["OPENCLAW_LIVE_INFER_CLI_TEST"]],
 ]);
 const SKIPPED_ASSERTION_STATUSES = new Set(["disabled", "pending", "skipped", "todo"]);
+const QA_RUNTIME_LIVE_TEST = "extensions/qa-lab/src/matrix-channel-driver.lifecycle.live.test.ts";
+const QA_RUNTIME_ARTIFACT = "dist/extensions/qa-lab/runtime-api.js";
 
 /** Live-test shards included in release validation. */
 export const RELEASE_LIVE_TEST_SHARDS = Object.freeze([
@@ -356,6 +359,19 @@ export function buildLiveShardPnpmArgs(files, passthroughArgs) {
 }
 
 /**
+ * Resolves build profiles required by selected live tests.
+ */
+export function resolveLiveShardPreparation(files) {
+  return files.includes(QA_RUNTIME_LIVE_TEST)
+    ? {
+        env: { OPENCLAW_BUILD_PRIVATE_QA: "1" },
+        profile: "qaRuntime",
+        requiredArtifact: QA_RUNTIME_ARTIFACT,
+      }
+    : null;
+}
+
+/**
  * Builds the Vitest JSON report path used to prove that a live shard ran tests.
  */
 export function buildLiveShardReportPath(shard, env = process.env) {
@@ -585,7 +601,7 @@ export function validateLiveShardReportPayload(
 /**
  * Reads and validates the live-shard Vitest JSON report.
  */
-export function validateLiveShardReport(reportPath, expectedFiles = []) {
+function validateLiveShardReport(reportPath, expectedFiles = []) {
   let payload;
   try {
     payload = JSON.parse(fs.readFileSync(reportPath, "utf8"));
@@ -650,6 +666,36 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     process.exit(0);
   }
 
+  // Some live tests exercise built private surfaces. Prepare their owning profile so
+  // shard routing cannot select a test whose required runtime artifact is absent.
+  const preparation = resolveLiveShardPreparation(files);
+  if (preparation) {
+    console.log(
+      `[test:live:shard] preparing ${preparation.profile} for ${preparation.requiredArtifact}`,
+    );
+    const result = spawnSync(process.execPath, ["scripts/build-all.mjs", preparation.profile], {
+      env: { ...process.env, ...preparation.env },
+      stdio: "inherit",
+    });
+    if (result.error) {
+      console.error(result.error);
+      process.exit(1);
+    }
+    if (result.signal) {
+      process.kill(process.pid, result.signal);
+      process.exit(1);
+    }
+    if ((result.status ?? 1) !== 0) {
+      process.exit(result.status ?? 1);
+    }
+    if (!fs.existsSync(preparation.requiredArtifact)) {
+      console.error(
+        `[test:live:shard] ${preparation.profile} did not produce ${preparation.requiredArtifact}`,
+      );
+      process.exit(1);
+    }
+  }
+
   console.log(`[test:live:shard] ${shard}: ${files.length} file(s)`);
   const reportPath = buildLiveShardReportPath(shard, process.env);
   fs.mkdirSync(path.dirname(reportPath), { recursive: true });
@@ -661,18 +707,25 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   let forwardedSignal = null;
   const teardown = installVitestProcessGroupCleanup({
     child,
+    forceSignal: "SIGKILL",
+    forceSignalDelayMs: 100,
     onSignal: (signal) => {
       forwardedSignal ??= signal;
     },
   });
   child.on("exit", (code, signal) => {
     teardown();
-    if (signal) {
-      process.kill(process.pid, signal);
+    if (forwardedSignal) {
+      forwardSignalToVitestProcessGroup({
+        child,
+        kill: process.kill.bind(process),
+        signal: "SIGKILL",
+      });
+      process.kill(process.pid, forwardedSignal);
       return;
     }
-    if (forwardedSignal) {
-      process.kill(process.pid, forwardedSignal);
+    if (signal) {
+      process.kill(process.pid, signal);
       return;
     }
     if ((code ?? 1) === 0) {

@@ -12,6 +12,7 @@ import {
   resolveExecApprovalsFromFile,
   resolveExecModeFromPolicy,
   resolveExecModePolicy,
+  type ExecApprovalsDefaults,
   type ExecApprovalsFile,
   type ExecAsk,
   type ExecMode,
@@ -66,8 +67,6 @@ export type ExecPolicyScopeSnapshot = {
   allowedDecisions: readonly ExecApprovalDecision[];
 };
 
-type ExecPolicyScopeSummary = Omit<ExecPolicyScopeSnapshot, "allowedDecisions">;
-
 type ExecPolicyRequestedField = "security" | "ask";
 
 function resolveRequestedHost(params: {
@@ -112,6 +111,10 @@ function formatModeSource(params: { sourcePath: string; configPath: string }): s
 }
 
 type ExecPolicyField = "security" | "ask" | "askFallback";
+export type ExecPolicyHostDefaults = Pick<
+  Required<ExecApprovalsDefaults>,
+  "security" | "ask" | "askFallback"
+>;
 
 function resolveRequestedField<
   // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Field-specific callers narrow the shared requested policy value.
@@ -265,9 +268,13 @@ function formatHostFieldSource(params: {
   hostPath: string;
   field: ExecPolicyField;
   sourceSuffix: string | null;
+  hostDefaultSource?: string;
 }): string {
   if (params.sourceSuffix) {
     return `${params.hostPath} ${params.sourceSuffix}`;
+  }
+  if (params.hostDefaultSource) {
+    return params.hostDefaultSource;
   }
   if (params.field === "askFallback") {
     return `OpenClaw default (${DEFAULT_EXEC_APPROVAL_ASK_FALLBACK})`;
@@ -290,6 +297,8 @@ export function collectExecPolicyScopeSnapshots(params: {
   cfg: OpenClawConfig;
   approvals: ExecApprovalsFile;
   hostPath?: string;
+  hostDefaults?: ExecPolicyHostDefaults;
+  hostDefaultSource?: string;
 }): ExecPolicyScopeSnapshot[] {
   const snapshots = [
     resolveExecPolicyScopeSnapshot({
@@ -297,6 +306,8 @@ export function collectExecPolicyScopeSnapshots(params: {
       scopeExecConfig: params.cfg.tools?.exec,
       configPath: "tools.exec",
       hostPath: params.hostPath,
+      hostDefaults: params.hostDefaults,
+      hostDefaultSource: params.hostDefaultSource,
       scopeLabel: "tools.exec",
     }),
   ];
@@ -319,26 +330,14 @@ export function collectExecPolicyScopeSnapshots(params: {
         globalExecConfig,
         configPath: `agents.list.${agentId}.tools.exec`,
         hostPath: params.hostPath,
+        hostDefaults: params.hostDefaults,
+        hostDefaultSource: params.hostDefaultSource,
         scopeLabel: `agent:${agentId}`,
         agentId,
       }),
     );
   }
   return snapshots;
-}
-
-export function resolveExecPolicyScopeSummary(params: {
-  approvals: ExecApprovalsFile;
-  scopeExecConfig?: ExecPolicyConfig | undefined;
-  globalExecConfig?: ExecPolicyConfig | undefined;
-  configPath: string;
-  scopeLabel: string;
-  agentId?: string;
-  hostPath?: string;
-}): ExecPolicyScopeSummary {
-  const snapshot = resolveExecPolicyScopeSnapshot(params);
-  const { allowedDecisions: _allowedDecisions, ...summary } = snapshot;
-  return summary;
 }
 
 export function resolveExecPolicyScopeSnapshot(params: {
@@ -349,6 +348,8 @@ export function resolveExecPolicyScopeSnapshot(params: {
   scopeLabel: string;
   agentId?: string;
   hostPath?: string;
+  hostDefaults?: ExecPolicyHostDefaults;
+  hostDefaultSource?: string;
 }): ExecPolicyScopeSnapshot {
   const requestedHost = resolveRequestedHost({
     scopeExecConfig: params.scopeExecConfig,
@@ -363,8 +364,9 @@ export function resolveExecPolicyScopeSnapshot(params: {
     file: params.approvals,
     agentId: params.agentId,
     overrides: {
-      security: requestedPolicy.security,
-      ask: requestedPolicy.ask,
+      security: params.hostDefaults?.security ?? requestedPolicy.security,
+      ask: params.hostDefaults?.ask ?? requestedPolicy.ask,
+      ...(params.hostDefaults ? { askFallback: params.hostDefaults.askFallback } : {}),
     },
   });
   const hostPath = params.hostPath ?? resolveExecApprovalsDisplayPath();
@@ -406,6 +408,7 @@ export function resolveExecPolicyScopeSnapshot(params: {
         hostPath,
         field: "security",
         sourceSuffix: resolved.agentSources.security,
+        hostDefaultSource: params.hostDefaultSource,
       }),
       effective: effectiveSecurity,
       note:
@@ -421,6 +424,7 @@ export function resolveExecPolicyScopeSnapshot(params: {
         hostPath,
         field: "ask",
         sourceSuffix: resolved.agentSources.ask,
+        hostDefaultSource: params.hostDefaultSource,
       }),
       effective: effectiveAsk,
       note: resolveAskNote({
@@ -435,6 +439,7 @@ export function resolveExecPolicyScopeSnapshot(params: {
         hostPath,
         field: "askFallback",
         sourceSuffix: resolved.agentSources.askFallback,
+        hostDefaultSource: params.hostDefaultSource,
       }),
     },
     allowedDecisions: resolveExecApprovalAllowedDecisions({ ask: effectiveAsk }),

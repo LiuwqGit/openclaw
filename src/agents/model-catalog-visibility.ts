@@ -6,8 +6,10 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import { createProviderAuthChecker } from "./model-provider-auth.js";
-import { modelKey } from "./model-selection-normalize.js";
-import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
+import {
+  buildConfiguredModelCatalog,
+  dedupeModelCatalogEntries,
+} from "./model-selection-shared.js";
 import {
   RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
   createModelVisibilityPolicy,
@@ -18,6 +20,9 @@ type ProviderAuthChecker = (provider: string, modelApi?: string) => boolean | Pr
 const OPENAI_PROVIDER_ID = "openai";
 const OPENAI_CODEX_RESPONSES_API = "openai-chatgpt-responses";
 const OPENAI_CODEX_ROUTABLE_MODEL_IDS = new Set([
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+  "gpt-5.6-luna",
   "gpt-5.5",
   "gpt-5.5-pro",
   "gpt-5.4",
@@ -75,22 +80,6 @@ function sortModelCatalogEntries(entries: ModelCatalogEntry[]): ModelCatalogEntr
   return entries.toSorted(
     (a, b) => a.provider.localeCompare(b.provider) || a.id.localeCompare(b.id),
   );
-}
-
-function dedupeModelCatalogEntries(entries: ModelCatalogEntry[]): ModelCatalogEntry[] {
-  // Preserve the first occurrence after precedence merging while removing
-  // provider/id duplicates from configured and auth-backed catalogs.
-  const seen = new Set<string>();
-  const next: ModelCatalogEntry[] = [];
-  for (const entry of entries) {
-    const key = modelKey(entry.provider, entry.id);
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    next.push(entry);
-  }
-  return next;
 }
 
 /**

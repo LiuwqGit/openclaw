@@ -1,12 +1,5 @@
 // Gateway Client module implements client behavior.
 import { randomUUID } from "node:crypto";
-import type {
-  ConnectParams,
-  EventFrame,
-  HelloOk,
-  RequestFrame,
-  ResponseFrame,
-} from "@openclaw/gateway-protocol";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -21,6 +14,15 @@ import {
   readPairingConnectErrorDetails,
   type ConnectErrorRecoveryAdvice,
 } from "@openclaw/gateway-protocol/connect-error-details";
+import {
+  type ConnectParams,
+  type ErrorShape,
+  type EventFrame,
+  type HelloOk,
+  isGatewayEventFrame,
+  isGatewayResponseFrame,
+  type RequestFrame,
+} from "@openclaw/gateway-protocol/frame-guards";
 import { resolveGatewayStartupRetryAfterMs } from "@openclaw/gateway-protocol/startup-unavailable";
 import { MIN_CLIENT_PROTOCOL_VERSION, PROTOCOL_VERSION } from "@openclaw/gateway-protocol/version";
 import ipaddr from "ipaddr.js";
@@ -76,63 +78,6 @@ function normalizeOptionalString(value: unknown): string | undefined {
   }
   const trimmed = value.trim();
   return trimmed || undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0;
-}
-
-function isNonNegativeInteger(value: unknown): value is number {
-  return typeof value === "number" && Number.isInteger(value) && value >= 0;
-}
-
-function isGatewayClientErrorShape(value: unknown): boolean {
-  if (!isRecord(value)) {
-    return false;
-  }
-  if (!isNonEmptyString(value.code) || !isNonEmptyString(value.message)) {
-    return false;
-  }
-  if (value.retryable !== undefined && typeof value.retryable !== "boolean") {
-    return false;
-  }
-  if (value.retryAfterMs !== undefined && !isNonNegativeInteger(value.retryAfterMs)) {
-    return false;
-  }
-  return true;
-}
-
-function isGatewayEventFrame(value: unknown): value is EventFrame {
-  if (!isRecord(value) || value.type !== "event" || !isNonEmptyString(value.event)) {
-    return false;
-  }
-  return value.seq === undefined || isNonNegativeInteger(value.seq);
-}
-
-function isGatewayResponseFrame(value: unknown): value is ResponseFrame {
-  if (
-    !isRecord(value) ||
-    value.type !== "res" ||
-    !isNonEmptyString(value.id) ||
-    typeof value.ok !== "boolean"
-  ) {
-    return false;
-  }
-  return value.error === undefined || isGatewayClientErrorShape(value.error);
-}
-
-function validateClientRequestFrame(frame: RequestFrame): string | null {
-  if (!isNonEmptyString(frame.id)) {
-    return "id must be a non-empty string";
-  }
-  if (!isNonEmptyString(frame.method)) {
-    return "method must be a non-empty string";
-  }
-  return null;
 }
 
 function normalizeLowercaseStringOrEmpty(value: unknown): string {
@@ -314,20 +259,13 @@ export type GatewayClientRequestOptions = {
   onAccepted?: (payload: unknown) => void;
 };
 
-type GatewayClientErrorShape = {
-  code?: string;
-  message?: string;
-  details?: unknown;
-  retryable?: boolean;
-  retryAfterMs?: number;
-};
-
 type SelectedConnectAuth = {
   authToken?: string;
   authBootstrapToken?: string;
   authDeviceToken?: string;
   authPassword?: string;
   authApprovalRuntimeToken?: string;
+  authAgentRuntimeIdentityToken?: string;
   signatureToken?: string;
   resolvedDeviceToken?: string;
   storedToken?: string;
@@ -343,6 +281,7 @@ type StoredDeviceAuth = {
 type AssembledConnect = {
   params: ConnectParams;
   authApprovalRuntimeToken: string | undefined;
+  authAgentRuntimeIdentityToken: string | undefined;
   resolvedDeviceToken: string | undefined;
   storedToken: string | undefined;
   usingStoredDeviceToken: boolean | undefined;
@@ -363,6 +302,8 @@ export type GatewayReconnectPausedInfo = {
 
 export type GatewayClientCloseInfo = {
   phase: "pre-hello" | "post-hello";
+  socketOpened: boolean;
+  transportValidated: boolean;
   transientPreHelloCleanClose: boolean;
 };
 
@@ -372,7 +313,7 @@ export class GatewayClientRequestError extends Error {
   readonly retryable: boolean;
   readonly retryAfterMs?: number;
 
-  constructor(error: GatewayClientErrorShape) {
+  constructor(error: Partial<ErrorShape>) {
     super(formatConnectErrorMessage({ message: error.message, details: error.details }));
     this.name = "GatewayClientRequestError";
     this.gatewayCode = error.code ?? "UNAVAILABLE";
@@ -412,6 +353,7 @@ export function isGatewayConnectAssemblyError(value: unknown): value is Error {
 
 export type GatewayClientOptions = {
   url?: string; // ws://127.0.0.1:18789
+  origin?: string;
   connectChallengeTimeoutMs?: number;
   /** @deprecated Use connectChallengeTimeoutMs. */
   connectDelayMs?: number;
@@ -428,6 +370,7 @@ export type GatewayClientOptions = {
   deviceToken?: string;
   password?: string;
   approvalRuntimeToken?: string;
+  agentRuntimeIdentityToken?: string;
   instanceId?: string;
   clientName?: GatewayClientName;
   clientDisplayName?: string;
@@ -453,6 +396,13 @@ export type GatewayClientOptions = {
   onReconnectPaused?: (info: GatewayReconnectPausedInfo) => void;
   onClose?: (code: number, reason: string, info?: GatewayClientCloseInfo) => void;
   onGap?: (info: { expected: number; received: number }) => void;
+};
+
+export type GatewayClientConnectionMetadata = {
+  clientName?: GatewayClientName;
+  hasDeviceIdentity: boolean;
+  mode?: GatewayClientMode;
+  preauthHandshakeTimeoutMs?: number;
 };
 
 export const GATEWAY_CLOSE_CODE_HINTS: Readonly<Record<number, string>> = {
@@ -546,6 +496,7 @@ export class GatewayClient {
   private readonly requestTimeoutMs: number;
   private pendingStop: PendingStop | null = null;
   private socketOpened = false;
+  private transportValidated = false;
   private helloOkReceived = false;
   private suppressedTransientPreHelloCleanCloses = 0;
 
@@ -586,6 +537,15 @@ export class GatewayClient {
       typeof opts.requestTimeoutMs === "number" && Number.isFinite(opts.requestTimeoutMs)
         ? resolveSafeTimeoutDelayMs(opts.requestTimeoutMs, { minMs: 0 })
         : 30_000;
+  }
+
+  getConnectionMetadata(): GatewayClientConnectionMetadata {
+    return {
+      clientName: this.opts.clientName,
+      hasDeviceIdentity: Boolean(this.opts.deviceIdentity),
+      mode: this.opts.mode,
+      preauthHandshakeTimeoutMs: this.opts.preauthHandshakeTimeoutMs,
+    };
   }
 
   start() {
@@ -631,6 +591,7 @@ export class GatewayClient {
     this.deps.beforeConnect();
     const wsOptions: FingerprintCheckingClientOptions = {
       maxPayload: 25 * 1024 * 1024,
+      ...(this.opts.origin ? { origin: this.opts.origin } : {}),
     };
     if (url.startsWith("wss://") && this.opts.tlsFingerprint) {
       wsOptions.rejectUnauthorized = false;
@@ -669,6 +630,7 @@ export class GatewayClient {
     }
     this.ws = ws;
     this.socketOpened = false;
+    this.transportValidated = false;
     this.helloOkReceived = false;
     this.connectNonce = null;
     this.connectSent = false;
@@ -684,6 +646,7 @@ export class GatewayClient {
           return;
         }
       }
+      this.transportValidated = true;
       this.beginPreauthHandshake();
     });
     ws.on("message", (data) => this.handleMessage(rawDataToString(data)));
@@ -691,6 +654,8 @@ export class GatewayClient {
       const reasonText = rawDataToString(reason);
       const closeInfo: GatewayClientCloseInfo = {
         phase: this.helloOkReceived ? "post-hello" : "pre-hello",
+        socketOpened: this.socketOpened,
+        transportValidated: this.transportValidated,
         transientPreHelloCleanClose: !this.helloOkReceived && code === 1000 && reasonText === "",
       };
       const connectErrorDetailCode = this.pendingConnectErrorDetailCode;
@@ -701,6 +666,7 @@ export class GatewayClient {
         this.ws = null;
       }
       this.socketOpened = false;
+      this.transportValidated = false;
       this.resolvePendingStop(ws);
       if (this.pendingStartupReconnectDelayMs !== null) {
         this.scheduleReconnect();
@@ -714,7 +680,7 @@ export class GatewayClient {
         this.suppressedTransientPreHelloCleanCloses += 1;
         this.flushPendingErrors(new GatewayClientTransientPreHelloCloseError());
         this.scheduleReconnect();
-        this.opts.onClose?.(code, reasonText, closeInfo);
+        this.notifyClose(code, reasonText, closeInfo);
         return;
       }
       // Clear persisted device auth state only when device-token auth was active.
@@ -745,16 +711,16 @@ export class GatewayClient {
           details: connectErrorDetails,
         })
       ) {
-        this.opts.onReconnectPaused?.({
+        this.notifyReconnectPaused({
           code,
           reason: reasonText,
           detailCode: connectErrorDetailCode,
         });
-        this.opts.onClose?.(code, reasonText);
+        this.notifyClose(code, reasonText, closeInfo);
         return;
       }
       this.scheduleReconnect();
-      this.opts.onClose?.(code, reasonText);
+      this.notifyClose(code, reasonText, closeInfo);
     });
     ws.on("error", (err) => {
       this.logDebug(`gateway client error: ${formatGatewayClientErrorForLog(err)}`);
@@ -916,7 +882,7 @@ export class GatewayClient {
             : 30_000;
         this.lastTick = Date.now();
         this.startTickWatch();
-        this.opts.onHelloOk?.(helloOk);
+        this.notifyHelloOk(helloOk);
       })
       .catch((err: unknown) => {
         if (err instanceof GatewayClientTransientPreHelloCloseError) {
@@ -962,6 +928,24 @@ export class GatewayClient {
           return;
         }
         if (
+          this.shouldFailClosedForUnsupportedAgentRuntimeIdentity({
+            error: err,
+            authAgentRuntimeIdentityToken: assembled.authAgentRuntimeIdentityToken,
+          })
+        ) {
+          const unsupportedIdentityError = new Error(
+            "gateway rejected required agent runtime identity auth field; refusing to retry without it",
+          );
+          this.notifyConnectError(unsupportedIdentityError);
+          this.logError(`gateway connect failed: ${unsupportedIdentityError.message}`);
+          // This identity scopes model-mediated cron calls. Retrying without it
+          // would turn an old/new mismatch into an unscoped operator call.
+          this.closed = true;
+          this.clearReconnectTimer();
+          this.ws?.close(1008, "connect failed");
+          return;
+        }
+        if (
           this.shouldRetryWithoutApprovalRuntimeToken({
             error: err,
             authApprovalRuntimeToken: assembled.authApprovalRuntimeToken,
@@ -996,6 +980,7 @@ export class GatewayClient {
       authDeviceToken,
       authPassword,
       authApprovalRuntimeToken,
+      authAgentRuntimeIdentityToken,
       signatureToken,
       resolvedDeviceToken,
       storedToken,
@@ -1012,13 +997,15 @@ export class GatewayClient {
       authBootstrapToken ||
       authPassword ||
       resolvedDeviceToken ||
-      authApprovalRuntimeToken
+      authApprovalRuntimeToken ||
+      authAgentRuntimeIdentityToken
         ? {
             token: authToken,
             bootstrapToken: authBootstrapToken,
             deviceToken: authDeviceToken ?? resolvedDeviceToken,
             password: authPassword,
             approvalRuntimeToken: authApprovalRuntimeToken,
+            agentRuntimeIdentityToken: authAgentRuntimeIdentityToken,
           }
         : undefined;
     const signedAtMs = Date.now();
@@ -1061,6 +1048,7 @@ export class GatewayClient {
         }),
       },
       authApprovalRuntimeToken,
+      authAgentRuntimeIdentityToken,
       resolvedDeviceToken,
       storedToken,
       usingStoredDeviceToken,
@@ -1124,6 +1112,38 @@ export class GatewayClient {
       this.logDebug(
         `gateway client connect error handler error: ${formatGatewayClientErrorForLog(err)}`,
       );
+    }
+  }
+
+  private notifyHelloOk(helloOk: HelloOk): void {
+    try {
+      this.opts.onHelloOk?.(helloOk);
+    } catch (err) {
+      this.logDebug(
+        `gateway client hello-ok handler error: ${formatGatewayClientErrorForLog(err)}`,
+      );
+    }
+  }
+
+  private notifyReconnectPaused(info: GatewayReconnectPausedInfo): void {
+    try {
+      this.opts.onReconnectPaused?.(info);
+    } catch (err) {
+      this.logDebug(
+        `gateway client reconnect paused handler error: ${formatGatewayClientErrorForLog(err)}`,
+      );
+    }
+  }
+
+  private notifyClose(code: number, reason: string, info?: GatewayClientCloseInfo): void {
+    try {
+      if (info === undefined) {
+        this.opts.onClose?.(code, reason);
+        return;
+      }
+      this.opts.onClose?.(code, reason, info);
+    } catch (err) {
+      this.logDebug(`gateway client close handler error: ${formatGatewayClientErrorForLog(err)}`);
     }
   }
 
@@ -1254,6 +1274,25 @@ export class GatewayClient {
     return message.includes("invalid connect params") && message.includes("approvalruntimetoken");
   }
 
+  private shouldFailClosedForUnsupportedAgentRuntimeIdentity(params: {
+    error: unknown;
+    authAgentRuntimeIdentityToken?: string;
+  }): boolean {
+    if (!params.authAgentRuntimeIdentityToken) {
+      return false;
+    }
+    if (!(params.error instanceof GatewayClientRequestError)) {
+      return false;
+    }
+    if (params.error.gatewayCode !== "INVALID_REQUEST") {
+      return false;
+    }
+    const message = normalizeLowercaseStringOrEmpty(params.error.message);
+    return (
+      message.includes("invalid connect params") && message.includes("agentruntimeidentitytoken")
+    );
+  }
+
   private isTrustedDeviceRetryEndpoint(): boolean {
     const rawUrl = this.opts.url ?? "ws://127.0.0.1:18789";
     try {
@@ -1281,6 +1320,9 @@ export class GatewayClient {
     const authApprovalRuntimeToken = this.approvalRuntimeTokenCompatibilityDisabled
       ? undefined
       : normalizeOptionalString(this.opts.approvalRuntimeToken);
+    const authAgentRuntimeIdentityToken = normalizeOptionalString(
+      this.opts.agentRuntimeIdentityToken,
+    );
     const storedAuth = this.loadStoredDeviceAuth(role);
     const storedToken = storedAuth?.token ?? null;
     const storedScopes = storedAuth?.scopes;
@@ -1314,6 +1356,7 @@ export class GatewayClient {
       authDeviceToken: shouldUseDeviceRetryToken ? (storedToken ?? undefined) : undefined,
       authPassword,
       authApprovalRuntimeToken,
+      authAgentRuntimeIdentityToken,
       signatureToken: authToken ?? authBootstrapToken ?? undefined,
       resolvedDeviceToken,
       storedToken: storedToken ?? undefined,
@@ -1549,12 +1592,11 @@ export class GatewayClient {
     if (opts?.signal?.aborted) {
       throw createGatewayRequestAbortError(method);
     }
+    if (typeof method !== "string" || method.length === 0) {
+      throw new Error("invalid request frame: method must be a non-empty string");
+    }
     const id = randomUUID();
     const frame: RequestFrame = { type: "req", id, method, params };
-    const requestFrameError = validateClientRequestFrame(frame);
-    if (requestFrameError) {
-      throw new Error(`invalid request frame: ${requestFrameError}`);
-    }
     const expectFinal = opts?.expectFinal === true;
     const timeoutMs =
       opts?.timeoutMs === null

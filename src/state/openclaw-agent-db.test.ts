@@ -3,7 +3,8 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { listOpenFileDescriptorsForPath } from "../infra/open-file-descriptors.test-support.js";
@@ -11,6 +12,7 @@ import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "./openclaw-agent-db.generated.js";
 import {
   closeOpenClawAgentDatabasesForTest,
+  inspectOpenClawAgentDatabaseOwner,
   listOpenClawRegisteredAgentDatabases,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
@@ -26,9 +28,15 @@ import {
 
 type AgentDbTestDatabase = Pick<OpenClawAgentKyselyDatabase, "schema_meta">;
 
+const agentDbTempDirs: string[] = [];
+
 function createTempStateDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-db-"));
+  return makeTempDir(agentDbTempDirs, "openclaw-agent-db-");
 }
+
+afterAll(() => {
+  cleanupTempDirs(agentDbTempDirs);
+});
 
 afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
@@ -67,6 +75,42 @@ describe("openclaw agent database", () => {
         "openclaw-agent.sqlite",
       ),
     );
+  });
+
+  it("lists a missing registry without creating the shared state database", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const stateDatabasePath = path.join(stateDir, "state", "openclaw.sqlite");
+
+    expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([]);
+    expect(fs.existsSync(stateDatabasePath)).toBe(false);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "fails closed when the missing registry has a dangling parent symlink",
+    () => {
+      const stateDir = createTempStateDir();
+      const env = { OPENCLAW_STATE_DIR: stateDir };
+      fs.symlinkSync(path.join(stateDir, "missing-state"), path.join(stateDir, "state"), "dir");
+
+      expect(() => listOpenClawRegisteredAgentDatabases({ env })).toThrow("is unavailable");
+    },
+  );
+
+  it("lists the registry without updating shared schema metadata", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const stateDatabase = openOpenClawStateDatabase({ env });
+    stateDatabase.db
+      .prepare("UPDATE schema_meta SET updated_at = ? WHERE meta_key = ?")
+      .run(1, "primary");
+
+    expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([]);
+    expect(
+      stateDatabase.db
+        .prepare("SELECT updated_at FROM schema_meta WHERE meta_key = ?")
+        .get("primary"),
+    ).toEqual({ updated_at: 1 });
   });
 
   it("creates the per-agent schema and registers it globally", () => {
@@ -163,6 +207,10 @@ describe("openclaw agent database", () => {
     `);
     legacyDb.close();
 
+    expect(() => listOpenClawRegisteredAgentDatabases({ env })).toThrow(
+      /run openclaw doctor --fix/,
+    );
+
     expect(() =>
       openOpenClawAgentDatabase({
         agentId: "worker-1",
@@ -190,7 +238,9 @@ describe("openclaw agent database", () => {
             listOpenClawRegisteredAgentDatabases,
             openOpenClawAgentDatabase,
           } from ${JSON.stringify(agentModuleUrl)};
-          import { closeOpenClawStateDatabaseForTest } from ${JSON.stringify(stateModuleUrl)};
+          import {
+            closeOpenClawStateDatabaseForTest,
+          } from ${JSON.stringify(stateModuleUrl)};
 
           const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-db-state-"));
           const env = { OPENCLAW_STATE_DIR: stateDir };
@@ -357,6 +407,21 @@ describe("openclaw agent database", () => {
     });
   });
 
+  it("inspects registered database ownership without mutating the database", () => {
+    const stateDir = createTempStateDir();
+    const database = openOpenClawAgentDatabase({
+      agentId: "worker-1",
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    const databasePath = database.path;
+    closeOpenClawAgentDatabasesForTest();
+
+    expect(inspectOpenClawAgentDatabaseOwner(databasePath)).toEqual({
+      status: "owned",
+      agentId: "worker-1",
+    });
+  });
+
   it("refuses to open newer per-agent schema versions", () => {
     const stateDir = createTempStateDir();
     const databasePath = path.join(
@@ -378,5 +443,49 @@ describe("openclaw agent database", () => {
         env: { OPENCLAW_STATE_DIR: stateDir },
       }),
     ).toThrow(/newer schema version 2/);
+  });
+
+  it("closes cached handles on normal process exit so no stale WAL remains", () => {
+    const stateDir = createTempStateDir();
+    const agentModuleUrl = new URL("./openclaw-agent-db.ts", import.meta.url).href;
+    const output = execFileSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "--input-type=module",
+        "-e",
+        `
+          import fs from "node:fs";
+          import { openOpenClawAgentDatabase } from ${JSON.stringify(agentModuleUrl)};
+
+          const database = openOpenClawAgentDatabase({
+            agentId: "worker-1",
+            env: { OPENCLAW_STATE_DIR: process.env.OPENCLAW_AGENT_DB_EXIT_TEST_DIR },
+          });
+          const walPath = database.path + "-wal";
+          console.log(JSON.stringify({
+            agentDatabasePath: database.path,
+            agentWalBytesBeforeExit: fs.existsSync(walPath) ? fs.statSync(walPath).size : 0,
+          }));
+        `,
+      ],
+      {
+        encoding: "utf8",
+        env: { ...process.env, OPENCLAW_AGENT_DB_EXIT_TEST_DIR: stateDir },
+      },
+    );
+    const result = JSON.parse(output) as {
+      agentDatabasePath: string;
+      agentWalBytesBeforeExit: number;
+    };
+    if (result.agentWalBytesBeforeExit === 0) {
+      // Rollback-journal filesystems (NFS/SMB tmp dirs) never produce a WAL.
+      return;
+    }
+    // The child never closes explicitly; only the exit hook can retire the WAL.
+    const walPath = `${result.agentDatabasePath}-wal`;
+    const walBytesAfterExit = fs.existsSync(walPath) ? fs.statSync(walPath).size : 0;
+    expect(walBytesAfterExit).toBe(0);
   });
 });

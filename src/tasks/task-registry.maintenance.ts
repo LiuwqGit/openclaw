@@ -30,19 +30,21 @@ import {
   isPluginStateDatabaseOpen,
   sweepExpiredPluginStateEntries,
 } from "../plugin-state/plugin-state-store.js";
+import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import {
   deriveSessionChatTypeFromKey,
   type SessionKeyChatType,
 } from "../sessions/session-chat-type-shared.js";
-import {
-  CODEX_NATIVE_SUBAGENT_STALE_ERROR,
-  isChildlessCodexNativeSubagentTask,
-} from "./codex-native-subagent-task.js";
+import { CODEX_NATIVE_SUBAGENT_STALE_ERROR } from "./codex-native-subagent-task.js";
 import {
   getDetachedTaskLifecycleRuntime,
   tryRecoverTaskBeforeMarkLost,
 } from "./detached-task-runtime.js";
+import {
+  isChildlessNativeSubagentTask,
+  resolveChildlessNativeSubagentTaskDefinition,
+} from "./native-subagent-task.js";
 import {
   deleteTaskRecordById,
   ensureTaskRegistryReady,
@@ -63,6 +65,7 @@ import {
 import type { TaskAuditFinding, TaskAuditSummary } from "./task-registry.audit.js";
 import { summarizeTaskRecords } from "./task-registry.summary.js";
 import type { TaskRecord, TaskRegistrySummary, TaskStatus } from "./task-registry.types.js";
+import type { ActiveTaskRestartBlocker } from "./task-restart-blocker.js";
 import {
   resolveEffectiveTaskCleanupAfter,
   resolveTaskCleanupAfter,
@@ -71,7 +74,7 @@ import {
 
 const log = createSubsystemLogger("tasks/task-registry-maintenance");
 const TASK_RECONCILE_GRACE_MS = 5 * 60_000;
-const CHILDLESS_CODEX_NATIVE_RECONCILE_GRACE_MS = 30 * 60_000;
+const CHILDLESS_NATIVE_SUBAGENT_RECONCILE_GRACE_MS = 30 * 60_000;
 const TASK_STALE_RUNNING_MS = 30 * 60_000;
 const TASK_SWEEP_INTERVAL_MS = 60_000;
 
@@ -326,8 +329,8 @@ function isTerminalTask(task: TaskRecord): boolean {
 
 function hasLostGraceExpired(task: TaskRecord, now: number): boolean {
   const referenceAt = task.lastEventAt ?? task.startedAt ?? task.createdAt;
-  const graceMs = isChildlessCodexNativeSubagentTask(task)
-    ? CHILDLESS_CODEX_NATIVE_RECONCILE_GRACE_MS
+  const graceMs = isChildlessNativeSubagentTask(task)
+    ? CHILDLESS_NATIVE_SUBAGENT_RECONCILE_GRACE_MS
     : TASK_RECONCILE_GRACE_MS;
   return now - referenceAt >= graceMs;
 }
@@ -354,6 +357,14 @@ function parseCronExecutionId(task: TaskRecord): CronExecutionId | undefined {
 
 function isTimeoutCronError(error: string | undefined): boolean {
   return error === "cron: job execution timed out";
+}
+
+function isRecoverableLostCronTask(task: TaskRecord): boolean {
+  if (task.status !== "lost") {
+    return false;
+  }
+  const error = task.error?.trim().toLowerCase();
+  return Boolean(error?.includes("backing session missing"));
 }
 
 function mapCronTerminalStatus(status: unknown, error?: string): CronTerminalRecovery["status"] {
@@ -453,7 +464,7 @@ function resolveDurableCronTaskRecovery(
   task: TaskRecord,
   context: CronRecoveryContext,
 ): CronTerminalRecovery | undefined {
-  if (task.runtime !== "cron" || !isActiveTask(task)) {
+  if (task.runtime !== "cron" || (!isActiveTask(task) && !isRecoverableLostCronTask(task))) {
     return undefined;
   }
   const execution = parseCronExecutionId(task);
@@ -498,7 +509,7 @@ function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupConte
 
   const childSessionKey = task.childSessionKey?.trim();
   if (!childSessionKey) {
-    return !isChildlessCodexNativeSubagentTask(task);
+    return !isChildlessNativeSubagentTask(task);
   }
   if (task.runtime === "acp") {
     // The live-turn map is process-local; only the gateway owns it. A standalone CLI
@@ -527,8 +538,11 @@ function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupConte
 }
 
 function resolveTaskLostError(task: TaskRecord, context?: BackingSessionLookupContext): string {
-  if (isChildlessCodexNativeSubagentTask(task)) {
-    return CODEX_NATIVE_SUBAGENT_STALE_ERROR;
+  const nativeDefinition = resolveChildlessNativeSubagentTaskDefinition(task);
+  if (nativeDefinition) {
+    return nativeDefinition.taskKind === "codex-native"
+      ? CODEX_NATIVE_SUBAGENT_STALE_ERROR
+      : "Native subagent stopped reporting progress";
   }
   if (task.runtime === "subagent") {
     const entry = findTaskSessionEntry(task, context);
@@ -804,7 +818,7 @@ function markTaskRecovered(task: TaskRecord, recovery: CronTerminalRecovery): Ta
       status: recovery.status,
       endedAt: recovery.endedAt,
       lastEventAt: recovery.lastEventAt,
-      ...(recovery.error !== undefined ? { error: recovery.error } : {}),
+      error: recovery.error,
       ...(recovery.terminalSummary !== undefined
         ? { terminalSummary: recovery.terminalSummary }
         : {}),
@@ -819,11 +833,14 @@ function projectTaskRecovered(task: TaskRecord, recovery: CronTerminalRecovery):
     status: recovery.status,
     endedAt: recovery.endedAt,
     lastEventAt: recovery.lastEventAt,
-    ...(recovery.error !== undefined ? { error: recovery.error } : {}),
+    error: recovery.error,
     ...(recovery.terminalSummary !== undefined
       ? { terminalSummary: recovery.terminalSummary }
       : {}),
   };
+  if (recovery.error === undefined) {
+    delete projected.error;
+  }
   return {
     ...projected,
     ...(typeof projected.cleanupAfter === "number"
@@ -868,7 +885,7 @@ function reconcileTaskRecordForOperatorInspectionWithContexts(
   return projectTaskLost(task, now, backingSessionContext);
 }
 
-export function reconcileTaskRecordForOperatorInspection(
+function reconcileTaskRecordForOperatorInspection(
   task: TaskRecord,
   context: CronRecoveryContext = createCronRecoveryContext(),
 ): TaskRecord {
@@ -895,15 +912,6 @@ export function reconcileInspectableTasks(): TaskRecord[] {
 }
 
 configureTaskAuditTaskProvider(reconcileInspectableTasks);
-
-export type ActiveTaskRestartBlocker = {
-  taskId: string;
-  status: Extract<TaskStatus, "running">;
-  runtime: TaskRecord["runtime"];
-  runId?: string;
-  label?: string;
-  title?: string;
-};
 
 function isActiveTaskRestartBlockerStatus(
   status: TaskStatus,
@@ -1085,7 +1093,9 @@ function startScheduledSweep() {
   const clearSweepInProgress = () => {
     sweepInProgress = false;
   };
-  sweepTaskRegistry().then(clearSweepInProgress, clearSweepInProgress);
+  void runWithGatewayIndependentRootWorkAdmission(async () => {
+    await sweepTaskRegistry();
+  }).then(clearSweepInProgress, clearSweepInProgress);
 }
 
 export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintenanceSummary> {
@@ -1229,8 +1239,6 @@ export function stopTaskRegistryMaintenance() {
   }
   sweepInProgress = false;
 }
-
-export const stopTaskRegistryMaintenanceForTests = stopTaskRegistryMaintenance;
 
 export function setTaskRegistryMaintenanceRuntimeForTests(
   runtime: TaskRegistryMaintenanceRuntime,

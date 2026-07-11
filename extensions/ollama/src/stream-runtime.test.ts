@@ -1,15 +1,25 @@
 // Ollama tests cover stream runtime plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
+const { fetchWithSsrFGuardMock, ollamaStreamWarnMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
+  ollamaStreamWarnMock: vi.fn(),
 }));
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
+  return {
+    ...actual,
+    createSubsystemLogger: () => ({ warn: ollamaStreamWarnMock }),
+  };
+});
+
 import {
+  OLLAMA_INCOMPLETE_STREAM_ERROR,
   buildOllamaChatRequest,
   createConfiguredOllamaCompatStreamWrapper,
   createConfiguredOllamaStreamFn,
@@ -72,6 +82,7 @@ function expectIteratorEvent(
 
 afterEach(() => {
   fetchWithSsrFGuardMock.mockReset();
+  ollamaStreamWarnMock.mockReset();
 });
 
 describe("buildOllamaChatRequest", () => {
@@ -115,6 +126,26 @@ describe("buildOllamaChatRequest", () => {
     });
     expect(request.model).toBe("library/qwen3:32b");
   });
+
+  it("keeps native Ollama replay tool arguments as objects", () => {
+    const messages = convertToOllamaMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            name: "gateway",
+            arguments: '{"action":"config.get","path":"gateway.port"}',
+          },
+        ],
+      },
+    ]);
+
+    expect(messages[0]?.tool_calls?.[0]?.function.arguments).toEqual({
+      action: "config.get",
+      path: "gateway.port",
+    });
+  });
 });
 
 describe("createConfiguredOllamaCompatStreamWrapper", () => {
@@ -154,6 +185,67 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
     const payload = requireRecord(patchedPayload, "patched payload");
     expect(payload.thinking).toEqual({ type: "enabled" });
     expect(payload.options).toEqual({ num_ctx: 65536 });
+  });
+
+  it("preserves OpenAI-compatible replay tool arguments as strings", async () => {
+    let patchedPayload: Record<string, unknown> | undefined;
+    const baseStreamFn = vi.fn((_model, _context, options) => {
+      options?.onPayload?.({
+        messages: [
+          {
+            role: "assistant",
+            function_call: {
+              name: "legacy_gateway",
+              arguments: '{"action":"config.get"}',
+            },
+            tool_calls: [
+              {
+                id: "call_gateway",
+                type: "function",
+                function: {
+                  name: "gateway",
+                  arguments: '{"action":"config.get","path":"gateway.port"}',
+                },
+              },
+            ],
+          },
+        ],
+      });
+      return (async function* () {})();
+    });
+    const model = {
+      api: "openai-completions",
+      provider: "ollama",
+      id: "glm-5.2:cloud",
+      contextWindow: 262144,
+    };
+
+    const wrapped = createConfiguredOllamaCompatStreamWrapper({
+      provider: "ollama",
+      modelId: "glm-5.2:cloud",
+      model,
+      streamFn: baseStreamFn,
+    } as never);
+
+    await wrapped?.(
+      model as never,
+      { messages: [] } as never,
+      {
+        onPayload: (payload: unknown) => {
+          patchedPayload = payload as Record<string, unknown>;
+        },
+      } as never,
+    );
+
+    const payload = requireRecord(patchedPayload, "patched payload");
+    const messages = payload.messages as Array<Record<string, unknown>>;
+    const assistantMessage = requireRecord(messages[0], "assistant message");
+    const functionCall = requireRecord(assistantMessage.function_call, "function call");
+    const toolCalls = assistantMessage.tool_calls as Array<Record<string, unknown>>;
+    const toolCallFunction = requireRecord(toolCalls[0]?.function, "tool call function");
+    expect(functionCall.arguments).toBe('{"action":"config.get"}');
+    expect(toolCallFunction.arguments).toBe('{"action":"config.get","path":"gateway.port"}');
+    expect(payload.options).toEqual({ num_ctx: 262144 });
   });
 
   it("falls back to contextWindow when configured num_ctx is invalid", async () => {
@@ -1351,9 +1443,12 @@ describe("buildAssistantMessage", () => {
 });
 
 // Helper: build a ReadableStreamDefaultReader from NDJSON lines
-function mockNdjsonReader(lines: string[]): ReadableStreamDefaultReader<Uint8Array> {
+function mockNdjsonReader(
+  lines: string[],
+  options: { trailingNewline?: boolean } = {},
+): ReadableStreamDefaultReader<Uint8Array> {
   const encoder = new TextEncoder();
-  const payload = lines.join("\n") + "\n";
+  const payload = lines.join("\n") + (options.trailingNewline === false ? "" : "\n");
   let consumed = false;
   return {
     read: async () => {
@@ -1383,7 +1478,37 @@ async function expectDoneEventContent(lines: string[], expectedContent: unknown)
   });
 }
 
+async function expectNoParsedChunks(reader: ReadableStreamDefaultReader<Uint8Array>) {
+  const chunks = [];
+  for await (const chunk of parseNdjsonStream(reader)) {
+    chunks.push(chunk);
+  }
+  expect(chunks).toEqual([]);
+}
+
 describe("parseNdjsonStream", () => {
+  it("does not log a dangling surrogate for a malformed complete line", async () => {
+    const prefix = "x".repeat(119);
+    const reader = mockNdjsonReader([`${prefix}😀tail`]);
+
+    await expectNoParsedChunks(reader);
+
+    expect(ollamaStreamWarnMock).toHaveBeenCalledExactlyOnceWith(
+      `Skipping malformed NDJSON line: ${prefix}`,
+    );
+  });
+
+  it("does not log a dangling surrogate for malformed trailing data", async () => {
+    const prefix = "x".repeat(119);
+    const reader = mockNdjsonReader([`${prefix}😀tail`], { trailingNewline: false });
+
+    await expectNoParsedChunks(reader);
+
+    expect(ollamaStreamWarnMock).toHaveBeenCalledExactlyOnceWith(
+      `Skipping malformed trailing data: ${prefix}`,
+    );
+  });
+
   it("parses text-only streaming chunks", async () => {
     const reader = mockNdjsonReader([
       '{"model":"m","created_at":"t","message":{"role":"assistant","content":"Hello"},"done":false}',
@@ -1532,6 +1657,28 @@ function createControlledNdjsonFetch(): {
 
 function getGuardedFetchCall(fetchMock: typeof fetchWithSsrFGuardMock): GuardedFetchCall {
   return (fetchMock.mock.calls.at(0)?.[0] as GuardedFetchCall | undefined) ?? { url: "" };
+}
+
+function cancelTrackedResponse(
+  text: string,
+  init: ResponseInit,
+): {
+  response: Response;
+  wasCanceled: () => boolean;
+} {
+  let canceled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(text));
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
+  return {
+    response: new Response(stream, init),
+    wasCanceled: () => canceled,
+  };
 }
 
 async function createOllamaTestStream(params: {
@@ -1829,6 +1976,9 @@ describe("createOllamaStreamFn streaming events", () => {
         expect(types).toEqual(["start", "text_start", "text_delta", "error"]);
         const errorEvent = events.at(-1);
         expect(errorEvent?.type).toBe("error");
+        if (errorEvent?.type === "error") {
+          expect(errorEvent.error.errorMessage).toBe(OLLAMA_INCOMPLETE_STREAM_ERROR);
+        }
       },
     );
   });
@@ -2684,12 +2834,14 @@ describe("createOllamaStreamFn", () => {
     );
   });
 
-  it("surfaces non-2xx HTTP response as status-prefixed error", async () => {
+  it("surfaces bounded non-2xx HTTP response text as a status-prefixed error", async () => {
+    const tracked = cancelTrackedResponse(`${"Service Unavailable ".repeat(1024)}tail`, {
+      status: 503,
+      statusText: "Service Unavailable",
+    });
+    const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
     fetchWithSsrFGuardMock.mockResolvedValue({
-      response: new Response("Service Unavailable", {
-        status: 503,
-        statusText: "Service Unavailable",
-      }),
+      response: tracked.response,
       release: vi.fn(async () => undefined),
     });
     try {
@@ -2705,6 +2857,10 @@ describe("createOllamaStreamFn", () => {
       // The error message must start with the HTTP status code so that
       // extractLeadingHttpStatus can parse it for failover/retry logic.
       expect(errorEvent.error.errorMessage).toMatch(/^503\b/);
+      expect(errorEvent.error.errorMessage).toContain("Service Unavailable");
+      expect(errorEvent.error.errorMessage).not.toContain("tail");
+      expect(tracked.wasCanceled()).toBe(true);
+      expect(textSpy).not.toHaveBeenCalled();
     } finally {
       fetchWithSsrFGuardMock.mockReset();
     }

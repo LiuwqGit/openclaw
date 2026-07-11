@@ -1,9 +1,13 @@
 /**
  * Shared types for preparing and executing CLI-backed agent runs.
  */
-import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
+import type {
+  SourceReplyDeliveryMode,
+  TaskSuggestionDeliveryMode,
+} from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import type { FastMode } from "../../auto-reply/thinking.shared.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import type { CliSessionBinding, SessionEntry } from "../../config/sessions.js";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
@@ -13,14 +17,18 @@ import type { ContextEngine } from "../../context-engine/types.js";
 import type { ImageContent } from "../../llm/types.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { CliBackendExecutionMode } from "../../plugins/cli-backend.types.js";
+import type { PluginHookChannelContext } from "../../plugins/hook-types.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type {
   PersistedUserTurnMessage,
   UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.types.js";
 import type { SkillSnapshot } from "../../skills/types.js";
+import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import type { BootstrapContextMode } from "../bootstrap-files.js";
+import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
 import type { ResolvedCliBackend } from "../cli-backends.js";
+import type { CliSessionReuseResult } from "../cli-session.js";
 import type { ContextWindowInfo } from "../context-window-guard.js";
 import type { FailoverReason } from "../embedded-agent-helpers.js";
 import type { EmbeddedAgentExecutionPhase } from "../embedded-agent-runner/execution-phase.js";
@@ -28,12 +36,16 @@ import type {
   CurrentInboundPromptContext,
   EmbeddedRunTrigger,
 } from "../embedded-agent-runner/run/params.js";
+import type { ExecPolicyOverrides } from "../exec-defaults.js";
+import type { FastModeAutoProgressState } from "../fast-mode.js";
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
 
 /** Input contract for one CLI-backed agent run. */
 export type RunCliAgentParams = {
   sessionId: string;
   sessionKey?: string;
+  /** Session identity used only for sandbox and tool-policy resolution. */
+  runtimePolicySessionKey?: string;
   sessionEntry?: SessionEntry;
   agentId?: string;
   trigger?: EmbeddedRunTrigger;
@@ -44,6 +56,8 @@ export type RunCliAgentParams = {
   config?: OpenClawConfig;
   prompt: string;
   transcriptPrompt?: string;
+  /** Undecorated current-turn prompt used to merge inline and offloaded images. */
+  imagePrompt?: string;
   /**
    * Execution mode for the generic CLI runner. Side questions are one-shot
    * background answers and must not reuse or mutate normal agent sessions.
@@ -59,9 +73,20 @@ export type RunCliAgentParams = {
   currentInboundEventKind?: InboundEventKind;
   currentInboundContext?: CurrentInboundPromptContext;
   inputProvenance?: InputProvenance;
+  /** Selected model provider used for tool policy; distinct from a CLI runtime id. */
+  modelProvider?: string;
   provider: string;
   model?: string;
   thinkLevel?: ThinkLevel;
+  fastMode?: FastMode;
+  /** Stable outer-run start time for auto fast-mode cutoff across retries/fallbacks. */
+  fastModeStartedAtMs?: number;
+  /** Effective auto fast-mode cutoff for this run, in seconds. */
+  fastModeAutoOnSeconds?: number;
+  /** Shared notification state for nested harnesses that can observe the same tool boundary. */
+  fastModeAutoProgressState?: FastModeAutoProgressState;
+  /** True when the outer model fallback loop has reached its final candidate. */
+  isFinalFallbackAttempt?: boolean;
   timeoutMs: number;
   /**
    * Explicit run timeout, in milliseconds, when the caller can distinguish a
@@ -75,11 +100,13 @@ export type RunCliAgentParams = {
   jobId?: string;
   extraSystemPrompt?: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   requireExplicitMessageTarget?: boolean;
   silentReplyPromptMode?: SilentReplyPromptMode;
   allowEmptyAssistantReplyAsSilent?: boolean;
   /** Static portion of extraSystemPrompt (excluding per-message inbound metadata) for session reuse hashing. */
   extraSystemPromptStatic?: string;
+  cliSessionBindingFacts?: CliSessionBindingFacts;
   streamParams?: import("../command/types.js").AgentStreamParams;
   ownerNumbers?: string[];
   cliSessionId?: string;
@@ -93,13 +120,17 @@ export type RunCliAgentParams = {
   bootstrapPromptWarningSignaturesSeen?: string[];
   bootstrapPromptWarningSignature?: string;
   bootstrapContextMode?: BootstrapContextMode;
-  bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
+  bootstrapContextRunKind?: BootstrapContextRunKind;
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
   skillsSnapshot?: SkillSnapshot;
   messageChannel?: string;
   messageProvider?: string;
+  /** Capabilities declared by the gateway client that originated this run. */
+  clientCaps?: string[];
   currentChannelId?: string;
+  chatId?: string;
+  channelContext?: PluginHookChannelContext;
   currentThreadTs?: string;
   currentMessageId?: string | number;
   currentInboundAudio?: boolean;
@@ -108,8 +139,30 @@ export type RunCliAgentParams = {
   senderId?: string | null;
   /** Trusted sender identity bit for channel action auth. */
   senderIsOwner?: boolean;
+  /** Additional trusted sender identities used by toolsBySender policy. */
+  senderName?: string | null;
+  senderUsername?: string | null;
+  senderE164?: string | null;
+  /** Group policy context captured from the originating run. */
+  groupId?: string | null;
+  groupChannel?: string | null;
+  groupSpace?: string | null;
+  /** Parent session provenance used to validate inherited group policy. */
+  spawnedBy?: string | null;
+  /** Effective turn-local exec policy resolved before entering the CLI runtime. */
+  execOverrides?: ExecPolicyOverrides;
+  /** Effective elevated-exec defaults resolved before entering the CLI runtime. */
+  bashElevated?: ExecElevatedDefaults;
+  /** Device-scoped operator session allowed to review approvals initiated by this run. */
+  approvalReviewerDeviceId?: string;
   /** Runtime tool allow-list. CLI harnesses fail closed when this is set. */
   toolsAllow?: string[];
+  /**
+   * Ring-zero Crestodian tool served over a dedicated stdio MCP server; set
+   * only by the Crestodian agent runner. Replaces the normal bundle MCP
+   * surface for the run — the harness still owns its native tools.
+   */
+  crestodianTool?: import("../tools/crestodian-tool.js").CrestodianToolOptions;
   disableTools?: boolean;
   abortSignal?: AbortSignal;
   onExecutionStarted?: () => void;
@@ -142,23 +195,30 @@ export type RunCliAgentParams = {
 /** Backend config after MCP, skill, env, and cleanup preparation. */
 export type CliPreparedBackend = {
   backend: CliBackendConfig;
+  beforeExecution?: () => Promise<void>;
   cleanup?: () => Promise<void>;
+  /** Gateway-owned capture fence for this prepared bundle-MCP client. */
+  mcpClientGrantCapture?: {
+    activate: (captureKey: string) => void;
+    deactivate: (captureKey: string) => void;
+  };
   mcpConfigHash?: string;
   mcpResumeHash?: string;
   env?: Record<string, string>;
 };
 
-/** Reusable CLI session id and the reason it was rejected, when any. */
-export type CliReusableSession = {
-  sessionId?: string;
-  invalidatedReason?:
-    | "auth-profile"
-    | "auth-epoch"
-    | "system-prompt"
-    | "cwd"
-    | "mcp"
-    | "missing-transcript"
-    | "orphaned-tool-use";
+/** Reusable CLI session id, soft content drift, or hard invalidation. */
+export type CliReusableSession =
+  | CliSessionReuseResult
+  | {
+      mode: "invalidate";
+      invalidatedReason: "system-prompt" | "missing-transcript" | "orphaned-tool-use";
+    };
+
+export type CliSessionBindingFacts = {
+  extraSystemPromptStatic?: string;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  requireExplicitMessageTarget?: boolean;
 };
 
 /** Fully prepared execution context consumed by the CLI runner executor. */
@@ -171,6 +231,8 @@ export type PreparedCliRunContext = {
   backendResolved: ResolvedCliBackend;
   preparedBackend: CliPreparedBackend;
   reusableCliSession: CliReusableSession;
+  /** Resume is safe only while the exact managed Claude stdio child still exists. */
+  requiredClaudeLiveSessionGeneration?: string;
   hadSessionFile: boolean;
   contextEngineConfig: OpenClawConfig;
   contextEngine?: ContextEngine;

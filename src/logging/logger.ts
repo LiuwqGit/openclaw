@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Logger as TsLogger } from "tslog";
 import type { OpenClawConfig } from "../config/types.js";
 import {
@@ -25,27 +26,12 @@ import {
 import { readLoggingConfig, shouldSkipMutatingLoggingConfigRead } from "./config.js";
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
 import { type LogLevel, levelToMinLevel, normalizeLogLevel } from "./levels.js";
+import { canUseNodeFs, formatLocalDate, LOG_PREFIX, LOG_SUFFIX } from "./log-file-shared.js";
 import { redactSecrets, redactSensitiveText } from "./redact.js";
 import { loggingState } from "./state.js";
 import { formatTimestamp } from "./timestamps.js";
 import type { LoggerSettings } from "./types.js";
 export type { LoggerSettings } from "./types.js";
-
-type ProcessWithBuiltinModule = NodeJS.Process & {
-  getBuiltinModule?: (id: string) => unknown;
-};
-
-function canUseNodeFs(): boolean {
-  const getBuiltinModule = (process as ProcessWithBuiltinModule).getBuiltinModule;
-  if (typeof getBuiltinModule !== "function") {
-    return false;
-  }
-  try {
-    return getBuiltinModule("fs") !== undefined;
-  } catch {
-    return false;
-  }
-}
 
 function resolveDefaultLogDir(): string {
   return canUseNodeFs() ? resolvePreferredOpenClawTmpDir() : POSIX_OPENCLAW_TMP_DIR;
@@ -60,8 +46,6 @@ function resolveDefaultLogFile(defaultLogDir: string): string {
 export const DEFAULT_LOG_DIR = resolveDefaultLogDir();
 export const DEFAULT_LOG_FILE = resolveDefaultLogFile(DEFAULT_LOG_DIR); // legacy single-file path
 
-const LOG_PREFIX = "openclaw";
-const LOG_SUFFIX = ".log";
 const MAX_LOG_AGE_MS = 24 * 60 * 60 * 1000; // 24h
 const DEFAULT_MAX_LOG_FILE_BYTES = 100 * 1024 * 1024; // 100 MB
 const MAX_ROTATED_LOG_FILES = 5;
@@ -107,7 +91,7 @@ let cachedHostname: string | null = null;
 type DiagnosticLogAttributes = Record<string, string | number | boolean>;
 
 function clampDiagnosticLogText(value: string, maxChars: number): string {
-  return value.length > maxChars ? `${value.slice(0, maxChars)}...(truncated)` : value;
+  return value.length > maxChars ? `${truncateUtf16Safe(value, maxChars)}...(truncated)` : value;
 }
 
 function sanitizeDiagnosticLogText(value: string, maxChars: number): string {
@@ -234,7 +218,7 @@ function getSortedNumericLogArgs(logObj: TsLogRecord): unknown[] {
 }
 
 function clampFileLogText(value: string, maxChars: number): string {
-  return value.length > maxChars ? `${value.slice(0, maxChars)}...(truncated)` : value;
+  return value.length > maxChars ? `${truncateUtf16Safe(value, maxChars)}...(truncated)` : value;
 }
 
 function normalizeFileLogContextValue(value: unknown): string | undefined {
@@ -769,13 +753,6 @@ export const testApi = {
   shouldSkipMutatingLoggingConfigRead,
 };
 export { testApi as __test__ };
-
-function formatLocalDate(date: Date): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
 
 function defaultRollingPathForToday(): string {
   return rollingPathForDate(DEFAULT_LOG_DIR, new Date());

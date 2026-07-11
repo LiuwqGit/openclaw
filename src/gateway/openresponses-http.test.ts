@@ -1372,6 +1372,83 @@ describe("OpenResponses HTTP API (e2e)", () => {
     expect(response?.output?.[1]?.name).toBe("get_weather");
   });
 
+  it("buffers replaceable assistant events for streaming responses", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockImplementationOnce((async (opts: unknown) => {
+      const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+      emitAgentEvent({
+        runId,
+        stream: "assistant",
+        data: { text: "coordination draft", delta: "coordination draft", replaceable: true },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "assistant",
+        data: { text: "final answer", delta: "", replace: true, replaceable: true },
+      });
+      emitAgentEvent({ runId, stream: "assistant", data: { text: "final answer" } });
+      emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
+      return { payloads: [{ text: "final answer" }] };
+    }) as never);
+
+    const res = await postResponses(port, {
+      stream: true,
+      model: "openclaw",
+      input: "hi",
+    });
+
+    expect(res.status).toBe(200);
+    const events = parseSseEvents(await res.text());
+    const deltas = events
+      .filter((event) => event.event === "response.output_text.delta")
+      .map((event) => {
+        const parsed = JSON.parse(event.data) as { delta?: string };
+        return parsed.delta ?? "";
+      })
+      .join("");
+    const completed = JSON.parse(findSseEvent(events, "response.completed").data) as {
+      response?: { output?: Array<{ content?: Array<{ text?: string }> }> };
+    };
+
+    expect(deltas).toBe("final answer");
+    expect(completed.response?.output?.[0]?.content?.[0]?.text).toBe("final answer");
+    expect(deltas).not.toContain("coordination draft");
+  });
+
+  it("prefers final result text over buffered replaceable response drafts", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockImplementationOnce((async (opts: unknown) => {
+      const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+      emitAgentEvent({
+        runId,
+        stream: "assistant",
+        data: { text: "coordination draft", delta: "coordination draft", replaceable: true },
+      });
+      emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
+      return { payloads: [{ text: "final answer" }] };
+    }) as never);
+
+    const res = await postResponses(port, {
+      stream: true,
+      model: "openclaw",
+      input: "hi",
+    });
+
+    expect(res.status).toBe(200);
+    const events = parseSseEvents(await res.text());
+    const deltas = events
+      .filter((event) => event.event === "response.output_text.delta")
+      .map((event) => {
+        const parsed = JSON.parse(event.data) as { delta?: string };
+        return parsed.delta ?? "";
+      })
+      .join("");
+
+    expect(deltas).toBe("final answer");
+  });
+
   it("falls back to payload text for streamed function_call responses", async () => {
     const port = enabledPort;
     agentCommand.mockClear();
@@ -1811,6 +1888,44 @@ describe("OpenResponses HTTP API (e2e)", () => {
     const extraSystemPrompt = (opts as { extraSystemPrompt?: string }).extraSystemPrompt ?? "";
     expect(extraSystemPrompt).toContain('<file name="doc.txt">');
     expect(extraSystemPrompt).toContain("the quick brown fox");
+    await ensureResponseConsumed(res);
+  });
+
+  it("keeps base64 input_file text truncation UTF-16 safe", async () => {
+    const port = enabledPort;
+    const text = `${"a".repeat(59_999)}😀tail`;
+    agentCommand.mockClear();
+    agentCommand.mockResolvedValueOnce({ payloads: [{ text: "ok" }] } as never);
+
+    const res = await postResponses(port, {
+      model: "openclaw",
+      input: [
+        {
+          type: "message",
+          role: "user",
+          content: [
+            {
+              type: "input_file",
+              source: {
+                type: "base64",
+                media_type: "text/plain",
+                data: Buffer.from(text).toString("base64"),
+                filename: "emoji-boundary.txt",
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(res.status).toBe(200);
+    expect(agentCommand).toHaveBeenCalledTimes(1);
+    const opts = firstAgentOpts();
+    const extraSystemPrompt = (opts as { extraSystemPrompt?: string }).extraSystemPrompt ?? "";
+    expect(extraSystemPrompt).toContain('<file name="emoji-boundary.txt">');
+    expect(extraSystemPrompt).toContain("a".repeat(59_999));
+    expect(extraSystemPrompt).not.toContain("😀");
+    expect(extraSystemPrompt).not.toMatch(/[\uD800-\uDFFF]/u);
     await ensureResponseConsumed(res);
   });
 

@@ -11,6 +11,7 @@ import type {
   SecretRef,
   SecretRefSource,
 } from "../config/types.secrets.js";
+import { isValidEnvSecretRefId } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { FsSafeError, readSecureFile } from "../infra/fs-safe.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
@@ -34,6 +35,8 @@ import {
 import {
   formatExecSecretRefIdValidationMessage,
   isValidExecSecretRefId,
+  isValidFileSecretRefId,
+  isValidSecretProviderAlias,
   SINGLE_VALUE_FILE_REF_ID,
   resolveDefaultSecretProviderAlias,
   secretRefKey,
@@ -75,7 +78,7 @@ type ProviderResolutionOutput = Map<string, unknown>;
 
 /** Error for failures that affect an entire configured secret provider. */
 /** Error emitted when a configured secret provider cannot resolve a ref. */
-export class SecretProviderResolutionError extends Error {
+class SecretProviderResolutionError extends Error {
   readonly scope = "provider" as const;
   readonly source: SecretRefSource;
   readonly provider: string;
@@ -94,7 +97,7 @@ export class SecretProviderResolutionError extends Error {
 }
 
 /** Error for failures limited to one SecretRef id under a provider. */
-export class SecretRefResolutionError extends Error {
+class SecretRefResolutionError extends Error {
   readonly scope = "ref" as const;
   readonly source: SecretRefSource;
   readonly provider: string;
@@ -565,7 +568,9 @@ async function runExecResolver(params: {
       clearTimers();
       reject(error);
     });
+    child.stdout?.on("error", () => {});
     child.stdout?.on("data", (chunk) => append(chunk, "stdout"));
+    child.stderr?.on("error", () => {});
     child.stderr?.on("data", (chunk) => append(chunk, "stderr"));
     child.on("close", (code, signal) => {
       if (settled) {
@@ -661,7 +666,7 @@ function parseExecValues(params: {
   const responseErrors = isRecord(parsed.errors) ? parsed.errors : null;
   const out: Record<string, unknown> = {};
   for (const id of params.ids) {
-    if (responseErrors && id in responseErrors) {
+    if (responseErrors && Object.hasOwn(responseErrors, id)) {
       const entry = responseErrors[id];
       if (isRecord(entry) && typeof entry.message === "string" && entry.message.trim()) {
         throw refResolutionError({
@@ -678,7 +683,7 @@ function parseExecValues(params: {
         message: `Exec provider "${params.providerName}" failed for id "${id}".`,
       });
     }
-    if (!(id in responseValues)) {
+    if (!Object.hasOwn(responseValues, id)) {
       throw refResolutionError({
         source: "exec",
         provider: params.providerName,
@@ -897,6 +902,21 @@ export async function resolveSecretRefValues(
     const id = ref.id.trim();
     if (!id) {
       throw new Error("Secret reference id is empty.");
+    }
+    if (!isValidSecretProviderAlias(ref.provider)) {
+      throw new Error(
+        `Secret reference provider must match /^[a-z][a-z0-9_-]{0,63}$/ (ref: ${ref.source}:${ref.provider}:${id}).`,
+      );
+    }
+    if (ref.source === "env" && !isValidEnvSecretRefId(id)) {
+      throw new Error(
+        `Env secret reference id must match /^[A-Z][A-Z0-9_]{0,127}$/ (ref: ${ref.source}:${ref.provider}:${id}).`,
+      );
+    }
+    if (ref.source === "file" && !isValidFileSecretRefId(id)) {
+      throw new Error(
+        `File secret reference id must be an absolute JSON pointer or "value" (ref: ${ref.source}:${ref.provider}:${id}).`,
+      );
     }
     if (ref.source === "exec" && !isValidExecSecretRefId(id)) {
       throw new Error(

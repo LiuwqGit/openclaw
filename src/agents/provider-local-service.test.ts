@@ -6,6 +6,7 @@ import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { mintSecretSentinel } from "../secrets/sentinel.js";
 import { killPidIfAlive, readPidFile, waitForPidToExit } from "../test-utils/process-tree.js";
 import {
   attachModelProviderLocalService,
@@ -167,8 +168,9 @@ describe("provider local service", () => {
       },
     );
 
+    const sentinel = mintSecretSentinel("health-secret", { label: "local-health-probe" });
     const lease = await ensureModelProviderLocalService(model, {
-      Authorization: "Bearer health-secret",
+      Authorization: `Bearer ${sentinel}`,
       "X-Tenant": "acme",
     });
 
@@ -185,6 +187,84 @@ describe("provider local service", () => {
     ).toBe(true);
     lease?.release();
     await waitForProbeFailure(healthUrl);
+  });
+
+  it("rejects unknown sentinels before starting a local service", async () => {
+    const port = await freePort();
+    const unknown = "oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end";
+    const model = attachModelProviderLocalService(
+      {
+        id: "demo",
+        provider: "local-unknown-auth",
+        api: "openai-completions",
+        baseUrl: `http://127.0.0.1:${port}/v1`,
+      } as unknown as Model<"openai-completions">,
+      {
+        command: process.execPath,
+        args: ["--version"],
+        readyTimeoutMs: 1_000,
+      },
+    );
+
+    await expect(
+      ensureModelProviderLocalService(model, { Authorization: `Bearer ${unknown}` }),
+    ).rejects.toThrow(
+      `Secret sentinel ${unknown} is not registered in this process; refusing to probe local model provider health`,
+    );
+  });
+
+  it("cancels local service health probe response bodies", async () => {
+    let socketClosed = false;
+    const sockets = new Set<net.Socket>();
+    const server = net.createServer((socket) => {
+      sockets.add(socket);
+      socket.on("error", () => undefined);
+      socket.on("close", () => {
+        sockets.delete(socket);
+        socketClosed = true;
+      });
+      socket.write(
+        ["HTTP/1.1 200 OK", "Content-Type: application/json", "", '{"ok":true}'].join("\r\n"),
+      );
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => {
+        server.off("error", reject);
+        resolve();
+      });
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("missing test server port");
+    }
+    const model = attachModelProviderLocalService(
+      {
+        id: "demo",
+        provider: "local-body-cleanup",
+        api: "openai-completions",
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+      } as unknown as Model<"openai-completions">,
+      {
+        command: process.execPath,
+        args: ["--version"],
+        healthUrl: `http://127.0.0.1:${address.port}/v1/models`,
+        readyTimeoutMs: 1_000,
+        idleStopMs: 1,
+      },
+    );
+
+    try {
+      await expect(ensureModelProviderLocalService(model)).resolves.toBeUndefined();
+      await expect.poll(() => socketClosed, { timeout: 1000, interval: 20 }).toBe(true);
+    } finally {
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
   });
 
   it("serializes concurrent cold starts for the same local service", async () => {

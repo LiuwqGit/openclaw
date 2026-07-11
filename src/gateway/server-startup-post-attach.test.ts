@@ -5,11 +5,17 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { writeRestartSentinel } from "../infra/restart-sentinel.js";
 import type {
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
 } from "../plugins/hook-types.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
+import {
+  getActiveGatewayRootWorkCount,
+  resetGatewayWorkAdmission,
+} from "../process/gateway-work-admission.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 
 const hoisted = vi.hoisted(() => {
@@ -38,8 +44,8 @@ const hoisted = vi.hoisted(() => {
     skipped: 0,
   }));
   const scheduleRestartAbortedMainSessionRecovery = vi.fn();
-  const shouldWakeFromRestartSentinel = vi.fn(() => false);
-  const scheduleRestartSentinelWake = vi.fn();
+  const scheduleRestartSentinelWake =
+    vi.fn<typeof import("./server-restart-sentinel.js").scheduleRestartSentinelWake>();
   const refreshLatestUpdateRestartSentinel = vi.fn<
     typeof import("./server-restart-sentinel.js").refreshLatestUpdateRestartSentinel
   >(async () => null);
@@ -91,7 +97,6 @@ const hoisted = vi.hoisted(() => {
     markStartupOrphanedMainSessionsForRecovery,
     recoverStartupOrphanedMainSessions,
     scheduleRestartAbortedMainSessionRecovery,
-    shouldWakeFromRestartSentinel,
     scheduleRestartSentinelWake,
     refreshLatestUpdateRestartSentinel,
     getAcpRuntimeBackend,
@@ -137,7 +142,9 @@ vi.mock("../config/paths.js", async () => {
     STATE_DIR: "/tmp/openclaw-state",
     resolveConfigPath: vi.fn(() => "/tmp/openclaw-state/openclaw.json"),
     resolveGatewayPort: vi.fn(() => 18789),
-    resolveStateDir: vi.fn(() => "/tmp/openclaw-state"),
+    resolveStateDir: vi.fn((env: NodeJS.ProcessEnv = process.env) =>
+      env.OPENCLAW_STATE_DIR?.trim() ? actual.resolveStateDir(env) : "/tmp/openclaw-state",
+    ),
   };
 });
 
@@ -177,7 +184,6 @@ vi.mock("../acp/runtime/registry.js", () => ({
 vi.mock("./server-restart-sentinel.js", () => ({
   refreshLatestUpdateRestartSentinel: hoisted.refreshLatestUpdateRestartSentinel,
   scheduleRestartSentinelWake: hoisted.scheduleRestartSentinelWake,
-  shouldWakeFromRestartSentinel: hoisted.shouldWakeFromRestartSentinel,
 }));
 
 vi.mock("./server-startup-memory.js", () => ({
@@ -244,6 +250,8 @@ vi.mock("./server-tailscale.js", () => ({
 const { startGatewayPostAttachRuntime, startGatewaySidecars, testing } =
   await import("./server-startup-post-attach.js");
 const { STARTUP_UNAVAILABLE_GATEWAY_METHODS } = await import("./methods/core-descriptors.js");
+const { createGatewayCloseHandler } = await import("./server-close.js");
+const { createChatRunState } = await import("./server-chat-state.js");
 
 type PostAttachParams = Parameters<typeof startGatewayPostAttachRuntime>[0];
 type PostAttachRuntimeDeps = NonNullable<Parameters<typeof startGatewayPostAttachRuntime>[1]>;
@@ -298,6 +306,8 @@ function firstGatewayStartCall(
 
 describe("startGatewayPostAttachRuntime", () => {
   beforeEach(() => {
+    resetGatewayWorkAdmission();
+    closeOpenClawStateDatabaseForTest();
     vi.stubEnv("OPENCLAW_SKIP_CHANNELS", "0");
     vi.stubEnv("OPENCLAW_SKIP_PROVIDERS", "0");
     hoisted.startPluginServices.mockClear();
@@ -327,8 +337,9 @@ describe("startGatewayPostAttachRuntime", () => {
       skipped: 0,
     });
     hoisted.scheduleRestartAbortedMainSessionRecovery.mockClear();
-    hoisted.shouldWakeFromRestartSentinel.mockReturnValue(false);
     hoisted.scheduleRestartSentinelWake.mockClear();
+    hoisted.refreshLatestUpdateRestartSentinel.mockReset();
+    hoisted.refreshLatestUpdateRestartSentinel.mockResolvedValue(null);
     hoisted.getAcpRuntimeBackend.mockReset();
     hoisted.getAcpRuntimeBackend.mockReturnValue(null);
     hoisted.reconcilePendingSessionIdentities.mockClear();
@@ -359,12 +370,18 @@ describe("startGatewayPostAttachRuntime", () => {
   });
 
   afterEach(() => {
+    resetGatewayWorkAdmission();
+    closeOpenClawStateDatabaseForTest();
     vi.useRealTimers();
     vi.unstubAllEnvs();
   });
 
   it("re-enables startup-gated methods after post-attach sidecars start", async () => {
     const unavailableGatewayMethods = new Set<string>(["chat.history", "models.list"]);
+    const methodsAtRecoveryRegistration: string[][] = [];
+    hoisted.scheduleRestartAbortedMainSessionRecovery.mockImplementationOnce(() => {
+      methodsAtRecoveryRegistration.push([...unavailableGatewayMethods]);
+    });
     const onSidecarsReady = vi.fn();
     const log = { info: vi.fn(), warn: vi.fn() };
 
@@ -384,10 +401,16 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(hoisted.setInternalHooksEnabled).not.toHaveBeenCalled();
     expect(hoisted.logGatewayStartup).toHaveBeenCalledTimes(1);
     expect(firstStartupLog().loadedPluginIds).toEqual(["beta", "alpha"]);
+    expect(hoisted.logGatewayStartup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        activationSourceConfig: { hooks: { internal: { enabled: false } } },
+      }),
+    );
     expect(log.info).toHaveBeenCalledWith("gateway ready");
     expect(hoisted.scheduleRestartAbortedMainSessionRecovery).toHaveBeenCalledWith({
       cfg: { hooks: { internal: { enabled: false } } },
     });
+    expect(methodsAtRecoveryRegistration).toStrictEqual([["chat.history", "models.list"]]);
     expect(hoisted.startGatewayMemoryBackend).not.toHaveBeenCalled();
   });
 
@@ -417,6 +440,29 @@ describe("startGatewayPostAttachRuntime", () => {
       expect(refreshLatestUpdateRestartSentinel).toHaveBeenCalledTimes(1);
     });
     expect(events).toEqual(["sidecars", "returned", "sentinel"]);
+  });
+
+  it("keeps delayed restart sentinel recovery admitted until wake work completes", async () => {
+    vi.useFakeTimers();
+    let finishWake: (() => void) | undefined;
+    const wake = new Promise<void>((resolve) => {
+      finishWake = resolve;
+    });
+    hoisted.scheduleRestartSentinelWake.mockReturnValueOnce(wake);
+
+    testing.scheduleRestartSentinelWakeAfterReady({
+      deps: {} as never,
+      log: { warn: vi.fn() },
+    });
+    await vi.advanceTimersByTimeAsync(750);
+
+    expect(hoisted.scheduleRestartSentinelWake).toHaveBeenCalledOnce();
+    expect(getActiveGatewayRootWorkCount()).toBe(1);
+
+    finishWake?.();
+    await vi.waitFor(() => {
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    });
   });
 
   it("starts sidecars while startup logging is still pending", async () => {
@@ -559,63 +605,82 @@ describe("startGatewayPostAttachRuntime", () => {
 
   it("skips heavy restart sentinel refresh when no sentinel file exists", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-no-sentinel-"));
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-
-    const result = await testing.refreshLatestUpdateRestartSentinelIfPresent();
-
-    expect(result).toBeNull();
-    expect(hoisted.refreshLatestUpdateRestartSentinel).not.toHaveBeenCalled();
-    fs.rmSync(stateDir, { recursive: true, force: true });
-  });
-
-  it("refreshes the restart sentinel when the sentinel file exists", async () => {
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sentinel-"));
-    fs.writeFileSync(path.join(stateDir, "restart-sentinel.json"), "{}\n");
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const sentinel = { kind: "update", status: "ok", ts: 1 } as const;
-    hoisted.refreshLatestUpdateRestartSentinel.mockResolvedValue(sentinel);
-
-    const result = await testing.refreshLatestUpdateRestartSentinelIfPresent();
-
-    expect(result).toBe(sentinel);
-    expect(hoisted.refreshLatestUpdateRestartSentinel).toHaveBeenCalledOnce();
-    fs.rmSync(stateDir, { recursive: true, force: true });
-  });
-
-  it("expands tilde-based restart sentinel state paths", async () => {
-    const osHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-home-"));
     try {
-      const openclawHome = path.join(osHome, "openclaw-home");
-      const stateDirFromHome = path.join(openclawHome, ".openclaw");
-      fs.mkdirSync(stateDirFromHome, { recursive: true });
-      fs.writeFileSync(path.join(stateDirFromHome, "restart-sentinel.json"), "{}\n");
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        hoisted.refreshLatestUpdateRestartSentinel.mockClear();
+
+        const result = await testing.refreshLatestUpdateRestartSentinelIfPresent();
+
+        expect(result).toBeNull();
+        expect(hoisted.refreshLatestUpdateRestartSentinel).not.toHaveBeenCalled();
+      });
+    } finally {
+      closeOpenClawStateDatabaseForTest();
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("refreshes the restart sentinel when the sentinel row exists", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sentinel-"));
+    try {
+      await writeRestartSentinel(
+        {
+          kind: "update",
+          status: "ok",
+          ts: 1,
+        },
+        { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv,
+      );
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        const sentinel = { kind: "update", status: "ok", ts: 1 } as const;
+        hoisted.refreshLatestUpdateRestartSentinel.mockClear();
+        hoisted.refreshLatestUpdateRestartSentinel.mockResolvedValue(sentinel);
+
+        const result = await testing.refreshLatestUpdateRestartSentinelIfPresent();
+
+        expect(result).toBe(sentinel);
+        expect(hoisted.refreshLatestUpdateRestartSentinel).toHaveBeenCalledOnce();
+      });
+    } finally {
+      closeOpenClawStateDatabaseForTest();
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("detects restart sentinel rows in explicit state directories", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sentinel-state-"));
+    try {
+      await writeRestartSentinel(
+        {
+          kind: "update",
+          status: "ok",
+          ts: 1,
+        },
+        { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv,
+      );
 
       expect(
-        await testing.hasRestartSentinelFileFast({
-          HOME: osHome,
-          OPENCLAW_HOME: "~/openclaw-home",
-        } as NodeJS.ProcessEnv),
-      ).toBe(true);
-
-      const backslashStateDir = path.resolve(`${osHome}\\openclaw-state`);
-      fs.mkdirSync(backslashStateDir, { recursive: true });
-      fs.writeFileSync(path.join(backslashStateDir, "restart-sentinel.json"), "{}\n");
-
-      expect(
-        await testing.hasRestartSentinelFileFast({
-          HOME: osHome,
-          OPENCLAW_STATE_DIR: "~\\openclaw-state",
+        await testing.hasRestartSentinelFast({
+          OPENCLAW_STATE_DIR: stateDir,
         } as NodeJS.ProcessEnv),
       ).toBe(true);
     } finally {
-      fs.rmSync(osHome, { recursive: true, force: true });
+      closeOpenClawStateDatabaseForTest();
+      fs.rmSync(stateDir, { recursive: true, force: true });
     }
   });
 
   it("avoids sync filesystem probes while checking restart sentinel presence", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-async-sentinel-"));
     try {
-      fs.writeFileSync(path.join(stateDir, "restart-sentinel.json"), "{}\n");
+      await writeRestartSentinel(
+        {
+          kind: "update",
+          status: "ok",
+          ts: 1,
+        },
+        { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv,
+      );
       const actualExistsSync = fs.existsSync;
       const existsSync = vi.spyOn(fs, "existsSync").mockImplementation((candidate) => {
         if (String(candidate).startsWith(stateDir)) {
@@ -625,7 +690,7 @@ describe("startGatewayPostAttachRuntime", () => {
       });
       try {
         await expect(
-          testing.hasRestartSentinelFileFast({
+          testing.hasRestartSentinelFast({
             OPENCLAW_STATE_DIR: stateDir,
           } as NodeJS.ProcessEnv),
         ).resolves.toBe(true);
@@ -636,6 +701,7 @@ describe("startGatewayPostAttachRuntime", () => {
         existsSync.mockRestore();
       }
     } finally {
+      closeOpenClawStateDatabaseForTest();
       fs.rmSync(stateDir, { recursive: true, force: true });
     }
   });
@@ -985,7 +1051,7 @@ describe("startGatewayPostAttachRuntime", () => {
       await startGatewayPostAttachRuntime({
         ...createPostAttachParams(),
         log,
-        deferSidecars: true,
+        sidecarStartup: "defer",
         providerAuthPrewarm: { enabled: true, delayMs: 1_000 },
         onPostReadySidecars,
         onGatewayLifetimeSidecars,
@@ -1006,6 +1072,40 @@ describe("startGatewayPostAttachRuntime", () => {
         expect(hoisted.setAuthProfileFailureHook).toHaveBeenCalledTimes(1);
       });
       expect(hoisted.warmCurrentProviderAuthStateOffMainThread).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.waitFor(() => {
+        expect(hoisted.warmCurrentProviderAuthStateOffMainThread).toHaveBeenCalledTimes(1);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps provider auth failure rewarm without default startup prewarm", async () => {
+    vi.useFakeTimers();
+    const onGatewayLifetimeSidecars = vi.fn();
+
+    try {
+      await startGatewayPostAttachRuntime({
+        ...createPostAttachParams(),
+        sidecarStartup: "defer",
+        providerAuthPrewarm: {},
+        onGatewayLifetimeSidecars,
+      });
+
+      await vi.dynamicImportSettled();
+      await vi.waitFor(() => {
+        expect(hoisted.setAuthProfileFailureHook).toHaveBeenCalledTimes(1);
+      });
+      expect(onGatewayLifetimeSidecars.mock.calls[0]?.[0]).toHaveLength(2);
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(hoisted.warmCurrentProviderAuthStateOffMainThread).not.toHaveBeenCalled();
+
+      const hook = hoisted.setAuthProfileFailureHook.mock.calls[0]?.[0] as (() => void) | undefined;
+      hook?.();
+      expect(hoisted.clearCurrentProviderAuthState).toHaveBeenCalledTimes(1);
 
       await vi.advanceTimersByTimeAsync(1_000);
       await vi.waitFor(() => {
@@ -1069,7 +1169,7 @@ describe("startGatewayPostAttachRuntime", () => {
           } as never,
         }),
         log,
-        deferSidecars: true,
+        sidecarStartup: "defer",
         providerAuthPrewarm: { enabled: true, delayMs: 1_000 },
         onPostReadySidecars,
         onGatewayLifetimeSidecars,
@@ -1175,6 +1275,7 @@ describe("startGatewayPostAttachRuntime", () => {
         getConfig: () => ({ marker: "current" }) as never,
         log,
         delayMs: 1_000,
+        startupWarmEnabled: true,
       });
       await vi.dynamicImportSettled();
       await vi.waitFor(() => {
@@ -1195,7 +1296,7 @@ describe("startGatewayPostAttachRuntime", () => {
     }
   });
 
-  it("keeps the default provider auth prewarm out of the early post-ready window", async () => {
+  it("delays explicit provider auth prewarm beyond the early post-ready window", async () => {
     expect(testing.providerAuthPrewarmStartDelayMs).toBe(5_000);
   });
 
@@ -1212,6 +1313,7 @@ describe("startGatewayPostAttachRuntime", () => {
         getConfig: () => currentCfg,
         log,
         delayMs: 0,
+        startupWarmEnabled: true,
       });
       currentCfg = reloadedCfg;
       await vi.dynamicImportSettled();
@@ -1310,7 +1412,7 @@ describe("startGatewayPostAttachRuntime", () => {
 
         await startGatewayPostAttachRuntime({
           ...createPostAttachParams({
-            deferSidecars: true,
+            sidecarStartup: "defer",
             onChannelsStarted: async () => {
               events.push("channels-started");
             },
@@ -1364,7 +1466,7 @@ describe("startGatewayPostAttachRuntime", () => {
 
         await startGatewayPostAttachRuntime({
           ...createPostAttachParams({
-            deferSidecars: true,
+            sidecarStartup: "defer",
             onPluginServices,
             onSidecarsReady,
           }),
@@ -1469,7 +1571,7 @@ describe("startGatewayPostAttachRuntime", () => {
         const runtimePromise = startGatewayPostAttachRuntime(
           {
             ...createPostAttachParams({
-              deferSidecars: true,
+              sidecarStartup: "defer",
               onPluginServices,
               onSidecarsReady,
             }),
@@ -1831,9 +1933,6 @@ describe("startGatewayPostAttachRuntime", () => {
     const postReadySidecars = [{ stop: vi.fn() }];
     const stopChannel = vi.fn(async () => {});
     const pluginServices = { stop: vi.fn(async () => {}) };
-    const { createGatewayCloseHandler } = await import("./server-close.js");
-    const { createChatRunState } = await import("./server-chat-state.js");
-
     const close = createGatewayCloseHandler({
       bonjourStop: null,
       tailscaleCleanup: null,
@@ -1849,12 +1948,16 @@ describe("startGatewayPostAttachRuntime", () => {
       healthInterval: setInterval(() => {}, 1 << 30),
       dedupeCleanup: setInterval(() => {}, 1 << 30),
       mediaCleanup: null,
+      worktreeCleanup: null,
+      skillCuratorCleanup: vi.fn(),
       agentUnsub: null,
+      taskUnsub: null,
       heartbeatUnsub: null,
       transcriptUnsub: null,
       lifecycleUnsub: null,
       chatRunState: createChatRunState(),
       chatAbortControllers: new Map(),
+      chatQueuedTurns: new Map(),
       removeChatRun: vi.fn(),
       agentRunSeq: new Map(),
       nodeSendToSession: vi.fn(),
@@ -1920,7 +2023,7 @@ describe("startGatewayPostAttachRuntime", () => {
       {
         ...createPostAttachParams(),
         unavailableGatewayMethods,
-        deferSidecars: true,
+        sidecarStartup: "defer",
       },
       createPostAttachRuntimeDeps({ startGatewaySidecars: startGatewaySidecarsValue }),
     );
@@ -1962,7 +2065,7 @@ describe("startGatewayPostAttachRuntime", () => {
     await startGatewayPostAttachRuntime(
       {
         ...createPostAttachParams({
-          deferSidecars: true,
+          sidecarStartup: "defer",
           loadStartupPlugins,
           onStartupPluginsLoaded,
         }),
@@ -1982,6 +2085,13 @@ describe("startGatewayPostAttachRuntime", () => {
   it("dispatches registered gateway startup internal hooks without configured hook packs", async () => {
     vi.useFakeTimers();
     hoisted.hasInternalHookListeners.mockReturnValue(true);
+    let releaseHook = () => {};
+    hoisted.triggerInternalHook.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseHook = resolve;
+        }),
+    );
     const cfg = {} as never;
     const deps = {} as never;
 
@@ -2020,7 +2130,11 @@ describe("startGatewayPostAttachRuntime", () => {
         },
       );
       expect(hoisted.triggerInternalHook).toHaveBeenCalledWith(hoisted.startupHookEvent);
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
+      releaseHook();
+      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
     } finally {
+      releaseHook();
       vi.useRealTimers();
     }
   });
@@ -2216,6 +2330,7 @@ function createPostAttachParams(overrides: Partial<PostAttachParams> = {}): Post
       error: vi.fn(),
     },
     gatewayPluginConfigAtStart: { hooks: { internal: { enabled: false } } } as never,
+    activationSourceConfig: { hooks: { internal: { enabled: false } } } as never,
     pluginRegistry: {
       plugins: [
         { id: "beta", status: "loaded" },

@@ -1,6 +1,8 @@
 // Assertions for Codex npm plugin live E2E scenarios.
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { extractAgentReplyTexts } from "../agent-turn-output.mjs";
 import {
   assertPathInside,
@@ -37,6 +39,11 @@ const MAX_TRANSCRIPT_SCAN_BYTES = readPositiveIntEnv(
   "OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TRANSCRIPT_SCAN_BYTES",
   2 * 1024 * 1024,
 );
+const AGENT_TURN_TIMEOUT_SECONDS = readPositiveIntEnv(
+  "OPENCLAW_CODEX_NPM_PLUGIN_AGENT_TIMEOUT_SECONDS",
+  420,
+);
+const CODEX_BINDING_NAMESPACE = "app-server-thread-bindings";
 
 function readPositiveIntEnv(name, fallback) {
   const text = String(process.env[name] ?? fallback).trim();
@@ -76,6 +83,43 @@ function readTextFileTail(filePath, label, maxBytes = MAX_ERROR_TAIL_BYTES) {
   }
 }
 
+function readCodexBinding(sessionId, sessionKey) {
+  const dbPath = path.join(stateDir(), "state", "openclaw.sqlite");
+  if (!fs.existsSync(dbPath)) {
+    throw new Error(`missing OpenClaw state database: ${dbPath}`);
+  }
+  const db = new DatabaseSync(dbPath, { readOnly: true });
+  try {
+    const stableSessionKey = String(sessionKey ?? "").trim();
+    const key = stableSessionKey
+      ? `session-key:main:${createHash("sha256").update(stableSessionKey).digest("base64url")}`
+      : `session:main:${sessionId}`;
+    const row = db
+      .prepare(
+        `SELECT value_json
+           FROM plugin_state_entries
+          WHERE plugin_id = ? AND namespace = ? AND entry_key = ?
+            AND (expires_at IS NULL OR expires_at > ?)`,
+      )
+      .get("codex", CODEX_BINDING_NAMESPACE, key, Date.now());
+    if (!row || typeof row.value_json !== "string") {
+      throw new Error(`missing Codex app-server binding row: ${key}`);
+    }
+    const stored = JSON.parse(row.value_json);
+    if (stored?.version !== 1 || stored.state !== "active" || !stored.binding) {
+      throw new Error(`invalid Codex app-server binding row ${key}: ${row.value_json}`);
+    }
+    if (stored.sessionId && stored.sessionId !== sessionId) {
+      throw new Error(
+        `Codex app-server binding row ${key} belongs to session ${stored.sessionId}, expected ${sessionId}`,
+      );
+    }
+    return stored.binding;
+  } finally {
+    db.close();
+  }
+}
+
 function configure() {
   const modelRef = process.argv[3] || "codex/gpt-5.4";
   const state = stateDir();
@@ -100,7 +144,7 @@ function configure() {
             mode: "yolo",
             approvalPolicy: "never",
             sandbox: "danger-full-access",
-            requestTimeoutMs: 420_000,
+            requestTimeoutMs: AGENT_TURN_TIMEOUT_SECONDS * 1000,
           },
         },
       },
@@ -117,7 +161,7 @@ function configure() {
       },
       workspace: path.join(state, "workspace"),
       skipBootstrap: true,
-      timeoutSeconds: 420,
+      timeoutSeconds: AGENT_TURN_TIMEOUT_SECONDS,
     },
   };
   fs.mkdirSync(path.dirname(cfgPath), { recursive: true });
@@ -401,10 +445,13 @@ function assertAgentTurn() {
   const sessionsDir = path.join(stateDir(), "agents", "main", "sessions");
   const storePath = path.join(sessionsDir, "sessions.json");
   const store = readJson(storePath);
-  const entry = Object.values(store).find((candidate) => candidate?.sessionId === sessionId);
-  if (!entry) {
+  const sessionMatch = Object.entries(store).find(
+    ([, candidate]) => candidate?.sessionId === sessionId,
+  );
+  if (!sessionMatch) {
     throw new Error(`missing session store entry for ${sessionId}: ${JSON.stringify(store)}`);
   }
+  const [sessionKey, entry] = sessionMatch;
   if (entry.agentHarnessId !== "codex") {
     throw new Error(`expected codex harness in session entry, got ${entry.agentHarnessId}`);
   }
@@ -415,9 +462,8 @@ function assertAgentTurn() {
     throw new Error(`missing OpenClaw session file: ${entry.sessionFile}`);
   }
 
-  const bindingPath = `${entry.sessionFile}.codex-app-server.json`;
-  const binding = readJson(bindingPath);
-  if (![1, 2].includes(binding.schemaVersion) || typeof binding.threadId !== "string") {
+  const binding = readCodexBinding(sessionId, sessionKey);
+  if (typeof binding.threadId !== "string") {
     throw new Error(`invalid Codex app-server binding: ${JSON.stringify(binding)}`);
   }
   if (binding.model !== modelRef.split("/").slice(1).join("/")) {

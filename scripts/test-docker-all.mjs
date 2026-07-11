@@ -28,6 +28,7 @@ import {
   parseProfile,
   resolveDockerE2ePlan,
 } from "./lib/docker-e2e-plan.mjs";
+import { sleep } from "./lib/sleep.mjs";
 
 const SCRIPT_ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ROOT_DIR = path.resolve(process.env.OPENCLAW_DOCKER_E2E_REPO_ROOT || SCRIPT_ROOT_DIR);
@@ -43,13 +44,17 @@ const DEFAULT_PREFLIGHT_RUN_TIMEOUT_MS = 60_000;
 const CLEANUP_SMOKE_NAME = "cleanup-smoke";
 export const SHELL_CAPTURE_MAX_CHARS = 1024 * 1024;
 export const LOG_TAIL_MAX_BYTES = 1024 * 1024;
+const SHELL_TIMEOUT_KILL_GRACE_MS = 10_000;
+const SHELL_POST_FORCE_KILL_WAIT_MS = 1_000;
+const SHELL_PROCESS_GROUP_EXIT_POLL_MS = 25;
+const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 const DEFAULT_TIMINGS_FILE = path.join(ROOT_DIR, ".artifacts/docker-tests/lane-timings.json");
 const DEFAULT_GITHUB_WORKFLOW = "openclaw-live-and-e2e-checks-reusable.yml";
 const IS_MAIN = process.argv[1]
   ? path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
   : false;
 
-export function dockerAllUsage() {
+function dockerAllUsage() {
   return [
     "Usage: node scripts/test-docker-all.mjs [--plan-json]",
     "",
@@ -132,6 +137,24 @@ function parseBool(raw, fallback) {
   return !/^(?:0|false|no)$/i.test(raw);
 }
 
+function numericTimerValueMs(valueMs) {
+  const value = Number(valueMs);
+  return Number.isFinite(value) ? Math.floor(value) : undefined;
+}
+
+function resolveTimerTimeoutMs(valueMs, fallbackMs = MAX_TIMER_TIMEOUT_MS) {
+  const value = numericTimerValueMs(valueMs) ?? numericTimerValueMs(fallbackMs);
+  return Math.min(Math.max(value ?? MAX_TIMER_TIMEOUT_MS, 1), MAX_TIMER_TIMEOUT_MS);
+}
+
+function resolveOptionalTimerTimeoutMs(valueMs) {
+  const value = numericTimerValueMs(valueMs);
+  if (value === undefined || value <= 0) {
+    return undefined;
+  }
+  return resolveTimerTimeoutMs(value);
+}
+
 function resourceLimitsSummary(resourceLimits) {
   return Object.entries(resourceLimits)
     .map(([resource, limit]) => `${resource}=${String(limit)}`)
@@ -204,12 +227,6 @@ function orderLanes(poolLanes, timingStore) {
     .map(({ poolLane }) => poolLane);
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
 function utcStampForPath() {
   return new Date().toISOString().replaceAll("-", "").replaceAll(":", "").replace(/\..*$/, "Z");
 }
@@ -248,31 +265,22 @@ function shellQuote(value) {
   return `'${String(value).replaceAll("'", "'\\''")}'`;
 }
 
-function githubWorkflowRef() {
-  const explicit = process.env.OPENCLAW_DOCKER_E2E_WORKFLOW_REF;
-  if (explicit) {
-    return explicit;
-  }
-  const refName = process.env.GITHUB_REF_NAME;
-  if (refName) {
-    return refName;
-  }
-  const ref = process.env.GITHUB_REF;
-  if (ref?.startsWith("refs/heads/")) {
-    return ref.slice("refs/heads/".length);
-  }
-  if (ref?.startsWith("refs/tags/")) {
-    return ref.slice("refs/tags/".length);
-  }
-  return undefined;
+function githubWorkflowRef(env = process.env) {
+  return env.OPENCLAW_DOCKER_E2E_WORKFLOW_REF || undefined;
 }
 
-function githubWorkflowRerunCommand(laneNames, ref) {
-  const workflowRef = githubWorkflowRef();
-  const releasePath = process.env.OPENCLAW_DOCKER_ALL_PROFILE === RELEASE_PATH_PROFILE;
+function maybeGhcrImage(value) {
+  return typeof value === "string" && value.startsWith("ghcr.io/") ? value : "";
+}
+
+export function githubWorkflowRerunCommand(laneNames, ref, env = process.env) {
+  const workflowRef = githubWorkflowRef(env);
+  const releasePath = env.OPENCLAW_DOCKER_ALL_PROFILE === RELEASE_PATH_PROFILE;
+  const bareImage = maybeGhcrImage(env.OPENCLAW_DOCKER_E2E_BARE_IMAGE);
+  const functionalImage = maybeGhcrImage(env.OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE);
   const fields = [
     "gh workflow run",
-    shellQuote(process.env.OPENCLAW_DOCKER_E2E_WORKFLOW || DEFAULT_GITHUB_WORKFLOW),
+    shellQuote(env.OPENCLAW_DOCKER_E2E_WORKFLOW || DEFAULT_GITHUB_WORKFLOW),
     ...(workflowRef ? ["--ref", shellQuote(workflowRef)] : []),
     "-f",
     `ref=${shellQuote(ref)}`,
@@ -289,44 +297,32 @@ function githubWorkflowRerunCommand(laneNames, ref) {
     "-f",
     "live_models_only=false",
   ];
-  if (process.env.GITHUB_RUN_ID) {
-    fields.push("-f", `package_artifact_run_id=${shellQuote(process.env.GITHUB_RUN_ID)}`);
+  if (env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC) {
     fields.push(
       "-f",
-      `package_artifact_name=${shellQuote(
-        process.env.OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME || "docker-e2e-package",
-      )}`,
+      `published_upgrade_survivor_baseline=${shellQuote(env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC)}`,
     );
   }
-  if (process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC) {
+  if (env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS) {
     fields.push(
       "-f",
-      `published_upgrade_survivor_baseline=${shellQuote(process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC)}`,
+      `published_upgrade_survivor_baselines=${shellQuote(env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS)}`,
     );
   }
-  if (process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS) {
+  if (env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS) {
     fields.push(
       "-f",
-      `published_upgrade_survivor_baselines=${shellQuote(process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS)}`,
+      `published_upgrade_survivor_scenarios=${shellQuote(env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS)}`,
     );
   }
-  if (process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS) {
-    fields.push(
-      "-f",
-      `published_upgrade_survivor_scenarios=${shellQuote(process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS)}`,
-    );
+  if (bareImage) {
+    fields.push("-f", `docker_e2e_bare_image=${shellQuote(bareImage)}`);
   }
-  if (process.env.OPENCLAW_DOCKER_E2E_BARE_IMAGE) {
-    fields.push(
-      "-f",
-      `docker_e2e_bare_image=${shellQuote(process.env.OPENCLAW_DOCKER_E2E_BARE_IMAGE)}`,
-    );
+  if (functionalImage) {
+    fields.push("-f", `docker_e2e_functional_image=${shellQuote(functionalImage)}`);
   }
-  if (process.env.OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE) {
-    fields.push(
-      "-f",
-      `docker_e2e_functional_image=${shellQuote(process.env.OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE)}`,
-    );
+  if (bareImage || functionalImage) {
+    fields.push("-f", "shared_image_policy=existing-only");
   }
   return fields.join(" ");
 }
@@ -421,7 +417,7 @@ async function writeTimingStore(timingStore, results) {
   console.log(`==> Docker lane timings: ${timingStore.file}`);
 }
 
-async function writeRunSummary(logDir, summary) {
+export async function writeRunSummary(logDir, summary) {
   const file = path.join(logDir, "summary.json");
   const payload = {
     ...summary,
@@ -482,7 +478,7 @@ async function writeFailureIndex(logDir, summary) {
         : undefined,
     generatedAt: new Date().toISOString(),
     lanes,
-    note: "Targeted GitHub reruns reuse this run's package artifact and shared Docker images when the generated command includes package_artifact_run_id and docker_e2e_*_image inputs.",
+    note: "Targeted GitHub reruns repack the exact selected ref and reuse only GHCR-backed shared images when the generated command includes docker_e2e_*_image inputs.",
     images: summary.images,
     packageArtifactName: process.env.OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME || undefined,
     ref,
@@ -551,19 +547,37 @@ export function dockerPreflightSmokeCommand(arch = process.arch) {
   return `docker run --rm --platform ${shellQuote(platform)} alpine:3.20 true`;
 }
 
-export function runShellCommand({ command, env, label, logFile, timeoutMs, noOutputTimeoutMs }) {
+export function runShellCommand({
+  command,
+  env,
+  label,
+  logFile,
+  timeoutMs,
+  noOutputTimeoutMs,
+  timeoutKillGraceMs = SHELL_TIMEOUT_KILL_GRACE_MS,
+}) {
+  if (activeChildrenShutdownPromise) {
+    return activeChildrenShutdownPromise.then(() => shellCommandSkippedForShutdown());
+  }
   return new Promise((resolve) => {
-    const pipeOutput = Boolean(logFile || noOutputTimeoutMs > 0);
+    const resolvedTimeoutMs = resolveOptionalTimerTimeoutMs(timeoutMs);
+    const resolvedNoOutputTimeoutMs = resolveOptionalTimerTimeoutMs(noOutputTimeoutMs);
+    const resolvedTimeoutKillGraceMs = resolveTimerTimeoutMs(
+      timeoutKillGraceMs,
+      SHELL_TIMEOUT_KILL_GRACE_MS,
+    );
+    const pipeOutput = Boolean(logFile || resolvedNoOutputTimeoutMs);
     const child = spawn("bash", ["-c", command], {
       cwd: ROOT_DIR,
       detached: process.platform !== "win32",
       env,
       stdio: pipeOutput ? ["ignore", "pipe", "pipe"] : "inherit",
     });
-    activeChildren.add(child);
+    activeChildren.set(child, resolvedTimeoutKillGraceMs);
     let timedOut = false;
     let noOutputTimedOut = false;
     let killTimer;
+    let killAt;
     let stream;
     let noOutputTimer;
     const terminateForTimeout = (message, options = {}) => {
@@ -578,26 +592,27 @@ export function runShellCommand({ command, env, label, logFile, timeoutMs, noOut
         console.error(`==> [${label}] ${message}; sending SIGTERM`);
       }
       terminateChild(child, "SIGTERM");
-      killTimer = setTimeout(() => terminateChild(child, "SIGKILL"), 10_000);
+      killAt = Date.now() + resolvedTimeoutKillGraceMs;
+      killTimer = setTimeout(() => terminateChild(child, "SIGKILL"), resolvedTimeoutKillGraceMs);
       killTimer.unref?.();
     };
     const resetNoOutputTimer = () => {
-      if (!noOutputTimeoutMs || noOutputTimeoutMs <= 0 || timedOut) {
+      if (!resolvedNoOutputTimeoutMs || timedOut) {
         return;
       }
       if (noOutputTimer) {
         clearTimeout(noOutputTimer);
       }
       noOutputTimer = setTimeout(() => {
-        terminateForTimeout(`no output for ${noOutputTimeoutMs}ms`, { noOutput: true });
-      }, noOutputTimeoutMs);
+        terminateForTimeout(`no output for ${resolvedNoOutputTimeoutMs}ms`, { noOutput: true });
+      }, resolvedNoOutputTimeoutMs);
       noOutputTimer.unref?.();
     };
     const timeoutTimer =
-      timeoutMs > 0
+      resolvedTimeoutMs !== undefined
         ? setTimeout(() => {
-            terminateForTimeout(`timeout after ${timeoutMs}ms`);
-          }, timeoutMs)
+            terminateForTimeout(`timeout after ${resolvedTimeoutMs}ms`);
+          }, resolvedTimeoutMs)
         : undefined;
     timeoutTimer?.unref?.();
 
@@ -627,23 +642,31 @@ export function runShellCommand({ command, env, label, logFile, timeoutMs, noOut
       if (noOutputTimer) {
         clearTimeout(noOutputTimer);
       }
+      const finish = () => {
+        if (killTimer) {
+          clearTimeout(killTimer);
+        }
+        killAt = undefined;
+        activeChildren.delete(child);
+        const exitCode = typeof status === "number" ? status : signal ? 128 : 1;
+        if (stream) {
+          stream.write(
+            `\n==> [${label}] finished: ${utcStamp()} status=${exitCode}${
+              noOutputTimedOut ? " noOutputTimedOut=true" : ""
+            }\n`,
+          );
+          stream.end();
+        }
+        resolve({ signal, status: exitCode, timedOut, noOutputTimedOut });
+      };
       if (timedOut) {
-        terminateChild(child, "SIGKILL");
+        void finishTimedOutShellProcessTree(child, {
+          killAt,
+          timeoutKillGraceMs: resolvedTimeoutKillGraceMs,
+        }).then(finish, finish);
+        return;
       }
-      if (killTimer) {
-        clearTimeout(killTimer);
-      }
-      activeChildren.delete(child);
-      const exitCode = typeof status === "number" ? status : signal ? 128 : 1;
-      if (stream) {
-        stream.write(
-          `\n==> [${label}] finished: ${utcStamp()} status=${exitCode}${
-            noOutputTimedOut ? " noOutputTimedOut=true" : ""
-          }\n`,
-        );
-        stream.end();
-      }
-      resolve({ signal, status: exitCode, timedOut, noOutputTimedOut });
+      finish();
     });
   });
 }
@@ -656,29 +679,48 @@ export function appendBoundedShellCapture(current, chunk, maxChars = SHELL_CAPTU
   return { text: combined.slice(-maxChars), truncated: true };
 }
 
-export function runShellCaptureCommand({ command, env, label, timeoutMs }) {
+export function runShellCaptureCommand({
+  command,
+  env,
+  label,
+  timeoutMs,
+  timeoutKillGraceMs = SHELL_TIMEOUT_KILL_GRACE_MS,
+}) {
+  if (activeChildrenShutdownPromise) {
+    return activeChildrenShutdownPromise.then(() => shellCaptureSkippedForShutdown(label));
+  }
   return new Promise((resolve) => {
+    const resolvedTimeoutMs = resolveOptionalTimerTimeoutMs(timeoutMs);
+    const resolvedTimeoutKillGraceMs = resolveTimerTimeoutMs(
+      timeoutKillGraceMs,
+      SHELL_TIMEOUT_KILL_GRACE_MS,
+    );
     const child = spawn("bash", ["-c", command], {
       cwd: ROOT_DIR,
       detached: process.platform !== "win32",
       env,
       stdio: ["ignore", "pipe", "pipe"],
     });
-    activeChildren.add(child);
+    activeChildren.set(child, resolvedTimeoutKillGraceMs);
     let stdout = "";
     let stderr = "";
     let stdoutTruncated = false;
     let stderrTruncated = false;
     let timedOut = false;
     let killTimer;
+    let killAt;
     const timeoutTimer =
-      timeoutMs > 0
+      resolvedTimeoutMs !== undefined
         ? setTimeout(() => {
             timedOut = true;
             terminateChild(child, "SIGTERM");
-            killTimer = setTimeout(() => terminateChild(child, "SIGKILL"), 10_000);
+            killAt = Date.now() + resolvedTimeoutKillGraceMs;
+            killTimer = setTimeout(
+              () => terminateChild(child, "SIGKILL"),
+              resolvedTimeoutKillGraceMs,
+            );
             killTimer.unref?.();
-          }, timeoutMs)
+          }, resolvedTimeoutMs)
         : undefined;
     timeoutTimer?.unref?.();
     child.stdout.on("data", (chunk) => {
@@ -695,24 +737,32 @@ export function runShellCaptureCommand({ command, env, label, timeoutMs }) {
       if (timeoutTimer) {
         clearTimeout(timeoutTimer);
       }
+      const finish = () => {
+        if (killTimer) {
+          clearTimeout(killTimer);
+        }
+        killAt = undefined;
+        activeChildren.delete(child);
+        const exitCode = typeof status === "number" ? status : signal ? 128 : 1;
+        resolve({
+          label,
+          signal,
+          status: exitCode,
+          stderr,
+          stderrTruncated,
+          stdout,
+          stdoutTruncated,
+          timedOut,
+        });
+      };
       if (timedOut) {
-        terminateChild(child, "SIGKILL");
+        void finishTimedOutShellProcessTree(child, {
+          killAt,
+          timeoutKillGraceMs: resolvedTimeoutKillGraceMs,
+        }).then(finish, finish);
+        return;
       }
-      if (killTimer) {
-        clearTimeout(killTimer);
-      }
-      activeChildren.delete(child);
-      const exitCode = typeof status === "number" ? status : signal ? 128 : 1;
-      resolve({
-        label,
-        signal,
-        status: exitCode,
-        stderr,
-        stderrTruncated,
-        stdout,
-        stdoutTruncated,
-        timedOut,
-      });
+      finish();
     });
   });
 }
@@ -802,6 +852,25 @@ async function runCleanupSmoke(baseEnv, logDir, command, startedAtMs) {
     targetable: false,
     timedOut: result.timedOut,
   };
+}
+
+export async function runCleanupSmokePhase(baseEnv, logDir, phases) {
+  const command = "pnpm test:docker:cleanup";
+  const startedAtMs = Date.now();
+  let failure;
+  try {
+    await runPhase(phases, CLEANUP_SMOKE_NAME, {}, async () => {
+      failure = await runCleanupSmoke(baseEnv, logDir, command, startedAtMs);
+      if (failure) {
+        throw new Error(
+          `Run cleanup smoke after parallel lanes failed with status ${failure.status}`,
+        );
+      }
+    });
+  } catch (error) {
+    failure ??= await recordCleanupSmokeFailure(error, baseEnv, logDir, command, startedAtMs);
+  }
+  return failure;
 }
 
 async function runForegroundGroup(entries, env) {
@@ -1224,7 +1293,71 @@ async function printFailureSummary(failures, tailLines) {
   }
 }
 
-const activeChildren = new Set();
+const activeChildren = new Map();
+let activeChildrenShutdownPromise;
+
+function shellCommandSkippedForShutdown() {
+  return {
+    noOutputTimedOut: false,
+    signal: null,
+    status: 143,
+    timedOut: false,
+  };
+}
+
+function shellCaptureSkippedForShutdown(label) {
+  return {
+    label,
+    signal: null,
+    status: 143,
+    stderr: "",
+    stderrTruncated: false,
+    stdout: "",
+    stdoutTruncated: false,
+    timedOut: false,
+  };
+}
+
+function shellProcessGroupAlive(child) {
+  if (process.platform === "win32" || !child.pid) {
+    return false;
+  }
+  try {
+    process.kill(-child.pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+
+async function waitForShellProcessGroupExit(child, timeoutMs) {
+  const deadlineAt = Date.now() + timeoutMs;
+  while (Date.now() < deadlineAt) {
+    if (!shellProcessGroupAlive(child)) {
+      return true;
+    }
+    await new Promise((resolvePoll) => {
+      setTimeout(resolvePoll, SHELL_PROCESS_GROUP_EXIT_POLL_MS);
+    });
+  }
+  return !shellProcessGroupAlive(child);
+}
+
+async function finishTimedOutShellProcessTree(child, { killAt, timeoutKillGraceMs }) {
+  if (!shellProcessGroupAlive(child)) {
+    return;
+  }
+  const graceRemainingMs =
+    killAt === undefined ? timeoutKillGraceMs : Math.max(0, killAt - Date.now());
+  if (graceRemainingMs > 0) {
+    await waitForShellProcessGroupExit(child, graceRemainingMs);
+  }
+  if (shellProcessGroupAlive(child)) {
+    terminateChild(child, "SIGKILL");
+  }
+  await waitForShellProcessGroupExit(child, SHELL_POST_FORCE_KILL_WAIT_MS);
+}
+
 function terminateChild(child, signal) {
   if (process.platform !== "win32" && child.pid) {
     try {
@@ -1238,18 +1371,36 @@ function terminateChild(child, signal) {
 }
 
 function terminateActiveChildren(signal) {
-  for (const child of activeChildren) {
+  for (const child of activeChildren.keys()) {
     terminateChild(child, signal);
   }
 }
 
+async function shutdownActiveChildren(signal, exitCode) {
+  if (activeChildrenShutdownPromise) {
+    terminateActiveChildren("SIGKILL");
+    return activeChildrenShutdownPromise;
+  }
+  const children = [...activeChildren.entries()];
+  terminateActiveChildren(signal);
+  activeChildrenShutdownPromise = Promise.all(
+    children.map(([child, timeoutKillGraceMs]) =>
+      finishTimedOutShellProcessTree(child, {
+        killAt: Date.now() + timeoutKillGraceMs,
+        timeoutKillGraceMs,
+      }),
+    ),
+  ).finally(() => {
+    process.exit(exitCode);
+  });
+  return activeChildrenShutdownPromise;
+}
+
 process.on("SIGINT", () => {
-  terminateActiveChildren("SIGINT");
-  process.exit(130);
+  void shutdownActiveChildren("SIGINT", 130);
 });
 process.on("SIGTERM", () => {
-  terminateActiveChildren("SIGTERM");
-  process.exit(143);
+  void shutdownActiveChildren("SIGTERM", 143);
 });
 
 async function main() {
@@ -1561,32 +1712,7 @@ async function main() {
   }
 
   if (profile === DEFAULT_PROFILE && selectedLaneNames.length === 0) {
-    const cleanupSmokeCommand = "pnpm test:docker:cleanup";
-    const cleanupStartedAtMs = Date.now();
-    let cleanupFailure;
-    try {
-      await runPhase(phases, CLEANUP_SMOKE_NAME, {}, async () => {
-        cleanupFailure = await runCleanupSmoke(
-          baseEnv,
-          logDir,
-          cleanupSmokeCommand,
-          cleanupStartedAtMs,
-        );
-        if (cleanupFailure) {
-          throw new Error(
-            `Run cleanup smoke after parallel lanes failed with status ${cleanupFailure.status}`,
-          );
-        }
-      });
-    } catch (error) {
-      cleanupFailure ??= await recordCleanupSmokeFailure(
-        error,
-        baseEnv,
-        logDir,
-        cleanupSmokeCommand,
-        cleanupStartedAtMs,
-      );
-    }
+    const cleanupFailure = await runCleanupSmokePhase(baseEnv, logDir, phases);
     if (cleanupFailure) {
       failures.push(cleanupFailure);
     }

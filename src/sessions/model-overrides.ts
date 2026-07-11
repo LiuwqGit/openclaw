@@ -93,6 +93,14 @@ export function applyModelOverrideToSessionEntry(params: {
     }
   }
 
+  // When switching back to the default model without override fields to delete
+  // (e.g. model comes from steering/fallback runtime fields), the isDefault
+  // branch at line 42 won't set selectionUpdated. Mark it here so that
+  // liveModelSwitchPending can still be set below when runtime is misaligned.
+  if (selection.isDefault && runtimePresent && !runtimeAligned) {
+    selectionUpdated = true;
+  }
+
   // contextTokens are derived from the active session model. When the selected
   // model changes (or runtime model is already stale), the cached window can
   // pin the session to an older/smaller limit until another run refreshes it.
@@ -146,6 +154,9 @@ export function applyModelOverrideToSessionEntry(params: {
   // Clear stale fallback notice when the user explicitly switches models.
   if (updated) {
     if ((selectionUpdated || profileUpdated) && params.markLiveSwitchPending) {
+      // Pending without modelOverride is the deliberate encoding for "switch
+      // back to the agent default": the default branch above also clears the
+      // runtime model fields so live-switch resolution lands on the default.
       entry.liveModelSwitchPending = true;
     }
     delete entry.fallbackNoticeSelectedModel;

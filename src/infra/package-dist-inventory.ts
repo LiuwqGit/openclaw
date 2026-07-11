@@ -327,9 +327,18 @@ function isPackagedDistPath(relativePath: string, rules: PackageDistInventoryRul
   return true;
 }
 
+function isPackageFilesExcludedDistSubtree(
+  relativePath: string,
+  exclusions: PackageDistExclusionRules,
+): boolean {
+  // Directory exclusions end in "/"; match the root before inspecting excluded symlinks below it.
+  return isPackageFilesExcludedDistPath(`${relativePath}/`, exclusions);
+}
+
 function isOmittedDistSubtree(relativePath: string, rules: PackageDistInventoryRules): boolean {
   return (
     isExternalizedBundledExtensionDistPath(relativePath, rules.externalizedExtensionIds) ||
+    isPackageFilesExcludedDistSubtree(relativePath, rules.exclusions) ||
     isLegacyPluginDependencyDirPath(relativePath) ||
     isOmittedPluginSdkTestPath(relativePath) ||
     OMITTED_DIST_SUBTREE_PATTERNS.some((pattern) => pattern.test(relativePath))
@@ -508,29 +517,4 @@ export async function readPackageDistInventoryIfPresent(
   packageRoot: string,
 ): Promise<string[] | null> {
   return await readPackageDistInventoryOptional(packageRoot);
-}
-
-/** Compares recorded and current package dist inventory entries and returns human-readable errors. */
-export async function collectPackageDistInventoryErrors(packageRoot: string): Promise<string[]> {
-  const expectedFiles = await readPackageDistInventoryIfPresent(packageRoot);
-  if (expectedFiles === null) {
-    return [`missing package dist inventory ${PACKAGE_DIST_INVENTORY_RELATIVE_PATH}`];
-  }
-
-  const actualFiles = await collectPackageDistInventory(packageRoot);
-  const expectedSet = new Set(expectedFiles);
-  const actualSet = new Set(actualFiles);
-  const errors: string[] = [];
-
-  for (const relativePath of expectedFiles) {
-    if (!actualSet.has(relativePath)) {
-      errors.push(`missing packaged dist file ${relativePath}`);
-    }
-  }
-  for (const relativePath of actualFiles) {
-    if (!expectedSet.has(relativePath)) {
-      errors.push(`unexpected packaged dist file ${relativePath}`);
-    }
-  }
-  return errors;
 }

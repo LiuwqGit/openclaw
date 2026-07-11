@@ -11,8 +11,6 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getDiscordRuntime } from "../runtime.js";
 import {
-  DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS,
-  DEFAULT_THREAD_BINDING_MAX_AGE_MS,
   RECENT_UNBOUND_WEBHOOK_ECHO_WINDOW_MS,
   type PersistedThreadBindingRecord,
   type ThreadBindingManager,
@@ -77,9 +75,9 @@ const THREAD_BINDINGS_STATE = resolveThreadBindingsGlobalState();
 
 export const MANAGERS_BY_ACCOUNT_ID = THREAD_BINDINGS_STATE.managersByAccountId;
 export const BINDINGS_BY_THREAD_ID = THREAD_BINDINGS_STATE.bindingsByThreadId;
-export const BINDINGS_BY_SESSION_KEY = THREAD_BINDINGS_STATE.bindingsBySessionKey;
-export const TOKENS_BY_ACCOUNT_ID = THREAD_BINDINGS_STATE.tokensByAccountId;
-export const RECENT_UNBOUND_WEBHOOK_ECHOES_BY_BINDING_KEY =
+const BINDINGS_BY_SESSION_KEY = THREAD_BINDINGS_STATE.bindingsBySessionKey;
+const TOKENS_BY_ACCOUNT_ID = THREAD_BINDINGS_STATE.tokensByAccountId;
+const RECENT_UNBOUND_WEBHOOK_ECHOES_BY_BINDING_KEY =
   THREAD_BINDINGS_STATE.recentUnboundWebhookEchoesByBindingKey;
 export const REUSABLE_WEBHOOKS_BY_ACCOUNT_CHANNEL =
   THREAD_BINDINGS_STATE.reusableWebhooksByAccountChannel;
@@ -571,13 +569,6 @@ export function resolveBindingIdsForSession(params: {
     out.push(bindingKey);
   }
   return out;
-}
-
-export function resolveDefaultThreadBindingDurations() {
-  return {
-    defaultIdleTimeoutMs: DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS,
-    defaultMaxAgeMs: DEFAULT_THREAD_BINDING_MAX_AGE_MS,
-  };
 }
 
 export function resetThreadBindingsForTests() {

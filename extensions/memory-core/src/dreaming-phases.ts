@@ -3,11 +3,10 @@ import { createHash } from "node:crypto";
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   buildSessionEntry,
-  listSessionFilesForAgent,
-  loadSessionTranscriptClassificationForAgent,
-  normalizeSessionTranscriptPathForComparison,
+  listSessionTranscriptCorpusEntriesForAgent,
   parseUsageCountedSessionIdFromFileName,
   sessionPathForFile,
 } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
@@ -21,6 +20,7 @@ import {
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { appendFailedDreamingEvent } from "./dreaming-events.js";
 import { writeDailyDreamingPhaseBlock } from "./dreaming-markdown.js";
 import {
   generateAndAppendDreamNarrative,
@@ -34,12 +34,14 @@ import {
   DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
   DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
   SESSION_SEEN_HASHES_PER_CHUNK,
+  normalizeMemoryCoreWorkspaceKey,
   readMemoryCoreWorkspaceEntries,
   writeMemoryCoreWorkspaceEntries,
 } from "./dreaming-state.js";
 import { textSimilarity as snippetSimilarity } from "./memory/tokenize.js";
 import {
   filterLiveShortTermRecallEntries,
+  filterFreshLightDreamingEntries,
   readLightStagedKeys,
   readShortTermRecallEntries,
   recordDreamingPhaseSignals,
@@ -184,7 +186,7 @@ function normalizeDailyHeading(line: string): string | null {
   if (!heading || DAILY_MEMORY_FILENAME_RE.test(heading) || isGenericDailyHeading(heading)) {
     return null;
   }
-  return heading.slice(0, DAILY_INGESTION_MAX_SNIPPET_CHARS).replace(/\s+/g, " ");
+  return truncateUtf16Safe(heading, DAILY_INGESTION_MAX_SNIPPET_CHARS).replace(/\s+/g, " ");
 }
 
 function isGenericDailyHeading(heading: string): boolean {
@@ -211,7 +213,10 @@ function normalizeDailySnippet(line: string): string | null {
   if (withoutListMarker.length < DAILY_INGESTION_MIN_SNIPPET_CHARS) {
     return null;
   }
-  return withoutListMarker.slice(0, DAILY_INGESTION_MAX_SNIPPET_CHARS).replace(/\s+/g, " ");
+  return truncateUtf16Safe(withoutListMarker, DAILY_INGESTION_MAX_SNIPPET_CHARS).replace(
+    /\s+/g,
+    " ",
+  );
 }
 
 type DailySnippetChunk = {
@@ -230,7 +235,7 @@ function buildDailyChunkSnippet(
   const joiner = chunkKind === "list" ? "; " : " ";
   const body = chunkLines.join(joiner).trim();
   const prefixed = heading ? `${heading}: ${body}` : body;
-  return prefixed.slice(0, DAILY_INGESTION_MAX_SNIPPET_CHARS).replace(/\s+/g, " ").trim();
+  return truncateUtf16Safe(prefixed, DAILY_INGESTION_MAX_SNIPPET_CHARS).replace(/\s+/g, " ").trim();
 }
 
 function buildDailySnippetChunks(lines: string[], limit: number): DailySnippetChunk[] {
@@ -542,11 +547,6 @@ type SessionIngestionCollectionResult = {
   changed: boolean;
 };
 
-function normalizeWorkspaceKey(workspaceDir: string): string {
-  const resolved = path.resolve(workspaceDir).replace(/\\/g, "/");
-  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
-}
-
 export function normalizeSessionIngestionState(raw: unknown): SessionIngestionState {
   const record = asRecord(raw);
   const filesRaw = asRecord(record?.files);
@@ -679,7 +679,7 @@ function trimTrackedSessionScopes(
 }
 
 function normalizeSessionCorpusSnippet(value: string): string {
-  return value.replace(/\s+/g, " ").trim().slice(0, SESSION_INGESTION_MAX_SNIPPET_CHARS);
+  return truncateUtf16Safe(value.replace(/\s+/g, " ").trim(), SESSION_INGESTION_MAX_SNIPPET_CHARS);
 }
 
 function hashSessionMessageId(value: string): string {
@@ -737,7 +737,10 @@ function buildSessionRenderedLine(params: {
   snippet: string;
 }): string {
   const source = `${params.agentId}/${params.sessionPath}#L${params.lineNumber}`;
-  return `[${source}] ${params.snippet}`.slice(0, SESSION_INGESTION_MAX_SNIPPET_CHARS + 64);
+  return truncateUtf16Safe(
+    `[${source}] ${params.snippet}`,
+    SESSION_INGESTION_MAX_SNIPPET_CHARS + 64,
+  );
 }
 
 function resolveSessionAgentsForWorkspace(params: {
@@ -749,7 +752,7 @@ function resolveSessionAgentsForWorkspace(params: {
   if (!cfg) {
     return [];
   }
-  const target = normalizeWorkspaceKey(workspaceDir);
+  const target = normalizeMemoryCoreWorkspaceKey(workspaceDir);
   const workspaces = resolveMemoryDreamingWorkspaces(
     cfg as Parameters<typeof resolveMemoryDreamingWorkspaces>[0],
     {
@@ -757,7 +760,9 @@ function resolveSessionAgentsForWorkspace(params: {
       primaryAgentId: "main",
     },
   );
-  const match = workspaces.find((entry) => normalizeWorkspaceKey(entry.workspaceDir) === target);
+  const match = workspaces.find(
+    (entry) => normalizeMemoryCoreWorkspaceKey(entry.workspaceDir) === target,
+  );
   if (!match) {
     return [];
   }
@@ -850,25 +855,21 @@ async function collectSessionIngestionBatches(params: {
     sessionPath: string;
   }> = [];
   for (const agentId of agentIds) {
-    const files = await listSessionFilesForAgent(agentId);
-    const transcriptClassification =
-      files.length > 0
-        ? loadSessionTranscriptClassificationForAgent(agentId)
-        : {
-            dreamingNarrativeTranscriptPaths: new Set<string>(),
-            cronRunTranscriptPaths: new Set<string>(),
-          };
-    for (const absolutePath of files) {
-      if (isCheckpointSessionTranscriptPath(absolutePath)) {
+    for (const entry of await listSessionTranscriptCorpusEntriesForAgent(agentId)) {
+      const absolutePath = entry.sessionFile;
+      if (
+        // Dreaming learns only from the live corpus. Retained reset/delete
+        // archives stay in the shared corpus for QMD and memory_search.
+        entry.artifactKind === "archive-artifact" ||
+        isCheckpointSessionTranscriptPath(absolutePath)
+      ) {
         continue;
       }
-      const normalizedPath = normalizeSessionTranscriptPathForComparison(absolutePath);
       sessionFiles.push({
         agentId,
         absolutePath,
-        generatedByDreamingNarrative:
-          transcriptClassification.dreamingNarrativeTranscriptPaths.has(normalizedPath),
-        generatedByCronRun: transcriptClassification.cronRunTranscriptPaths.has(normalizedPath),
+        generatedByDreamingNarrative: entry.generatedByDreamingNarrative === true,
+        generatedByCronRun: entry.generatedByCronRun === true,
         sessionPath: sessionPathForFile(absolutePath),
       });
     }
@@ -1697,10 +1698,14 @@ async function runLightDreaming(params: {
   });
   const recentEntries = await filterLiveShortTermRecallEntries({
     workspaceDir: params.workspaceDir,
-    entries: filterRecallEntriesWithinLookback({
-      entries: await readShortTermRecallEntries({ workspaceDir: params.workspaceDir, nowMs }),
+    entries: await filterFreshLightDreamingEntries({
+      workspaceDir: params.workspaceDir,
       nowMs,
-      lookbackDays: params.config.lookbackDays,
+      entries: filterRecallEntriesWithinLookback({
+        entries: await readShortTermRecallEntries({ workspaceDir: params.workspaceDir, nowMs }),
+        nowMs,
+        lookbackDays: params.config.lookbackDays,
+      }),
     }),
   });
   const rankedEntries = dedupeEntries(
@@ -1905,15 +1910,27 @@ export async function runDreamingSweepPhases(params: {
     cfg: params.cfg as Parameters<typeof resolveMemoryLightDreamingConfig>[0]["cfg"],
   });
   if (light.enabled && light.limit > 0) {
-    await runLightDreaming({
-      workspaceDir: params.workspaceDir,
-      cfg: params.cfg,
-      config: light,
-      logger: params.logger,
-      subagent: params.subagent,
-      nowMs: sweepNowMs,
-      detachNarratives: params.detachNarratives,
-    });
+    try {
+      await runLightDreaming({
+        workspaceDir: params.workspaceDir,
+        cfg: params.cfg,
+        config: light,
+        logger: params.logger,
+        subagent: params.subagent,
+        nowMs: sweepNowMs,
+        detachNarratives: params.detachNarratives,
+      });
+    } catch (err) {
+      await appendFailedDreamingEvent({
+        workspaceDir: params.workspaceDir,
+        phase: "light",
+        error: formatErrorMessage(err),
+        storageMode: light.storage.mode,
+        nowMs: sweepNowMs,
+        logger: params.logger,
+      });
+      throw err;
+    }
   }
 
   const rem = resolveMemoryRemDreamingConfig({
@@ -1921,15 +1938,27 @@ export async function runDreamingSweepPhases(params: {
     cfg: params.cfg as Parameters<typeof resolveMemoryRemDreamingConfig>[0]["cfg"],
   });
   if (rem.enabled && rem.limit > 0) {
-    await runRemDreaming({
-      workspaceDir: params.workspaceDir,
-      cfg: params.cfg,
-      config: rem,
-      logger: params.logger,
-      subagent: params.subagent,
-      nowMs: sweepNowMs,
-      detachNarratives: params.detachNarratives,
-    });
+    try {
+      await runRemDreaming({
+        workspaceDir: params.workspaceDir,
+        cfg: params.cfg,
+        config: rem,
+        logger: params.logger,
+        subagent: params.subagent,
+        nowMs: sweepNowMs,
+        detachNarratives: params.detachNarratives,
+      });
+    } catch (err) {
+      await appendFailedDreamingEvent({
+        workspaceDir: params.workspaceDir,
+        phase: "rem",
+        error: formatErrorMessage(err),
+        storageMode: rem.storage.mode,
+        nowMs: sweepNowMs,
+        logger: params.logger,
+      });
+      throw err;
+    }
   }
 }
 
@@ -1980,6 +2009,13 @@ async function runPhaseIfTriggered(
         });
       }
     } catch (err) {
+      await appendFailedDreamingEvent({
+        workspaceDir,
+        phase: params.phase,
+        error: formatErrorMessage(err),
+        storageMode: params.config.storage.mode,
+        logger: params.logger,
+      });
       params.logger.error(
         `memory-core: ${params.phase} dreaming failed for workspace ${workspaceDir}: ${formatErrorMessage(err)}`,
       );

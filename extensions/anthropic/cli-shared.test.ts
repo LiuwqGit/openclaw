@@ -10,6 +10,15 @@ import {
   resolveClaudeCliExecutionArgs,
 } from "./cli-shared.js";
 
+const CLAUDE_CLI_DISALLOWED_TOOLS =
+  "ScheduleWakeup,CronCreate,Bash(run_in_background:true),Monitor";
+
+function expectDefaultDisallowedTools(args: readonly string[] | undefined) {
+  const disallowedIndex = args?.indexOf("--disallowedTools") ?? -1;
+  expect(disallowedIndex).toBeGreaterThanOrEqual(0);
+  expect(args?.[disallowedIndex + 1]).toBe(CLAUDE_CLI_DISALLOWED_TOOLS);
+}
+
 describe("normalizeClaudePermissionArgs", () => {
   it("leaves args alone when they omit permission flags", () => {
     expect(
@@ -92,50 +101,65 @@ describe("Claude CLI model aliases", () => {
 });
 
 describe("resolveClaudeCliExecutionArgs", () => {
-  it("omits effort args when thinking is off", () => {
+  it.each(["off", undefined] as const)(
+    "preserves configured effort args when thinking is %s",
+    (thinkingLevel) => {
+      const baseArgs = ["-p", "--effort", "xhigh", "--effort=low"];
+
+      expect(
+        resolveClaudeCliExecutionArgs({
+          workspaceDir: "/tmp",
+          provider: "claude-cli",
+          modelId: "claude-sonnet-4-6",
+          thinkingLevel,
+          useResume: false,
+          baseArgs,
+        }),
+      ).toEqual(baseArgs);
+    },
+  );
+
+  it.each([
+    ["minimal", "low"],
+    ["low", "low"],
+    ["medium", "medium"],
+    ["high", "high"],
+    ["xhigh", "xhigh"],
+    ["max", "max"],
+  ] as const)("maps %s thinking to --effort %s", (thinkingLevel, effort) => {
     expect(
       resolveClaudeCliExecutionArgs({
         workspaceDir: "/tmp",
         provider: "claude-cli",
-        modelId: "claude-sonnet-4-6",
-        thinkingLevel: "off",
+        modelId: "claude-opus-4-7",
+        thinkingLevel,
         useResume: false,
-        baseArgs: ["-p", "--output-format", "stream-json"],
+        baseArgs: ["-p"],
       }),
-    ).toEqual(["-p", "--output-format", "stream-json"]);
+    ).toEqual(["-p", "--effort", effort]);
   });
 
-  it("maps OpenClaw thinking levels to Claude effort args", () => {
+  it("strips configured effort args when thinking is adaptive", () => {
     expect(
       resolveClaudeCliExecutionArgs({
         workspaceDir: "/tmp",
         provider: "claude-cli",
-        modelId: "claude-opus-4-7",
-        thinkingLevel: "minimal",
-        useResume: false,
-        baseArgs: ["-p"],
-      }),
-    ).toEqual(["-p", "--effort", "low"]);
-    expect(
-      resolveClaudeCliExecutionArgs({
-        workspaceDir: "/tmp",
-        provider: "claude-cli",
-        modelId: "claude-opus-4-7",
+        modelId: "claude-opus-4-8",
         thinkingLevel: "adaptive",
-        useResume: false,
-        baseArgs: ["-p"],
-      }),
-    ).toEqual(["-p", "--effort", "medium"]);
-    expect(
-      resolveClaudeCliExecutionArgs({
-        workspaceDir: "/tmp",
-        provider: "claude-cli",
-        modelId: "claude-opus-4-7",
-        thinkingLevel: "xhigh",
         useResume: true,
-        baseArgs: ["-p", "--resume", "{sessionId}"],
+        baseArgs: [
+          "-p",
+          "--effort",
+          "xhigh",
+          "--output-format",
+          "stream-json",
+          "--effort=low",
+          "--verbose",
+          "--resume",
+          "{sessionId}",
+        ],
       }),
-    ).toEqual(["-p", "--resume", "{sessionId}", "--effort", "xhigh"]);
+    ).toEqual(["-p", "--output-format", "stream-json", "--verbose", "--resume", "{sessionId}"]);
   });
 
   it("replaces static effort args when a session thinking level is active", () => {
@@ -356,8 +380,10 @@ describe("normalizeClaudeBackendConfig", () => {
     expect(backend.config.input).toBe("stdin");
     expect(backend.config.args).toContain("--setting-sources");
     expect(backend.config.args).toContain("user");
+    expectDefaultDisallowedTools(backend.config.args);
     expect(backend.config.resumeArgs).toContain("--setting-sources");
     expect(backend.config.resumeArgs).toContain("user");
+    expectDefaultDisallowedTools(backend.config.resumeArgs);
     expect(backend.config.clearEnv).toEqual([...CLAUDE_CLI_CLEAR_ENV]);
     expect(backend.config.clearEnv).toContain("ANTHROPIC_API_TOKEN");
     expect(backend.config.clearEnv).toContain("ANTHROPIC_BASE_URL");
@@ -373,5 +399,12 @@ describe("normalizeClaudeBackendConfig", () => {
     expect(backend.config.clearEnv).toContain("OTEL_METRICS_EXPORTER");
     expect(backend.config.clearEnv).toContain("OTEL_EXPORTER_OTLP_PROTOCOL");
     expect(backend.config.clearEnv).toContain("OTEL_SDK_DISABLED");
+  });
+
+  it("disables native background Bash and Monitor tools in args and resumeArgs", () => {
+    const backend = buildAnthropicCliBackend();
+
+    expectDefaultDisallowedTools(backend.config.args);
+    expectDefaultDisallowedTools(backend.config.resumeArgs);
   });
 });

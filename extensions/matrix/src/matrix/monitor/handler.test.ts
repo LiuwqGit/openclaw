@@ -265,6 +265,23 @@ function expectDeliveredMediaReply() {
 }
 
 describe("matrix monitor handler pairing account scope", () => {
+  it("keeps inbound log previews UTF-16 well-formed at the limit", async () => {
+    const logVerboseMessage = vi.fn();
+    const { handler } = createMatrixHandlerTestHarness({ logVerboseMessage });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$event-preview",
+        body: `${"x".repeat(199)}🚀tail`,
+      }),
+    );
+
+    expect(logVerboseMessage).toHaveBeenCalledWith(
+      `matrix inbound: room=!room:example.org from=@user:example.org preview="${"x".repeat(199)}"`,
+    );
+  });
+
   it("caches account-scoped allowFrom store reads on hot path", async () => {
     const readAllowFromStore = vi.fn(async () => [] as string[]);
     sendMessageMatrixMock.mockClear();
@@ -634,6 +651,7 @@ describe("matrix monitor handler pairing account scope", () => {
     );
 
     expect(recordInboundSession).toHaveBeenCalled();
+    expect(runPrepared.mock.calls[0]?.[0].ctxPayload.GroupRequireMention).toBe(false);
     expect(runPrepared.mock.calls[0]?.[0].botLoopProtection).toEqual({
       scopeId: "ops",
       conversationId: "!room:example.org",
@@ -3184,6 +3202,31 @@ describe("matrix monitor handler draft streaming", () => {
     await finish();
   });
 
+  it("keeps truncated Matrix tool progress UTF-16 safe", async () => {
+    const { dispatch } = createStreamingHarness({
+      streaming: "progress",
+      previewToolProgressEnabled: true,
+      accountConfig: {
+        streaming: {
+          mode: "progress",
+          progress: { label: false, maxLineChars: 500 },
+        },
+      } as never,
+    });
+    const { opts, finish } = await dispatch();
+    const progressPrefix = "x".repeat(298);
+
+    const progressText = `${progressPrefix}🎉tail`;
+    await opts.onItemEvent?.({ progressText });
+    await opts.onItemEvent?.({ progressText });
+
+    await vi.waitFor(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+    expect(singleTextMessageBody()).toBe(`- \`${progressPrefix}...\``);
+    await finish();
+  });
+
   it("replaces recovered Matrix command progress instead of leaving stale failed text", async () => {
     const { dispatch } = createStreamingHarness({
       streaming: "progress",
@@ -3229,13 +3272,13 @@ describe("matrix monitor handler draft streaming", () => {
     expect(editMessageMatrixMock).toHaveBeenCalledWith(
       "!room:example.org",
       "$draft1",
-      expect.stringContaining("completed"),
+      expect.stringContaining("Exec"),
       expect.any(Object),
     );
     const recoveredEdit = mockCalls(editMessageMatrixMock, "editMessageMatrix").find(
-      ([, eventId, body]) =>
-        eventId === "$draft1" && typeof body === "string" && body.includes("completed"),
+      ([, eventId, body]) => eventId === "$draft1" && typeof body === "string",
     );
+    expect(recoveredEdit?.[2]).not.toContain("completed");
     expect(recoveredEdit?.[2]).not.toContain("failed");
     expect(recoveredEdit?.[2]).not.toContain("run openclaw cron -> run jq");
   });
@@ -3293,7 +3336,8 @@ describe("matrix monitor handler draft streaming", () => {
       ([, eventId, body]) =>
         eventId === "$draft1" && typeof body === "string" && body.includes("completed"),
     );
-    expect(completedEdit?.[2]).not.toContain("install dependencies");
+    expect(completedEdit).toBeUndefined();
+    expect(singleTextMessageBody()).toContain("install dependencies");
   });
 
   it("replaces Matrix patch progress when the patch summary completes", async () => {

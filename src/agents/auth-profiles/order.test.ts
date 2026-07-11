@@ -12,6 +12,7 @@ import { saveAuthProfileStore } from "./store.js";
 import type { AuthProfileStore } from "./types.js";
 
 const pluginMetadataMocks = vi.hoisted(() => {
+  vi.resetModules();
   const snapshot = {
     plugins: [
       {
@@ -39,7 +40,6 @@ vi.mock("../../plugins/plugin-metadata-snapshot.js", () => ({
 vi.mock("./external-auth.js", () => ({
   listRuntimeExternalAuthProfiles: () => [],
   overlayExternalAuthProfiles: <T>(store: T) => store,
-  shouldPersistExternalAuthProfile: () => true,
 }));
 
 import { isStoredCredentialCompatibleWithAuthProvider, resolveAuthProfileOrder } from "./order.js";

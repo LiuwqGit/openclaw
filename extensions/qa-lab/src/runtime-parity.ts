@@ -1,5 +1,4 @@
 // Qa Lab plugin module implements runtime parity behavior.
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -13,6 +12,7 @@ import {
   scanGatewayLogSentinels,
   type GatewayLogSentinelFinding,
 } from "./gateway-log-sentinel.js";
+import { compareToolCallShape, stableHash } from "./parity-shared.js";
 
 export type RuntimeId = "openclaw" | "codex";
 
@@ -30,6 +30,10 @@ export type RuntimeParityUsage = {
   cacheRead?: number;
   cacheWrite?: number;
 };
+
+export type RuntimeParityUsagePolicy =
+  | { expectation: "assistant-message-required" }
+  | { expectation: "not-applicable"; reason: string };
 
 export type RuntimeParityCell = {
   runtime: RuntimeId;
@@ -54,6 +58,7 @@ export type RuntimeParityDrift =
 
 export type RuntimeParityResult = {
   scenarioId: string;
+  runtimeParityUsage?: RuntimeParityUsagePolicy;
   cells: {
     openclaw: RuntimeParityCell;
     codex: RuntimeParityCell;
@@ -61,6 +66,22 @@ export type RuntimeParityResult = {
   drift: RuntimeParityDrift;
   driftDetails?: string;
 };
+
+export function resolveRuntimeParityUsagePolicy(value: unknown): RuntimeParityUsagePolicy {
+  // Legacy or malformed summaries must not silently disable live-usage proof.
+  if (!value || typeof value !== "object") {
+    return { expectation: "assistant-message-required" };
+  }
+  const candidate = value as { expectation?: unknown; reason?: unknown };
+  if (
+    candidate.expectation === "not-applicable" &&
+    typeof candidate.reason === "string" &&
+    candidate.reason.trim()
+  ) {
+    return { expectation: "not-applicable", reason: candidate.reason.trim() };
+  }
+  return { expectation: "assistant-message-required" };
+}
 
 export type RuntimeParityScenarioExecution = {
   scenarioStatus: "pass" | "fail";
@@ -120,6 +141,7 @@ type RuntimeParityTranscriptRecord = {
 };
 
 type RuntimeParityMockRequestSnapshot = {
+  prompt?: string;
   allInputText?: string;
   plannedToolName?: string;
   plannedToolArgs?: unknown;
@@ -142,29 +164,6 @@ const TOOL_RESULT_ERROR_RE = /\b(?:error|failed|failure|timeout|denied|enoent|no
 
 function normalizeTextForParity(text: string) {
   return text.replace(/\s+/gu, " ").trim();
-}
-
-function sha256(value: string) {
-  return createHash("sha256").update(value).digest("hex");
-}
-
-function normalizeForStableHash(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map((entry) => normalizeForStableHash(entry));
-  }
-  if (value && typeof value === "object") {
-    const record = value as Record<string, unknown>;
-    return Object.fromEntries(
-      Object.keys(record)
-        .toSorted((left, right) => left.localeCompare(right))
-        .map((key) => [key, normalizeForStableHash(record[key])]),
-    );
-  }
-  return value;
-}
-
-function stableHash(value: unknown) {
-  return sha256(JSON.stringify(normalizeForStableHash(value)) ?? "null");
 }
 
 function readUsageTotals(raw: unknown): RuntimeParityUsage {
@@ -713,26 +712,6 @@ function aggregateUsage(records: RuntimeParityTranscriptRecord[]): RuntimeParity
   return totals;
 }
 
-function compareToolCallShape(
-  left: RuntimeParityToolCall[],
-  right: RuntimeParityToolCall[],
-): string | undefined {
-  if (left.length !== right.length) {
-    return `tool call count differs (${left.length} vs ${right.length})`;
-  }
-  for (let index = 0; index < left.length; index += 1) {
-    const leftCall = left[index];
-    const rightCall = right[index];
-    if (!leftCall || !rightCall) {
-      return `tool call row ${index + 1} missing`;
-    }
-    if (leftCall.tool !== rightCall.tool || leftCall.argsHash !== rightCall.argsHash) {
-      return `tool call ${index + 1} differs (${leftCall.tool}/${leftCall.argsHash} vs ${rightCall.tool}/${rightCall.argsHash})`;
-    }
-  }
-  return undefined;
-}
-
 function compareToolResultShape(
   left: RuntimeParityToolCall[],
   right: RuntimeParityToolCall[],
@@ -802,14 +781,22 @@ function resolveRuntimeParityToolCalls(params: {
 function filterMockRequestsForParentPrompt(
   requests: RuntimeParityMockRequestSnapshot[],
   parentPrompt: string,
+  parentPrompts: readonly string[] = [parentPrompt],
 ) {
-  const normalizedParentPrompt = normalizeTextForParity(parentPrompt);
-  if (!normalizedParentPrompt) {
+  const normalizedParentPrompts = parentPrompts
+    .map(normalizeTextForParity)
+    .filter((prompt) => prompt.length > 0);
+  if (normalizedParentPrompts.length === 0) {
     return requests;
   }
-  const matching = requests.filter((request) =>
-    normalizeTextForParity(request.allInputText ?? "").includes(normalizedParentPrompt),
-  );
+  const matching = requests.filter((request) => {
+    const normalizedPrompt = normalizeTextForParity(request.prompt ?? "");
+    if (normalizedPrompt) {
+      return normalizedParentPrompts.some((prompt) => normalizedPrompt.includes(prompt));
+    }
+    const normalizedHistory = normalizeTextForParity(request.allInputText ?? "");
+    return normalizedParentPrompts.some((prompt) => normalizedHistory.includes(prompt));
+  });
   return matching.length > 0 ? matching : requests;
 }
 
@@ -1009,6 +996,7 @@ async function loadRuntimeParityTranscripts(params: {
 async function loadRuntimeParityMockToolCalls(
   mockBaseUrl: string | undefined,
   parentPrompt: string,
+  parentPrompts: readonly string[] = [parentPrompt],
 ): Promise<RuntimeParityToolCall[] | null> {
   const normalizedBaseUrl = mockBaseUrl?.trim().replace(/\/+$/u, "");
   if (!normalizedBaseUrl) {
@@ -1034,6 +1022,7 @@ async function loadRuntimeParityMockToolCalls(
     }
     const requests = payload.filter(isMessageRecord).map(
       (entry): RuntimeParityMockRequestSnapshot => ({
+        prompt: readNonEmptyString(entry.prompt),
         allInputText: readNonEmptyString(entry.allInputText),
         plannedToolName: readNonEmptyString(entry.plannedToolName),
         plannedToolArgs: entry.plannedToolArgs ?? null,
@@ -1041,7 +1030,7 @@ async function loadRuntimeParityMockToolCalls(
       }),
     );
     return resolveToolCallOrderFromMockRequests(
-      filterMockRequestsForParentPrompt(requests, parentPrompt),
+      filterMockRequestsForParentPrompt(requests, parentPrompt, parentPrompts),
     );
   } catch {
     return null;
@@ -1058,18 +1047,27 @@ export async function captureRuntimeParityCell(
   });
   const transcriptRecords = buildTranscriptRecords(transcriptBytes);
   const transcriptToolCalls = resolveToolCallOrder(transcriptRecords);
-  const parentPrompt =
-    transcriptRecords
-      .filter((record) => record.role === "user" && !isToolResultLikeMessage(record.message))
-      .map((record) => extractAssistantText(record.message))
-      .find(Boolean) ?? "";
-  const mockToolCalls = await loadRuntimeParityMockToolCalls(params.mockBaseUrl, parentPrompt);
+  const parentPrompts = transcriptRecords
+    .filter((record) => record.role === "user")
+    .map((record) => extractAssistantText(record.message))
+    .filter((prompt) => prompt.length > 0);
+  const parentPrompt = parentPrompts[0] ?? "";
+  const mockToolCalls = await loadRuntimeParityMockToolCalls(
+    params.mockBaseUrl,
+    parentPrompt,
+    parentPrompts,
+  );
   const gatewayLogs = params.gateway.logs?.();
   const sentinelFindings = [
     ...scanGatewayLogSentinels(gatewayLogs),
     ...scanDirectReplyTranscriptSentinels(transcriptBytes),
   ];
-  const scenarioErrorClass = classifyScenarioError(params.scenarioResult.details);
+  // Retry passes retain first-attempt diagnostics; only terminal failures may
+  // classify that historical text as the cell's runtime error.
+  const scenarioErrorClass =
+    params.scenarioResult.status === "fail"
+      ? classifyScenarioError(params.scenarioResult.details)
+      : undefined;
   const sentinelErrorClass = summarizeSentinelErrorClass(sentinelFindings);
   return {
     runtime: params.runtime,
@@ -1088,6 +1086,7 @@ export async function captureRuntimeParityCell(
 
 export async function runRuntimeParityScenario(params: {
   scenarioId: string;
+  runtimeParityUsage?: RuntimeParityUsagePolicy;
   runCell: (runtime: RuntimeId) => Promise<RuntimeParityScenarioExecution>;
 }): Promise<RuntimeParityResult> {
   const openclaw = await params.runCell("openclaw");
@@ -1100,6 +1099,7 @@ export async function runRuntimeParityScenario(params: {
   });
   return {
     scenarioId: params.scenarioId,
+    runtimeParityUsage: resolveRuntimeParityUsagePolicy(params.runtimeParityUsage),
     cells: {
       openclaw: openclaw.cell,
       codex: codex.cell,

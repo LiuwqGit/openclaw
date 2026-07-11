@@ -4,13 +4,14 @@ import { appendFileSync } from "node:fs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { resolveMergeHeadDiffBase } from "./lib/merge-head-diff-base.mjs";
 
-/** @typedef {{ runNode: boolean; runMacos: boolean; runAndroid: boolean; runWindows: boolean; runSkillsPython: boolean; runChangedSmoke: boolean; runControlUiI18n: boolean }} ChangedScope */
+/** @typedef {{ runNode: boolean; runMacos: boolean; runIosBuild: boolean; runAndroid: boolean; runWindows: boolean; runSkillsPython: boolean; runChangedSmoke: boolean; runControlUiI18n: boolean }} ChangedScope */
 /** @typedef {{ runFastOnly: boolean; runPluginContracts: boolean; runCiRouting: boolean }} NodeFastScope */
 /** @typedef {{ runFastInstallSmoke: boolean; runFullInstallSmoke: boolean }} InstallSmokeScope */
 
 const FULL_SCOPE = {
   runNode: true,
   runMacos: true,
+  runIosBuild: true,
   runAndroid: true,
   runWindows: true,
   runSkillsPython: true,
@@ -21,6 +22,7 @@ const FULL_SCOPE = {
 const EMPTY_SCOPE = {
   runNode: false,
   runMacos: false,
+  runIosBuild: false,
   runAndroid: false,
   runWindows: false,
   runSkillsPython: false,
@@ -32,20 +34,28 @@ const DOCS_PATH_RE = /^(docs\/|.*\.mdx?$)/;
 const SKILLS_PYTHON_SCOPE_RE = /^(skills\/|skills\/pyproject\.toml$)/;
 const INSTALL_SMOKE_WORKFLOW_SCOPE_RE = /^\.github\/workflows\/install-smoke\.yml$/;
 const NATIVE_PROTOCOL_GEN_RE = /^apps\/shared\/OpenClawKit\/Sources\/OpenClawProtocol\//;
+const APPLE_SWIFT_CONFIG_RE = /^config\/(?:swiftformat|swiftlint\.yml)$/;
 const MACOS_NATIVE_RE =
   /^(apps\/macos\/|apps\/macos-mlx-tts\/|apps\/ios\/|apps\/shared\/|apps\/swabble\/|Swabble\/)/;
-const MACOS_SCRIPT_SCOPE_RE = /^(scripts\/create-dmg\.sh|test\/scripts\/create-dmg\.test\.ts)$/;
+const MACOS_SCRIPT_SCOPE_RE =
+  /^(?:scripts\/(?:check-swift-tools|codesign-mac-app|create-dmg|format-swift|install-swift-tools|lint-swift|notarize-mac-artifact|package-mac-app|package-mac-dist)\.sh|scripts\/lib\/(?:plistbuddy|swift-toolchain)\.sh|test\/scripts\/(?:codesign-mac-app|create-dmg|notarize-mac-artifact|package-mac-app|package-mac-dist)\.test\.ts)$/;
+const IOS_BUILD_RE =
+  /^(apps\/ios\/|apps\/shared\/|apps\/swabble\/|Swabble\/|scripts\/(?:check-swift-tools|format-swift|install-swift-tools|lint-swift)\.sh$|scripts\/(?:ios-(?:configure-signing|team-id|write-version-xcconfig)\.sh|ios-write-swift-filelist\.mjs|ios-version\.ts)$|scripts\/lib\/(?:ios-version\.ts|npm-publish-plan\.mjs|version-script-args\.ts)$)/;
 const ANDROID_NATIVE_RE = /^(apps\/android\/|apps\/shared\/)/;
 const NODE_SCOPE_RE =
   /^(src\/|test\/|extensions\/|packages\/|scripts\/|ui\/|\.github\/|openclaw\.mjs$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|tsconfig.*\.json$|vitest.*\.ts$|tsdown\.config\.ts$|\.oxlintrc\.json$|\.oxfmtrc\.jsonc$)/;
 const WINDOWS_SCOPE_RE =
-  /^(src\/process\/|src\/infra\/windows-install-roots\.ts$|src\/shared\/(?:import-specifier|runtime-import)(?:\.test)?\.ts$|scripts\/(?:install\.ps1|(?:npm-runner|pnpm-runner|ui|vitest-process-group)\.(?:mjs|js)|lib\/format-generated-module\.mjs)$|test\/scripts\/(?:format-generated-module|install-ps1|npm-runner|pnpm-runner|ui|vitest-process-group)\.test\.ts$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|\.github\/workflows\/ci\.yml$|\.github\/actions\/setup-node-env\/action\.yml$|\.github\/actions\/setup-pnpm-store-cache\/action\.yml$)/;
+  /^(src\/process\/|src\/infra\/windows-install-roots\.ts$|src\/shared\/(?:import-specifier|runtime-import)(?:\.test)?\.ts$|scripts\/(?:install\.ps1|openclaw-cross-os-release-checks\.ts|github\/run-openclaw-cross-os-release-checks\.sh|(?:npm-runner|pnpm-runner|ui|vitest-process-group)\.(?:mjs|js)|lib\/format-generated-module\.mjs)$|test\/scripts\/(?:format-generated-module|install-ps1|npm-runner|openclaw-cross-os-release-workflow|pnpm-runner|ui|vitest-process-group)\.test\.ts$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|\.github\/workflows\/(?:ci|openclaw-cross-os-release-checks-reusable)\.yml$|\.github\/actions\/setup-node-env\/action\.yml$|\.github\/actions\/setup-pnpm-store-cache\/action\.yml$)/;
 const WINDOWS_TEST_SCOPE_RE =
-  /^(src\/process\/(?:exec\.windows|windows-command)\.test\.ts$|src\/infra\/windows-install-roots\.test\.ts$|src\/shared\/runtime-import\.test\.ts$|test\/scripts\/(?:format-generated-module|npm-runner|pnpm-runner|ui|vitest-process-group)\.test\.ts$)/;
+  /^(src\/process\/(?:exec\.windows|windows-command)\.test\.ts$|src\/infra\/windows-install-roots\.test\.ts$|src\/shared\/runtime-import\.test\.ts$|test\/scripts\/(?:format-generated-module|npm-runner|openclaw-cross-os-release-workflow|pnpm-runner|ui|vitest-process-group)\.test\.ts$)/;
+const WINDOWS_DAEMON_SCOPE_RE =
+  /^src\/daemon\/(?:schtasks(?:[-.][^/]+)?|runtime-hints\.windows-paths(?:\.test)?|test-helpers\/schtasks-(?:base-mocks|fixtures))\.ts$/;
 const TEST_ONLY_PATH_RE =
   /(^test\/|\/test\/|\/tests\/|(?:^|\/)[^/]+\.(?:test|spec|test-utils|test-support|test-harness|e2e-harness)\.[cm]?[jt]sx?$)/;
 const CONTROL_UI_I18N_SCOPE_RE =
   /^(ui\/src\/i18n\/|scripts\/control-ui-i18n\.ts$|\.github\/workflows\/control-ui-locale-refresh\.yml$)/;
+const NATIVE_I18N_SCOPE_RE =
+  /^(?:apps\/\.i18n\/|apps\/android\/app\/src\/main\/|apps\/ios\/|apps\/macos\/Sources\/|apps\/shared\/OpenClawKit\/Sources\/|scripts\/(?:android-app-i18n|apple-app-i18n|native-app-i18n)\.ts$|test\/scripts\/(?:android-app-i18n|apple-app-i18n|native-app-i18n)\.test\.ts$|\.github\/workflows\/(?:ci|native-app-locale-refresh)\.yml$)/;
 const NATIVE_ONLY_RE =
   /^(apps\/android\/|apps\/ios\/|apps\/macos\/|apps\/macos-mlx-tts\/|apps\/shared\/|apps\/swabble\/|Swabble\/|appcast\.xml$)/;
 const FAST_INSTALL_SMOKE_SCOPE_RE =
@@ -71,19 +81,12 @@ const NODE_FAST_SCOPE_RE = new RegExp(
  */
 export function detectChangedScope(changedPaths) {
   if (!Array.isArray(changedPaths) || changedPaths.length === 0) {
-    return {
-      runNode: true,
-      runMacos: true,
-      runAndroid: true,
-      runWindows: true,
-      runSkillsPython: true,
-      runChangedSmoke: true,
-      runControlUiI18n: true,
-    };
+    return { ...FULL_SCOPE };
   }
 
   let runNode = false;
   let runMacos = false;
+  let runIosBuild = false;
   let runAndroid = false;
   let runWindows = false;
   let runSkillsPython = false;
@@ -97,6 +100,8 @@ export function detectChangedScope(changedPaths) {
     if (!path) {
       continue;
     }
+
+    const isAppleSwiftConfig = APPLE_SWIFT_CONFIG_RE.test(path);
 
     if (DOCS_PATH_RE.test(path)) {
       continue;
@@ -114,9 +119,13 @@ export function detectChangedScope(changedPaths) {
 
     if (
       !NATIVE_PROTOCOL_GEN_RE.test(path) &&
-      (MACOS_NATIVE_RE.test(path) || MACOS_SCRIPT_SCOPE_RE.test(path))
+      (MACOS_NATIVE_RE.test(path) || MACOS_SCRIPT_SCOPE_RE.test(path) || isAppleSwiftConfig)
     ) {
       runMacos = true;
+    }
+
+    if (IOS_BUILD_RE.test(path) || isAppleSwiftConfig) {
+      runIosBuild = true;
     }
 
     if (!NATIVE_PROTOCOL_GEN_RE.test(path) && ANDROID_NATIVE_RE.test(path)) {
@@ -128,8 +137,10 @@ export function detectChangedScope(changedPaths) {
     }
 
     if (
-      WINDOWS_SCOPE_RE.test(path) &&
-      (!TEST_ONLY_PATH_RE.test(path) || WINDOWS_TEST_SCOPE_RE.test(path))
+      (WINDOWS_SCOPE_RE.test(path) || WINDOWS_DAEMON_SCOPE_RE.test(path)) &&
+      (!TEST_ONLY_PATH_RE.test(path) ||
+        WINDOWS_TEST_SCOPE_RE.test(path) ||
+        WINDOWS_DAEMON_SCOPE_RE.test(path))
     ) {
       runWindows = true;
     }
@@ -154,12 +165,21 @@ export function detectChangedScope(changedPaths) {
   return {
     runNode,
     runMacos,
+    runIosBuild,
     runAndroid,
     runWindows,
     runSkillsPython,
     runChangedSmoke,
     runControlUiI18n,
   };
+}
+
+export function shouldRunNativeI18n(changedPaths) {
+  return (
+    !Array.isArray(changedPaths) ||
+    changedPaths.length === 0 ||
+    changedPaths.some((path) => NATIVE_I18N_SCOPE_RE.test(path.trim()))
+  );
 }
 
 /**
@@ -291,12 +311,14 @@ export function writeGitHubOutput(
     runFullInstallSmoke: scope.runChangedSmoke,
   },
   nodeFastScope = { runFastOnly: false, runPluginContracts: false, runCiRouting: false },
+  runNativeI18n = true,
 ) {
   if (!outputPath) {
     throw new Error("GITHUB_OUTPUT is required");
   }
   appendFileSync(outputPath, `run_node=${scope.runNode}\n`, "utf8");
   appendFileSync(outputPath, `run_macos=${scope.runMacos}\n`, "utf8");
+  appendFileSync(outputPath, `run_ios_build=${scope.runIosBuild}\n`, "utf8");
   appendFileSync(outputPath, `run_android=${scope.runAndroid}\n`, "utf8");
   appendFileSync(outputPath, `run_windows=${scope.runWindows}\n`, "utf8");
   appendFileSync(outputPath, `run_skills_python=${scope.runSkillsPython}\n`, "utf8");
@@ -319,6 +341,7 @@ export function writeGitHubOutput(
     "utf8",
   );
   appendFileSync(outputPath, `run_control_ui_i18n=${scope.runControlUiI18n}\n`, "utf8");
+  appendFileSync(outputPath, `run_native_i18n=${runNativeI18n}\n`, "utf8");
 }
 
 function isDirectRun() {
@@ -328,7 +351,7 @@ function isDirectRun() {
 /** @param {string[]} argv */
 function readRefValue(argv, index, optionName) {
   const value = argv[index + 1];
-  if (value === undefined || value === "" || value.startsWith("--")) {
+  if (value === undefined || value === "" || value.startsWith("-")) {
     throw new Error(`${optionName} requires a value`);
   }
   return value;
@@ -365,7 +388,7 @@ if (isDirectRun()) {
       args.mergeHeadFirstParent,
     );
     if (changedPaths.length === 0) {
-      writeGitHubOutput(EMPTY_SCOPE);
+      writeGitHubOutput(EMPTY_SCOPE, process.env.GITHUB_OUTPUT, undefined, undefined, false);
       process.exit(0);
     }
     writeGitHubOutput(
@@ -373,8 +396,9 @@ if (isDirectRun()) {
       process.env.GITHUB_OUTPUT,
       detectInstallSmokeScope(changedPaths),
       detectNodeFastScope(changedPaths),
+      shouldRunNativeI18n(changedPaths),
     );
   } catch {
-    writeGitHubOutput(FULL_SCOPE);
+    writeGitHubOutput(FULL_SCOPE, process.env.GITHUB_OUTPUT, undefined, undefined, true);
   }
 }

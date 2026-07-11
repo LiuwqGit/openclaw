@@ -7,7 +7,7 @@ import type {
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 
-export type ChatGptImportRunEntry = {
+type ChatGptImportRunEntry = {
   path: string;
   snapshotPath?: string;
 };
@@ -66,10 +66,6 @@ export function resolveMemoryWikiImportRunsDir(vaultRoot: string): string {
   return path.join(vaultRoot, ".openclaw-wiki", "import-runs");
 }
 
-export function resolveMemoryWikiImportRunRecordPath(vaultRoot: string, runId: string): string {
-  return path.join(resolveMemoryWikiImportRunsDir(vaultRoot), `${runId}.json`);
-}
-
 function resolveVaultRootKey(vaultRoot: string): string {
   return createHash("sha256").update(path.resolve(vaultRoot), "utf8").digest("hex").slice(0, 32);
 }
@@ -121,7 +117,7 @@ function asNonNegativeInteger(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
 }
 
-export function normalizeMemoryWikiImportRunRecord(raw: unknown): ChatGptImportRunRecord | null {
+function normalizeMemoryWikiImportRunRecord(raw: unknown): ChatGptImportRunRecord | null {
   const record = asRecord(raw);
   if (!record) {
     return null;

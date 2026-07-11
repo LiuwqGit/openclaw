@@ -36,6 +36,11 @@ function normalizeChannel(value: unknown): CronMessageChannel | undefined {
   return trimmed as CronMessageChannel;
 }
 
+function normalizeThreadIdentity(value: unknown): string | undefined {
+  const normalized = normalizeOptionalThreadValue(value);
+  return normalized == null ? undefined : String(normalized);
+}
+
 function resolveAnnounceChannel(params: {
   channel?: CronMessageChannel;
   to?: string;
@@ -184,14 +189,18 @@ export function resolveFailureDestination(
     if (hasJobAccountIdField) {
       accountId = jobAccountId;
     }
-    if (hasJobModeField) {
-      const globalMode = globalConfig?.mode ?? "announce";
-      const resolvedJobMode = jobMode ?? "announce";
+    // Naming a channel makes this an announce route even when mode is omitted;
+    // inheriting webhook here would reinterpret the chat target as a URL.
+    const jobImpliesAnnounce = !hasJobModeField && jobChannel !== undefined;
+    if (hasJobModeField || jobImpliesAnnounce) {
+      const effectiveJobMode = jobImpliesAnnounce ? "announce" : jobMode;
+      const globalMode = mode ?? "announce";
+      const resolvedJobMode = effectiveJobMode ?? "announce";
       if (!jobToExplicitValue && globalMode !== resolvedJobMode) {
         // Do not carry an inherited target across modes; an announce chat is not a webhook URL.
         to = undefined;
       }
-      mode = jobMode;
+      mode = effectiveJobMode;
     }
   }
 
@@ -231,6 +240,7 @@ function isSameDeliveryTarget(
 
   const primaryTo = normalizeOptionalString(delivery.to);
   const primaryAccountId = normalizeOptionalString(delivery.accountId);
+  const primaryThreadId = normalizeThreadIdentity(delivery.threadId);
 
   if (failurePlan.mode === "webhook") {
     return primaryMode === "webhook" && primaryTo === failurePlan.to;
@@ -245,6 +255,7 @@ function isSameDeliveryTarget(
   return (
     failureChannelNormalized === primaryChannelNormalized &&
     failurePlan.to === primaryTo &&
-    failurePlan.accountId === primaryAccountId
+    failurePlan.accountId === primaryAccountId &&
+    primaryThreadId === undefined
   );
 }

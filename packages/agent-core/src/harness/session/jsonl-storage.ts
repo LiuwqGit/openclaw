@@ -1,7 +1,12 @@
 // Agent Core module implements jsonl storage behavior.
-import type { FileSystem, JsonlSessionMetadata, SessionTreeEntry } from "../types.js";
+import type {
+  FileError,
+  FileSystem,
+  JsonlSessionMetadata,
+  Result,
+  SessionTreeEntry,
+} from "../types.js";
 import { SessionError, toError } from "../types.js";
-import { getFileSystemResultOrThrow } from "./repo-utils.js";
 import {
   appendParentIdAfterEntry,
   BaseSessionStorage,
@@ -21,6 +26,17 @@ interface SessionHeader {
   timestamp: string;
   cwd: string;
   parentSession?: string;
+}
+
+function getFileSystemResultOrThrow<TValue>(
+  result: Result<TValue, FileError>,
+  message: string,
+): TValue {
+  if (!result.ok) {
+    const code = result.error.code === "not_found" ? "not_found" : "storage";
+    throw new SessionError(code, `${message}: ${result.error.message}`, result.error);
+  }
+  return result.value;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -170,17 +186,22 @@ async function loadJsonlStorage(
     await fs.readTextFile(filePath),
     `Failed to read session ${filePath}`,
   );
-  const lines = content.split("\n").filter((line) => line.trim());
-  if (lines.length === 0) {
+  const lines = content.split("\n");
+  const headerIndex = lines.findIndex((line) => line.trim());
+  if (headerIndex === -1) {
     throw invalidSession(filePath, "missing session header");
   }
 
-  const header = parseHeaderLine(lines[0], filePath);
+  const header = parseHeaderLine(lines[headerIndex], filePath);
   const entries: SessionTreeEntry[] = [];
   let leafId: string | null = null;
   let appendParentId: string | null = null;
-  for (let i = 1; i < lines.length; i++) {
-    const entry = parseEntryLine(lines[i], filePath, i + 1);
+  for (let lineIndex = headerIndex + 1; lineIndex < lines.length; lineIndex++) {
+    const line = lines[lineIndex];
+    if (!line.trim()) {
+      continue;
+    }
+    const entry = parseEntryLine(line, filePath, lineIndex + 1);
     entries.push(entry);
     const leafUpdate = leafIdUpdateAfterEntry(entry);
     if (leafUpdate !== undefined) {

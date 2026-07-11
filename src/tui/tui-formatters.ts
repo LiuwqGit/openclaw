@@ -194,7 +194,7 @@ export function sanitizeRenderableText(text: string): string {
     return text;
   }
 
-  const hasAnsi = text.includes("\u001b");
+  const hasAnsi = text.includes("\u001b") || text.includes("\u009b") || text.includes("\u009d");
   const hasReplacementChars = text.includes("\uFFFD");
   const hasLongTokens = LONG_TOKEN_TEST_RE.test(text);
   const hasControls = hasControlChars(text);
@@ -364,10 +364,36 @@ export function extractContentFromMessage(message: unknown): string {
 
 function extractAssistantRenderableContent(record: Record<string, unknown>): string {
   const visible = sanitizeRenderableText(extractAssistantVisibleText(record) ?? "").trim();
-  if (visible) {
-    return visible;
+  const pairingQr = extractPairingQrTerminalText(record);
+  const content = [visible, pairingQr].filter(Boolean).join("\n\n").trim();
+  if (content) {
+    return content;
   }
   return formatAssistantErrorFromRecord(record);
+}
+
+function extractPairingQrTerminalText(record: Record<string, unknown>): string {
+  const content = record.content;
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  const parts: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const blockRecord = block as Record<string, unknown>;
+    if (
+      blockRecord.type === "openclaw_pairing_qr" &&
+      typeof blockRecord.terminalText === "string"
+    ) {
+      const text = sanitizeRenderableText(blockRecord.terminalText).trim();
+      if (text) {
+        parts.push(text);
+      }
+    }
+  }
+  return parts.join("\n\n").trim();
 }
 
 function extractTextBlocks(content: unknown, opts?: { includeThinking?: boolean }): string {

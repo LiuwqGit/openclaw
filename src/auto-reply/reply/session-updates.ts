@@ -1,17 +1,10 @@
 /** Session update helpers for skill snapshots, compaction, and lifecycle hooks. */
 import crypto from "node:crypto";
-import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { canExecRequestNode } from "../../agents/exec-defaults.js";
-import {
-  canonicalizeAbsoluteSessionFilePath,
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
-  rewriteSessionFileForNewSessionId,
-  type SessionEntry,
-} from "../../config/sessions.js";
-import { patchSessionEntry, upsertSessionEntry } from "../../config/sessions/session-accessor.js";
+import { resolveCompactionSessionFile, type SessionEntry } from "../../config/sessions.js";
+import { patchSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   forgetActiveSessionForShutdown,
@@ -20,36 +13,47 @@ import {
 import { resolveStableSessionEndTranscript } from "../../gateway/session-transcript-files.fs.js";
 import { logVerbose } from "../../globals.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/session-snapshot.js";
+import type { ReplySessionEntryHandle } from "./session-entry-handle.js";
 import { buildSessionEndHookPayload, buildSessionStartHookPayload } from "./session-hooks.js";
 export { drainFormattedSystemEvents } from "./session-system-events.js";
 export { resetResolvedSkillsCacheForTests } from "../../skills/runtime/session-snapshot.js";
 
 async function persistSessionEntryUpdate(params: {
+  sessionEntryHandle?: ReplySessionEntryHandle;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
   storePath?: string;
   nextEntry: SessionEntry;
-}) {
-  if (!params.sessionStore || !params.sessionKey) {
-    return;
+  updates: Partial<SessionEntry>;
+}): Promise<SessionEntry> {
+  if (!params.sessionEntryHandle && (!params.sessionStore || !params.sessionKey)) {
+    return params.nextEntry;
   }
-  params.sessionStore[params.sessionKey] = {
-    ...params.sessionStore[params.sessionKey],
-    ...params.nextEntry,
-  };
-  if (!params.storePath) {
-    return;
+  let persistedEntry = params.nextEntry;
+  if (!params.storePath || !params.sessionKey) {
+    if (params.sessionEntryHandle) {
+      params.sessionEntryHandle.replaceCurrent(persistedEntry);
+    } else if (params.sessionStore && params.sessionKey) {
+      params.sessionStore[params.sessionKey] = persistedEntry;
+    }
+    return persistedEntry;
   }
-  await upsertSessionEntry(
-    {
-      storePath: params.storePath,
-      sessionKey: params.sessionKey,
-    },
-    params.nextEntry,
-  );
+  persistedEntry =
+    (await patchSessionEntry(
+      { storePath: params.storePath, sessionKey: params.sessionKey },
+      () => params.updates,
+      { fallbackEntry: params.nextEntry },
+    )) ?? persistedEntry;
+  if (params.sessionEntryHandle) {
+    params.sessionEntryHandle.replaceCurrent(persistedEntry);
+  } else if (params.sessionStore) {
+    params.sessionStore[params.sessionKey] = persistedEntry;
+  }
+  return persistedEntry;
 }
 
 function emitCompactionSessionLifecycleHooks(params: {
@@ -93,7 +97,9 @@ function emitCompactionSessionLifecycleHooks(params: {
       transcriptArchived: transcript.transcriptArchived,
       nextSessionId: params.nextEntry.sessionId,
     });
-    void hookRunner.runSessionEnd(payload.event, payload.context).catch((err: unknown) => {
+    void runWithGatewayIndependentRootWorkContinuation(async () => {
+      await hookRunner.runSessionEnd(payload.event, payload.context);
+    }).catch((err: unknown) => {
       logVerbose(`session_end hook failed: ${String(err)}`);
     });
   }
@@ -105,7 +111,9 @@ function emitCompactionSessionLifecycleHooks(params: {
       cfg: params.cfg,
       resumedFrom: params.previousEntry.sessionId,
     });
-    void hookRunner.runSessionStart(payload.event, payload.context).catch((err: unknown) => {
+    void runWithGatewayIndependentRootWorkContinuation(async () => {
+      await hookRunner.runSessionStart(payload.event, payload.context);
+    }).catch((err: unknown) => {
       logVerbose(`session_start hook failed: ${String(err)}`);
     });
   }
@@ -120,6 +128,7 @@ function resolveNonNegativeTokenCount(value: number | undefined): number | undef
 /** Ensures a session entry has the reusable skill snapshot needed for reply runs. */
 export async function ensureSkillSnapshot(params: {
   sessionEntry?: SessionEntry;
+  sessionEntryHandle?: ReplySessionEntryHandle;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
   storePath?: string;
@@ -146,6 +155,7 @@ export async function ensureSkillSnapshot(params: {
 
   const {
     sessionEntry,
+    sessionEntryHandle,
     sessionStore,
     sessionKey,
     storePath,
@@ -156,7 +166,7 @@ export async function ensureSkillSnapshot(params: {
     skillFilter,
   } = params;
 
-  let nextEntry = sessionEntry;
+  let nextEntry = sessionEntryHandle?.getCurrent() ?? sessionEntry;
   let systemSent = sessionEntry?.systemSent ?? false;
   const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
   const remoteEligibility = getRemoteSkillEligibility({
@@ -180,9 +190,10 @@ export async function ensureSkillSnapshot(params: {
   const initialSnapshotState = resolveSnapshot(existingSnapshot);
   const shouldRefreshSnapshot = initialSnapshotState.shouldRefresh;
 
-  if (isFirstTurnInSession && sessionStore && sessionKey) {
+  if (isFirstTurnInSession && (sessionEntryHandle || sessionStore) && sessionKey) {
     const current = nextEntry ??
-      sessionStore[sessionKey] ?? {
+      sessionEntryHandle?.get(sessionKey) ??
+      sessionStore?.[sessionKey] ?? {
         sessionId: sessionId ?? crypto.randomUUID(),
         updatedAt: Date.now(),
       };
@@ -197,7 +208,19 @@ export async function ensureSkillSnapshot(params: {
       systemSent: true,
       skillsSnapshot: skillSnapshot,
     };
-    await persistSessionEntryUpdate({ sessionStore, sessionKey, storePath, nextEntry });
+    nextEntry = await persistSessionEntryUpdate({
+      sessionEntryHandle,
+      sessionStore,
+      sessionKey,
+      storePath,
+      nextEntry,
+      updates: {
+        sessionId: nextEntry.sessionId,
+        updatedAt: nextEntry.updatedAt,
+        systemSent: nextEntry.systemSent,
+        skillsSnapshot: nextEntry.skillsSnapshot,
+      },
+    });
     systemSent = true;
   }
 
@@ -212,7 +235,7 @@ export async function ensureSkillSnapshot(params: {
         : resolveSnapshot(nextEntry.skillsSnapshot).snapshot;
   if (
     skillsSnapshot &&
-    sessionStore &&
+    (sessionEntryHandle || sessionStore) &&
     sessionKey &&
     !isFirstTurnInSession &&
     (!nextEntry?.skillsSnapshot || shouldRefreshSnapshot)
@@ -227,7 +250,18 @@ export async function ensureSkillSnapshot(params: {
       updatedAt: Date.now(),
       skillsSnapshot,
     };
-    await persistSessionEntryUpdate({ sessionStore, sessionKey, storePath, nextEntry });
+    nextEntry = await persistSessionEntryUpdate({
+      sessionEntryHandle,
+      sessionStore,
+      sessionKey,
+      storePath,
+      nextEntry,
+      updates: {
+        sessionId: nextEntry.sessionId,
+        updatedAt: nextEntry.updatedAt,
+        skillsSnapshot: nextEntry.skillsSnapshot,
+      },
+    });
   }
 
   return { sessionEntry: nextEntry, skillsSnapshot, systemSent };
@@ -333,31 +367,4 @@ export async function incrementCompactionCount(params: {
     });
   }
   return nextCount;
-}
-
-function resolveCompactionSessionFile(params: {
-  entry: SessionEntry;
-  sessionKey: string;
-  storePath?: string;
-  newSessionId: string;
-}): string {
-  const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
-  const pathOpts = resolveSessionFilePathOptions({
-    agentId,
-    storePath: params.storePath,
-  });
-  const rewrittenSessionFile = rewriteSessionFileForNewSessionId({
-    sessionFile: params.entry.sessionFile,
-    previousSessionId: params.entry.sessionId,
-    nextSessionId: params.newSessionId,
-  });
-  const normalizedRewrittenSessionFile =
-    rewrittenSessionFile && path.isAbsolute(rewrittenSessionFile)
-      ? canonicalizeAbsoluteSessionFilePath(rewrittenSessionFile)
-      : rewrittenSessionFile;
-  return resolveSessionFilePath(
-    params.newSessionId,
-    normalizedRewrittenSessionFile ? { sessionFile: normalizedRewrittenSessionFile } : undefined,
-    pathOpts,
-  );
 }
