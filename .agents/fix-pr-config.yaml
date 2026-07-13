@@ -1,0 +1,185 @@
+upstream_repo: "openclaw/openclaw"
+fork_repo: "LiuwqGit/openclaw"
+work_dir: "/home/0668000710/code/PR/openclaw"
+worktree_root: "/home/0668000710/code/PR/aispace/worktrees"
+evidence_dir_prefix: "/home/0668000710/code/PR/aispace/evidence"
+git_user: "LiuwqGit"
+git_email: "liu.weiqin@xydigit.com"
+branch_prefix: "feat/issue-"
+push_remote: "fork"
+auto_amend: true
+proxy: "http://proxyhk.zte.com.cn:80"
+
+commands:
+  install: "pnpm install"
+  build: "pnpm build"
+  dev: "pnpm gateway:dev"
+  test: "npx vitest run"
+  lint: "npx oxlint --deny=warn --ignore-path=.oxlintignore"
+  typecheck: "pnpm check:test-types"
+  ci_shards:
+    - "OPENCLAW_VITEST_MAX_WORKERS=2 OPENCLAW_VITEST_SHARD_NAME=core-runtime-infra-state OPENCLAW_TEST_PROJECTS_PARALLEL=2 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=180000 pnpm exec node scripts/test-projects.mjs test/vitest/vitest.infra.config.ts test/vitest/vitest.hooks.config.ts test/vitest/vitest.secrets.config.ts"
+  ci_lanes:
+    - paths: ["*.test.ts", "*.test.tsx", "*.e2e.test.ts"]
+      command: "pnpm check:test-types"
+      description: "Test file changes trigger type checking"
+    - paths: ["extensions/*"]
+      command: "pnpm test:extension {extension_id}"
+      description: "Extension changes trigger extension tests"
+    - paths: ["src/*", "ui/*"]
+      command: "pnpm test:unit:fast"
+      description: "Core code changes trigger fast unit tests"
+    - paths: ["src/plugin-sdk/*", "src/plugins/contracts/*"]
+      command: "pnpm test:contracts"
+      description: "Shared surface changes trigger contract tests"
+    - paths: ["src/config/*"]
+      command: "pnpm config:schema:check"
+      description: "Config changes trigger schema check"
+    - default: true
+      command: "pnpm check:changed"
+      description: "Default: run changed-file lint/typecheck/guard"
+
+issue_scan:
+  exclude_labels:
+    - "wontfix"
+    - "duplicate"
+    - "invalid"
+    - "clawsweeper:no-new-fix-pr"
+    - "clawsweeper:needs-product-decision"
+    - "clawsweeper:needs-maintainer-review"
+    - "clawsweeper:needs-security-review"
+    - "clawsweeper:needs-live-repro"
+    - "clawsweeper:needs-info"
+  scoring:
+    simplicity:
+      title_keywords_positive:
+        - typo
+        - misspell
+        - rename
+        - dead code
+        - unused
+        - remove
+        - delete
+        - missing
+        - fix typo
+        - minor
+        - trivial
+        - null check
+        - undefined check
+        - empty check
+      title_keywords_negative:
+        - refactor
+        - redesign
+        - rewrite
+        - migrate
+        - architect
+        - implement
+        - new feature
+        - integration
+        - full rewrite
+        - end-to-end
+      body_short_bonus: 3
+      body_long_penalty: -2
+    priority:
+      label_weights:
+        "bug": 3
+        "good first issue": 2
+        "regression": 6
+        "documentation": 2
+        "help wanted": 2
+        "question": -1
+        "wontfix": -10
+        "maintainer": 2
+      priority_labels:
+        "P0": 10
+        "P1": 8
+        "P2": 3
+        "P3": -2
+      size_labels:
+        "size: XS": 6
+        "size: S": 4
+        "size: M": 0
+        "size: L": -3
+        "size: XL": -5
+      impact_labels:
+        "impact:security": 8
+        "impact:data-loss": 7
+        "impact:message-loss": 6
+        "impact:crash-loop": 5
+        "impact:auth-provider": 4
+        "impact:session-state": 4
+      fix_signal_labels:
+        "clawsweeper:queueable-fix": 8
+        "clawsweeper:fix-shape-clear": 5
+        "clawsweeper:source-repro": 3
+    proof_feasibility:
+      local_runtime_bonus: 8
+      external_service_penalty: -10
+  merge_grade:
+    max_open_prs: 20
+    no_new_pr_labels:
+      - "clawsweeper:no-new-fix-pr"
+    maintainer_block_keywords:
+      - "no new pr"
+      - "canonical fix"
+      - "prior PRs closed"
+      - "wait on that PR"
+      - "do not open"
+    queue_signal_labels:
+      "clawsweeper:queueable-fix": 30
+    clear_shape_labels:
+      "clawsweeper:fix-shape-clear": 20
+    source_repro_labels:
+      "clawsweeper:source-repro": 15
+
+cleanliness:
+  forbidden_markers:
+    - "Co-Authored-By"
+    - "Generated with"
+    - "Claude Code"
+    - "AI-generated"
+    - "automatically generated"
+    - "daily automation"
+    - "automation task"
+    - "🤖"
+  forbid_debug_output: true
+
+pr_metadata:
+  max_open_prs: 20
+  check_changelog: true
+  required_sections:
+    - "## Summary"
+    - "## Real behavior proof"
+    - "## Tests and validation"
+    - "## Risk checklist"
+    - "## Current review state"
+  required_fields:
+    - "Behavior or issue addressed:"
+    - "Real environment tested:"
+    - "Evidence after fix:"
+    - "Observed result after fix:"
+    - "What was not tested:"
+  forbidden_patterns: []
+
+maintainer_review_patterns:
+  - bot_name: "clawsweeper"
+    patterns:
+      - comment_pattern: "blocked until real behavior proof"
+        action: "supplement L2+ JSON evidence, update PR body, re-request review"
+      - comment_pattern: "success criteria too broad"
+        action: "narrow success to deliverable result only, add negative test cases"
+      - comment_pattern: "duplicate|superseded"
+        action: "close PR, comment on canonical PR"
+      - comment_pattern: "no new fix pr|canonical fix"
+        action: "stop, do not open new PR"
+    resolution: "resolve addressed bot comments before requesting re-review"
+
+pr_body_policy_script: "scripts/github/real-behavior-proof-policy.mjs"
+maintainer_notes_dir: ".agents/maintainer-notes"
+
+codebase_exploration:
+  enabled: true
+  mcp_server_name: "codebase-memory-mcp"
+  auto_index: true
+  index_timeout_sec: 300
+  cross_repos: []
