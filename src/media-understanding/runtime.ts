@@ -267,6 +267,7 @@ export async function prepareImageDescriptionInput(params: PrepareImageDescripti
   const imageCompression = resolveImageCompressionPolicyFromConfig(params.cfg, {
     provider: params.provider,
     model: params.model,
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   });
 
   // Optimize the image buffer before provider execution.
@@ -285,7 +286,6 @@ export async function prepareImageDescriptionInput(params: PrepareImageDescripti
     fileName: optimizedImage.fileName ?? image.fileName,
     mime: optimizedImage.contentType,
     maxBytes: effectiveCap,
-    imageCompression,
   });
   return {
     buffer: normalizedImage.buffer,

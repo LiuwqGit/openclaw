@@ -486,7 +486,6 @@ export function resolveImageCompressionPolicyFromConfig(
   opts?: {
     provider?: string;
     model?: string;
-    agentDir?: string;
     workspaceDir?: string;
   },
 ): ImageCompressionPolicy {
@@ -510,7 +509,7 @@ export function resolveImageCompressionPolicyFromConfig(
         if (typeof m === "string") {
           return m === opts.model;
         }
-        // Objects may match by id or one of their aliases.
+        // Objects match by id (string entries are handled in the branch above).
         const def = m as ModelDefinitionConfig;
         return def.id === opts.model;
       }) as ModelDefinitionConfig | string | undefined;
@@ -550,7 +549,15 @@ export function resolveImageCompressionPolicyFromConfig(
     // mergeImageCompressionPolicies where staticPolicy overrides runtimePolicy).
     const imagePolicy = { ...catalogImage, ...configuredImage };
 
-    if (imagePolicy) {
+    // Skip the merge entry when neither source produced any concrete limits.
+    // Spreading two undefined objects yields `{}`, which is truthy and would
+    // otherwise push an empty `ImageCompressionModelPolicy` into the ladder.
+    const hasImagePolicyFields =
+      imagePolicy.maxSidePx != null ||
+      imagePolicy.maxPixels != null ||
+      imagePolicy.preferredSidePx != null ||
+      imagePolicy.maxBytes != null;
+    if (hasImagePolicyFields) {
       const entry: ImageCompressionModelPolicy = {};
       if (imagePolicy.maxSidePx != null) {
         entry.maxSidePx = imagePolicy.maxSidePx;
@@ -949,7 +956,6 @@ export async function runProviderEntry(params: {
     const imageCompression = resolveImageCompressionPolicyFromConfig(cfg, {
       provider: requestProviderId,
       model: modelId,
-      agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
     });
 
@@ -969,7 +975,6 @@ export async function runProviderEntry(params: {
       fileName: optimizedMedia.fileName ?? media.fileName,
       mime: optimizedMedia.contentType,
       maxBytes: effectiveCap,
-      imageCompression,
     });
     const requestOverrides = resolveMediaRequestOverrides(params.config);
     const provider = getMediaUnderstandingProvider(requestProviderId, params.providerRegistry);
