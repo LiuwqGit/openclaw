@@ -84,6 +84,7 @@ import {
 } from "./anthropic-usage.js";
 import { resolveCacheRetention } from "./cache-retention.js";
 import { resolveCloudflareBaseUrl } from "./cloudflare.js";
+import { safeStringifyError } from "./error-utils.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
 import { adjustMaxTokensForThinking, buildBaseOptions } from "./simple-options.js";
 import {
@@ -936,7 +937,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
         output.content = [];
       }
       output.stopReason = requestOptions?.signal?.aborted ? "aborted" : "error";
-      output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+      output.errorMessage = safeStringifyError(error);
       stream.push({ type: "error", reason: output.stopReason, error: output });
       stream.end();
     }

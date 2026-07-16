@@ -32,6 +32,7 @@ import type {
 import type { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
+import { safeStringifyError } from "./error-utils.js";
 import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
@@ -468,7 +469,7 @@ export async function runGoogleGenerateContentLifecycle<T extends GoogleApiType>
       }
     }
     output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-    output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+    output.errorMessage = safeStringifyError(error);
     stream.push({ type: "error", reason: output.stopReason, error: output });
     stream.end();
   }

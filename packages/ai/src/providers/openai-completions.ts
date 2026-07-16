@@ -52,6 +52,7 @@ import {
 } from "../utils/system-prompt-cache-boundary.js";
 import { resolveCacheRetention } from "./cache-retention.js";
 import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js";
+import { safeStringifyError } from "./error-utils.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
 import { mapOpenAIStopReason } from "./openai-stop-reason.js";
@@ -564,7 +565,7 @@ export const streamOpenAICompletions: StreamFunction<
         delete (block as { streamIndex?: number }).streamIndex;
       }
       output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-      output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+      output.errorMessage = safeStringifyError(error);
       // Some providers via OpenRouter give additional information in this field.
       const rawMetadata = (error as { error?: { metadata?: { raw?: string } } })?.error?.metadata
         ?.raw;
