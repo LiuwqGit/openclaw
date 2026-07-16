@@ -30,6 +30,7 @@ import type { MsgContext } from "../auto-reply/templating.js";
 import { applyTemplate } from "../auto-reply/templating.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { ModelProviderConfig, OpenClawConfig } from "../config/types.js";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type {
   MediaUnderstandingConfig,
   MediaUnderstandingModelConfig,
@@ -41,7 +42,6 @@ import { resolveProxyFetchFromEnv } from "../infra/net/proxy-fetch.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runFfmpeg } from "../media/media-services.js";
 import type { ImageCompressionModelPolicy, ImageCompressionPolicy } from "../media/web-media.js";
-import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { effectiveImageBytesCap, optimizeImageBufferForWebMedia } from "../media/web-media.js";
 import {
   getOfficialExternalPluginCatalogManifest,

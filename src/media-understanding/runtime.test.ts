@@ -16,6 +16,10 @@ import {
 } from "./runtime.js";
 
 const mocks = vi.hoisted(() => {
+  const PNG_1X1 = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=",
+    "base64",
+  );
   const cleanup = vi.fn(async () => {});
   const getBuffer = vi.fn(async () => ({
     buffer: Buffer.from("remote-image"),
@@ -36,13 +40,9 @@ const mocks = vi.hoisted(() => {
     runCapability: vi.fn(),
     cleanup,
     getBuffer,
+    PNG_1X1,
   };
 });
-
-const PNG_1X1 = Buffer.from(
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=",
-  "base64",
-);
 
 vi.mock("./runner.js", () => ({
   buildProviderRegistry: mocks.buildProviderRegistry,
@@ -80,8 +80,12 @@ vi.mock("../media/media-services.js", () => ({
       }),
     ),
   })),
-  readImageMetadataFromHeader: vi.fn(() => null),
-  readImageProbeFromHeader: vi.fn(() => null),
+  readImageMetadataFromHeader: vi.fn((buffer: Buffer) =>
+    buffer === mocks.PNG_1X1 ? { width: 1, height: 1 } : null,
+  ),
+  readImageProbeFromHeader: vi.fn((buffer: Buffer) =>
+    buffer === mocks.PNG_1X1 ? { format: "png" } : null,
+  ),
 }));
 
 function requireRunCapabilityRequest(): unknown {
@@ -543,7 +547,7 @@ describe("media-understanding runtime", () => {
   });
 
   it("prefers local image bytes over conflicting explicit MIME metadata", async () => {
-    mocks.readLocalFileSafely.mockResolvedValue({ buffer: PNG_1X1 });
+    mocks.readLocalFileSafely.mockResolvedValue({ buffer: mocks.PNG_1X1 });
 
     await describeImageFileWithModel({
       filePath: "/tmp/sample.jpg",
@@ -557,7 +561,7 @@ describe("media-understanding runtime", () => {
 
     expect(mocks.describeImageWithModel).toHaveBeenCalledWith(
       expect.objectContaining({
-        buffer: PNG_1X1,
+        buffer: mocks.PNG_1X1,
         fileName: "sample.jpg",
         mime: "image/png",
       }),
@@ -579,11 +583,12 @@ describe("media-understanding runtime", () => {
 
     // Optimization runs before HEIC normalization, so convertHeicToJpeg is
     // bypassed — the image is already re-encoded by the optimization pipeline.
+    // The optimization pipeline also renames HEIC sources to .jpg.
     expect(mocks.convertHeicToJpeg).not.toHaveBeenCalled();
     expect(mocks.describeImageWithModel).toHaveBeenCalledWith(
       expect.objectContaining({
         buffer: Buffer.from("heic-source"),
-        fileName: "sample.bin",
+        fileName: "sample.jpg",
         mime: "image/jpeg",
       }),
     );
@@ -613,10 +618,10 @@ describe("media-understanding runtime", () => {
 
   it("prefers fetched image MIME over conflicting explicit metadata", async () => {
     mocks.getBuffer.mockResolvedValue({
-      buffer: PNG_1X1,
+      buffer: mocks.PNG_1X1,
       fileName: "photo.jpg",
       mime: "image/png",
-      size: PNG_1X1.length,
+      size: mocks.PNG_1X1.length,
     });
 
     await describeImageFileWithModel({
@@ -632,7 +637,7 @@ describe("media-understanding runtime", () => {
 
     expect(mocks.describeImageWithModel).toHaveBeenCalledWith(
       expect.objectContaining({
-        buffer: PNG_1X1,
+        buffer: mocks.PNG_1X1,
         fileName: "photo.jpg",
         mime: "image/png",
       }),
