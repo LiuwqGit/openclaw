@@ -60,13 +60,13 @@ import {
 import { createSseByteGuard } from "../utils/streaming-byte-guard.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
+import { supportsOpenAITemperature } from "./openai-reasoning-effort.js";
 import {
   convertResponsesMessages,
   convertResponsesToolPayload,
   processResponsesStream,
   resolveResponsesReasoningEffort,
 } from "./openai-responses-shared.js";
-import { supportsOpenAITemperature } from "./openai-reasoning-effort.js";
 import { buildBaseOptions } from "./simple-options.js";
 
 // ============================================================================
@@ -882,6 +882,8 @@ async function* parseSSE(response: Response): AsyncGenerator<Record<string, unkn
 // `parseAnthropicSseBodyForTest` / `iterateSseMessagesForTest` patterns.
 export const parseSSEForTest = parseSSE;
 
+export const readChatGptResponsesErrorTextLimitedForTest = readChatGptResponsesErrorTextLimited;
+
 // ============================================================================
 // WebSocket Parsing
 // ============================================================================
@@ -1688,10 +1690,10 @@ async function readChatGptResponsesErrorTextLimited(response: Response): Promise
       text += decoder.decode();
     }
   } finally {
-    if (reachedLimit) {
-      // This provider module is browser-safe, so keep error-body capping on Web APIs.
-      await reader.cancel().catch(() => {});
-    }
+    // Always cancel the reader. If the loop threw, the stream is still
+    // open and must be cancelled to release the underlying socket.
+    // If EOF was reached, cancel is harmless (stream already done).
+    await reader.cancel().catch(() => {});
     try {
       reader.releaseLock();
     } catch {}
