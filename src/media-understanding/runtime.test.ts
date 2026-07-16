@@ -15,6 +15,10 @@ import {
 } from "./runtime.js";
 
 const mocks = vi.hoisted(() => {
+  const PNG_1X1 = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=",
+    "base64",
+  );
   const cleanup = vi.fn(async () => {});
   const getBuffer = vi.fn(async () => ({
     buffer: Buffer.from("remote-image"),
@@ -35,6 +39,7 @@ const mocks = vi.hoisted(() => {
     runCapability: vi.fn(),
     cleanup,
     getBuffer,
+    PNG_1X1,
   };
 });
 
@@ -74,8 +79,12 @@ vi.mock("../media/media-services.js", () => ({
       }),
     ),
   })),
-  readImageMetadataFromHeader: vi.fn(() => null),
-  readImageProbeFromHeader: vi.fn(() => null),
+  readImageMetadataFromHeader: vi.fn((buffer: Buffer) =>
+    buffer === mocks.PNG_1X1 ? { width: 1, height: 1 } : null,
+  ),
+  readImageProbeFromHeader: vi.fn((buffer: Buffer) =>
+    buffer === mocks.PNG_1X1 ? { format: "png" } : null,
+  ),
 }));
 
 function requireRunCapabilityRequest(): unknown {
@@ -535,6 +544,28 @@ describe("media-understanding runtime", () => {
     });
   });
 
+  it("prefers local image bytes over conflicting explicit MIME metadata", async () => {
+    mocks.readLocalFileSafely.mockResolvedValue({ buffer: mocks.PNG_1X1 });
+
+    await describeImageFileWithModel({
+      filePath: "/tmp/sample.jpg",
+      mime: "application/pdf",
+      provider: "zai",
+      model: "glm-4.6v",
+      prompt: "Describe it",
+      cfg: {} as OpenClawConfig,
+      agentDir: "/tmp/agent",
+    });
+
+    expect(mocks.describeImageWithModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        buffer: mocks.PNG_1X1,
+        fileName: "sample.jpg",
+        mime: "image/png",
+      }),
+    );
+  });
+
   it("normalizes local HEIC explicit image descriptions before provider execution", async () => {
     mocks.readLocalFileSafely.mockResolvedValue({ buffer: Buffer.from("heic-source") });
 
@@ -550,11 +581,12 @@ describe("media-understanding runtime", () => {
 
     // Optimization runs before HEIC normalization, so convertHeicToJpeg is
     // bypassed — the image is already re-encoded by the optimization pipeline.
+    // The optimization pipeline also renames HEIC sources to .jpg.
     expect(mocks.convertHeicToJpeg).not.toHaveBeenCalled();
     expect(mocks.describeImageWithModel).toHaveBeenCalledWith(
       expect.objectContaining({
         buffer: Buffer.from("heic-source"),
-        fileName: "sample.bin",
+        fileName: "sample.jpg",
         mime: "image/jpeg",
       }),
     );
@@ -580,6 +612,34 @@ describe("media-understanding runtime", () => {
       }),
     );
     expect(mocks.cleanup).toHaveBeenCalledTimes(1);
+  });
+
+  it("prefers fetched image MIME over conflicting explicit metadata", async () => {
+    mocks.getBuffer.mockResolvedValue({
+      buffer: mocks.PNG_1X1,
+      fileName: "photo.jpg",
+      mime: "image/png",
+      size: mocks.PNG_1X1.length,
+    });
+
+    await describeImageFileWithModel({
+      filePath: "https://example.com/photo.jpg",
+      mediaUrl: "https://example.com/photo.jpg",
+      mime: "application/pdf",
+      provider: "zai",
+      model: "glm-4.6v",
+      prompt: "Describe it",
+      cfg: {} as OpenClawConfig,
+      agentDir: "/tmp/agent",
+    });
+
+    expect(mocks.describeImageWithModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        buffer: mocks.PNG_1X1,
+        fileName: "photo.jpg",
+        mime: "image/png",
+      }),
+    );
   });
 
   it("fetches remote explicit image descriptions through the media attachment cache", async () => {
