@@ -1,16 +1,17 @@
 // Runner entry policy tests cover resolveImageCompressionPolicyFromConfig merge
-// precedence between agents.defaults, configured model metadata, and the bundled
-// static catalog. Catalog lookup is mocked for determinism so the merge contract
-// is proved without coupling to shipped catalog contents.
+// precedence between agents.defaults, configured model metadata, and the shared
+// model-aware compression resolver. The shared resolver is mocked so the merge
+// contract is proved without coupling to shipped catalog contents.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ImageCompressionModelPolicy } from "../media/web-media.js";
 import type { OpenClawConfig } from "../config/types.js";
 
-const { resolveBundledStaticCatalogModelMock } = vi.hoisted(() => ({
-  resolveBundledStaticCatalogModelMock: vi.fn(),
+const { resolveCompressionModelPolicyMock } = vi.hoisted(() => ({
+  resolveCompressionModelPolicyMock: vi.fn<() => Promise<ImageCompressionModelPolicy>>(),
 }));
 
-vi.mock("../agents/embedded-agent-runner/model.static-catalog.js", () => ({
-  resolveBundledStaticCatalogModel: resolveBundledStaticCatalogModelMock,
+vi.mock("../agents/tools/image-tool.js", () => ({
+  resolveCompressionModelPolicy: resolveCompressionModelPolicyMock,
 }));
 
 import { resolveImageCompressionPolicyFromConfig } from "./runner.entries.js";
@@ -20,106 +21,70 @@ function makeCfg(overrides: unknown): OpenClawConfig {
 }
 
 beforeEach(() => {
-  resolveBundledStaticCatalogModelMock.mockReset();
-  resolveBundledStaticCatalogModelMock.mockReturnValue(undefined);
+  resolveCompressionModelPolicyMock.mockReset();
+  resolveCompressionModelPolicyMock.mockResolvedValue({});
 });
 
 describe("media-understanding resolveImageCompressionPolicyFromConfig", () => {
-  it("returns quality-only policy without imageMaxDimensionPx or provider/model", () => {
+  it("returns quality-only policy without imageMaxDimensionPx or provider/model", async () => {
     const cfg = makeCfg({ agents: { defaults: { imageQuality: "high" } } });
-    expect(resolveImageCompressionPolicyFromConfig(cfg)).toEqual({ quality: "high" });
+    await expect(resolveImageCompressionPolicyFromConfig(cfg)).resolves.toEqual({ quality: "high" });
   });
 
-  it("emits agents.defaults.imageMaxDimensionPx as a preferredSidePx entry", () => {
+  it("emits agents.defaults.imageMaxDimensionPx as a preferredSidePx entry", async () => {
     const cfg = makeCfg({
       agents: { defaults: { imageQuality: "balanced", imageMaxDimensionPx: 1024 } },
     });
-    expect(resolveImageCompressionPolicyFromConfig(cfg)).toEqual({
+    await expect(resolveImageCompressionPolicyFromConfig(cfg)).resolves.toEqual({
       quality: "balanced",
       models: [{ preferredSidePx: 1024 }],
     });
   });
 
-  it("skips model merge when only provider is given (no model id)", () => {
-    const cfg = makeCfg({
-      models: {
-        providers: {
-          anthropic: {
-            models: [{ id: "claude-sonnet-5", mediaInput: { image: { maxSidePx: 1234 } } }],
-          },
-        },
-      },
-    });
-    expect(resolveImageCompressionPolicyFromConfig(cfg, { provider: "anthropic" })).toEqual({
-      quality: undefined,
-    });
+  it("skips model merge when only provider is given (no model id)", async () => {
+    const cfg = makeCfg({});
+    await expect(
+      resolveImageCompressionPolicyFromConfig(cfg, { provider: "anthropic" }),
+    ).resolves.toEqual({});
   });
 
-  it("skips model merge when only model is given (no provider)", () => {
-    const cfg = makeCfg({
-      models: {
-        providers: {
-          anthropic: {
-            models: [{ id: "claude-sonnet-5", mediaInput: { image: { maxSidePx: 1234 } } }],
-          },
-        },
-      },
-    });
-    expect(resolveImageCompressionPolicyFromConfig(cfg, { model: "claude-sonnet-5" })).toEqual({
-      quality: undefined,
-    });
+  it("skips model merge when only model is given (no provider)", async () => {
+    const cfg = makeCfg({});
+    await expect(
+      resolveImageCompressionPolicyFromConfig(cfg, { model: "claude-sonnet-5" }),
+    ).resolves.toEqual({});
   });
 
-  it("uses configured model mediaInput.image when catalog has no entry", () => {
-    resolveBundledStaticCatalogModelMock.mockReturnValue(undefined);
+  it("includes shared resolver policy when provider+model are given", async () => {
+    resolveCompressionModelPolicyMock.mockResolvedValue({
+      maxSidePx: 4096,
+      maxBytes: 5_000_000,
+    });
     const cfg = makeCfg({
       agents: { defaults: { imageQuality: "balanced" } },
-      models: {
-        providers: {
-          "my-vendor": {
-            models: [
-              {
-                id: "vision-9000",
-                mediaInput: { image: { maxSidePx: 4096, maxBytes: 5_000_000 } },
-              },
-            ],
-          },
-        },
-      },
     });
-    const policy = resolveImageCompressionPolicyFromConfig(cfg, {
+    const policy = await resolveImageCompressionPolicyFromConfig(cfg, {
       provider: "my-vendor",
       model: "vision-9000",
     });
     expect(policy.models).toContainEqual({ maxSidePx: 4096, maxBytes: 5_000_000 });
   });
 
-  it("configured limits override catalog limits; catalog fills missing fields", () => {
-    resolveBundledStaticCatalogModelMock.mockReturnValue({
-      mediaInput: {
-        image: { maxSidePx: 2576, preferredSidePx: 2576, maxPixels: 1_000_000 },
-      },
+  it("merges defaults preferredSidePx with shared resolver model policy", async () => {
+    resolveCompressionModelPolicyMock.mockResolvedValue({
+      maxSidePx: 2576,
+      preferredSidePx: 2576,
+      maxPixels: 1_000_000,
+      maxBytes: 8_000_000,
     });
     const cfg = makeCfg({
       agents: { defaults: { imageQuality: "balanced", imageMaxDimensionPx: 1024 } },
-      models: {
-        providers: {
-          anthropic: {
-            models: [
-              {
-                id: "claude-sonnet-5",
-                mediaInput: { image: { maxBytes: 8_000_000 } },
-              },
-            ],
-          },
-        },
-      },
     });
-    const policy = resolveImageCompressionPolicyFromConfig(cfg, {
+    const policy = await resolveImageCompressionPolicyFromConfig(cfg, {
       provider: "anthropic",
       model: "claude-sonnet-5",
     });
-    // Two model entries: [defaults preferredSidePx] then merged configured+catalog.
+    // Two model entries: [defaults preferredSidePx] then shared resolver policy.
     expect(policy.models).toEqual([
       { preferredSidePx: 1024 },
       {
@@ -131,13 +96,12 @@ describe("media-understanding resolveImageCompressionPolicyFromConfig", () => {
     ]);
   });
 
-  it("string model entries match by id but yield no object metadata and no models entry", () => {
-    resolveBundledStaticCatalogModelMock.mockReturnValue(undefined);
+  it("skips empty shared resolver policy", async () => {
+    resolveCompressionModelPolicyMock.mockResolvedValue({});
     const cfg = makeCfg({
       agents: { defaults: { imageQuality: "balanced" } },
-      models: { providers: { anthropic: { models: ["claude-sonnet-5"] } } },
     });
-    const policy = resolveImageCompressionPolicyFromConfig(cfg, {
+    const policy = await resolveImageCompressionPolicyFromConfig(cfg, {
       provider: "anthropic",
       model: "claude-sonnet-5",
     });

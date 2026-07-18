@@ -37,6 +37,19 @@ const mocks = vi.hoisted(() => {
     readLocalFileSafely: vi.fn(async () => ({ buffer: Buffer.from("image") })),
     describeImageWithModel: vi.fn(async () => ({ text: "generic image ok", model: "vision" })),
     convertHeicToJpeg: vi.fn(async () => Buffer.from("jpeg-normalized")),
+    normalizeImageDescriptionInput: vi.fn(
+      async (params: { buffer: Buffer; mime?: string; fileName?: string }) => {
+        const HEIC_MIME_RE = /^image\/hei[cf]/i;
+        const isHeic =
+          HEIC_MIME_RE.test(params.mime ?? "") ||
+          /\.(heic|heif)$/i.test(params.fileName ?? "");
+        const jpgName = params.fileName?.replace(/\.[^.]+$/, ".jpg") ?? params.fileName;
+        return isHeic
+          ? { buffer: Buffer.from("jpeg-normalized"), mime: "image/jpeg", fileName: jpgName }
+          : { buffer: params.buffer, mime: params.mime, fileName: params.fileName };
+      },
+    ),
+    resolveImageCompressionPolicyFromConfig: vi.fn(async () => ({})),
     runCapability: vi.fn(),
     cleanup,
     getBuffer,
@@ -51,6 +64,12 @@ vi.mock("./runner.js", () => ({
   runCapability: mocks.runCapability,
 }));
 
+vi.mock("./runner.entries.js", () => ({
+  resolveImageCompressionPolicyFromConfig: mocks.resolveImageCompressionPolicyFromConfig,
+  findDecisionReason: vi.fn(),
+  normalizeDecisionReason: vi.fn(),
+}));
+
 vi.mock("./provider-registry.js", () => ({
   normalizeMediaProviderId: mocks.normalizeMediaProviderId,
   buildMediaUnderstandingRegistry: mocks.buildMediaUnderstandingRegistry,
@@ -63,6 +82,10 @@ vi.mock("../infra/fs-safe.js", () => ({
 
 vi.mock("./image-runtime.js", () => ({
   describeImageWithModel: mocks.describeImageWithModel,
+}));
+
+vi.mock("./image-input-normalize.js", () => ({
+  normalizeImageDescriptionInput: mocks.normalizeImageDescriptionInput,
 }));
 
 vi.mock("../media/media-services.js", () => ({
@@ -581,13 +604,15 @@ describe("media-understanding runtime", () => {
       agentDir: "/tmp/agent",
     });
 
-    // Optimization runs before HEIC normalization, so convertHeicToJpeg is
-    // bypassed — the image is already re-encoded by the optimization pipeline.
-    // The optimization pipeline also renames HEIC sources to .jpg.
-    expect(mocks.convertHeicToJpeg).not.toHaveBeenCalled();
+    // HEIC normalization runs before optimization so the optimizer receives
+    // a format it can resize. The mock normalizer converts HEIC to JPEG.
+    expect(mocks.normalizeImageDescriptionInput).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mime: expect.stringMatching(/^image\/hei[cf]/i),
+      }),
+    );
     expect(mocks.describeImageWithModel).toHaveBeenCalledWith(
       expect.objectContaining({
-        buffer: Buffer.from("heic-source"),
         fileName: "sample.jpg",
         mime: "image/jpeg",
       }),

@@ -19,7 +19,7 @@ import {
   collectProviderApiKeysForExecution,
   executeWithApiKeyRotation,
 } from "../agents/api-key-rotation.js";
-import { resolveBundledStaticCatalogModel } from "../agents/embedded-agent-runner/model.static-catalog.js";
+import { resolveCompressionModelPolicy } from "../agents/tools/image-tool.js";
 import { CUSTOM_LOCAL_AUTH_MARKER } from "../agents/model-auth-markers.js";
 import {
   mergeModelProviderRequestOverrides,
@@ -29,8 +29,7 @@ import {
 import type { MsgContext } from "../auto-reply/templating.js";
 import { applyTemplate } from "../auto-reply/templating.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import type { ModelProviderConfig, OpenClawConfig } from "../config/types.js";
-import type { ModelDefinitionConfig } from "../config/types.models.js";
+import type { OpenClawConfig } from "../config/types.js";
 import type {
   MediaUnderstandingConfig,
   MediaUnderstandingModelConfig,
@@ -464,121 +463,50 @@ function resolveEntryRunOptions(params: {
 }
 
 /**
- * Resolves image compression policy from agent defaults config and
- * (when available) the selected provider/model mediaInput.image limits.
+ * Resolves image compression policy using the shared model-aware resolver
+ * from image-tool, which merges configured model limits, bundled static
+ * catalog limits, and runtime-augmented limits into a single policy.
  *
- * Config-only policy (agents.defaults) provides a preferred resize side but
- * does not set hard maxSidePx/maxPixels caps, so oversized images from
- * media-understanding paths can still bypass provider limits. When provider
- * and model are known this merges two sources:
- *
- * 1. Configured model limits (openclaw.json providers.*.models[].mediaInput.image)
- *    via direct config lookup — covers custom/user-configured vision models
- *    that may not appear in the bundled static catalog.
- * 2. Bundled static catalog limits (resolveBundledStaticCatalogModel) as
- *    safety-net fallback for bundled providers.
- *
- * Configured limits take priority (matching mergeImageCompressionPolicies
- * contract in image-tool.ts); catalog fills any missing fields.
+ * Delegates to resolveCompressionModelPolicy so media-understanding paths
+ * follow the same resize ladder as the image tool.
  */
-export function resolveImageCompressionPolicyFromConfig(
+export async function resolveImageCompressionPolicyFromConfig(
   cfg: OpenClawConfig,
   opts?: {
     provider?: string;
     model?: string;
     workspaceDir?: string;
   },
-): ImageCompressionPolicy {
+): Promise<ImageCompressionPolicy> {
   const quality = cfg.agents?.defaults?.imageQuality;
   const imageMaxDimensionPx = cfg.agents?.defaults?.imageMaxDimensionPx;
-  const policy: ImageCompressionPolicy = { quality };
-  const models: ImageCompressionPolicy["models"] = [];
+  const models: ImageCompressionModelPolicy[] = [];
 
   if (imageMaxDimensionPx) {
     models.push({ preferredSidePx: imageMaxDimensionPx });
   }
 
   if (opts?.provider && opts?.model) {
-    // Source 1: Configured model metadata from openclaw.json. Resolve the
-    // model definition from cfg.models.providers (supports both string and
-    // object entries with mediaInput.image limits).
-    let configuredImage: ImageCompressionModelPolicy | undefined;
-    const providerConfig = cfg.models?.providers?.[opts.provider];
-    if (providerConfig) {
-      const modelDef = providerConfig.models?.find((m) => {
-        if (typeof m === "string") {
-          return m === opts.model;
-        }
-        // Objects match by id (string entries are handled in the branch above).
-        const def = m as ModelDefinitionConfig;
-        return def.id === opts.model;
-      }) as ModelDefinitionConfig | string | undefined;
-      if (modelDef && typeof modelDef === "object") {
-        const image = modelDef.mediaInput?.image;
-        if (image) {
-          configuredImage = {};
-          if (image.maxSidePx != null) {
-            configuredImage.maxSidePx = image.maxSidePx;
-          }
-          if (image.maxPixels != null) {
-            configuredImage.maxPixels = image.maxPixels;
-          }
-          if (image.preferredSidePx != null) {
-            configuredImage.preferredSidePx = image.preferredSidePx;
-          }
-          if (image.maxBytes != null) {
-            configuredImage.maxBytes = image.maxBytes;
-          }
-        }
-      }
-    }
-
-    // Source 2: Bundled static catalog limits. These fill any gaps left by
-    // configured metadata and serve as the fallback for models that are not
-    // individually configured.
-    const catalogModel = resolveBundledStaticCatalogModel({
-      provider: opts.provider,
-      modelId: opts.model,
+    const modelPolicy = await resolveCompressionModelPolicy({
       cfg,
-      ...(opts.workspaceDir ? { workspaceDir: opts.workspaceDir } : {}),
-      includeRuntimeDiscovery: true,
+      provider: opts.provider,
+      model: opts.model,
+      workspaceDir: opts.workspaceDir,
     });
-    const catalogImage = catalogModel?.mediaInput?.image;
-
-    // Merge: configured takes priority over catalog (mirrors image-tool's
-    // mergeImageCompressionPolicies where staticPolicy overrides runtimePolicy).
-    const imagePolicy = { ...catalogImage, ...configuredImage };
-
-    // Skip the merge entry when neither source produced any concrete limits.
-    // Spreading two undefined objects yields `{}`, which is truthy and would
-    // otherwise push an empty `ImageCompressionModelPolicy` into the ladder.
-    const hasImagePolicyFields =
-      imagePolicy.maxSidePx != null ||
-      imagePolicy.maxPixels != null ||
-      imagePolicy.preferredSidePx != null ||
-      imagePolicy.maxBytes != null;
-    if (hasImagePolicyFields) {
-      const entry: ImageCompressionModelPolicy = {};
-      if (imagePolicy.maxSidePx != null) {
-        entry.maxSidePx = imagePolicy.maxSidePx;
-      }
-      if (imagePolicy.maxPixels != null) {
-        entry.maxPixels = imagePolicy.maxPixels;
-      }
-      if (imagePolicy.preferredSidePx != null) {
-        entry.preferredSidePx = imagePolicy.preferredSidePx;
-      }
-      if (imagePolicy.maxBytes != null) {
-        entry.maxBytes = imagePolicy.maxBytes;
-      }
-      models.push(entry);
+    const hasModelPolicyFields =
+      modelPolicy.maxSidePx != null ||
+      modelPolicy.maxPixels != null ||
+      modelPolicy.preferredSidePx != null ||
+      modelPolicy.maxBytes != null;
+    if (hasModelPolicyFields) {
+      models.push(modelPolicy);
     }
   }
 
-  if (models.length > 0) {
-    policy.models = models;
-  }
-  return policy;
+  return {
+    ...(quality ? { quality } : {}),
+    ...(models.length > 0 ? { models } : {}),
+  };
 }
 
 function resolveMediaRequestOverrides(config: MediaUnderstandingConfig | undefined): {
@@ -944,44 +872,50 @@ export async function runProviderEntry(params: {
     if (!modelId) {
       throw new Error("Image understanding requires model id");
     }
+    // Read source with the base maxBytes so large images can still reach the
+    // compression step; the effective cap is enforced after optimization.
     const media = await params.cache.getBuffer({
       attachmentIndex: params.attachmentIndex,
       maxBytes,
       timeoutMs,
     });
 
-    // Resolve image compression policy from config and model catalog to ensure
-    // media:// references follow the same resize ladder as the image tool
-    // (agents.defaults + provider/model mediaInput.image limits).
-    const imageCompression = resolveImageCompressionPolicyFromConfig(cfg, {
+    // Resolve image compression policy using the shared model-aware resolver
+    // so media-understanding follows the same resize ladder as the image tool.
+    const imageCompression = await resolveImageCompressionPolicyFromConfig(cfg, {
       provider: requestProviderId,
       model: modelId,
       workspaceDir: params.workspaceDir,
     });
 
-    // Optimize the image buffer before provider execution, applying the configured
-    // compression policy (agents.defaults.imageMaxDimensionPx/imageQuality).
-    const effectiveCap = effectiveImageBytesCap(maxBytes, imageCompression) ?? maxBytes;
-    const optimizedMedia = await optimizeImageBufferForWebMedia({
+    // Normalize HEIC/HEIF to JPEG before optimization so the optimizer
+    // receives a format it can resize. HEIC conversion must precede the
+    // web-media optimization boundary established by the merged HEIC fix.
+    const normalizedMedia = await normalizeImageDescriptionInput({
       buffer: media.buffer,
-      contentType: media.mime,
       fileName: media.fileName,
-      maxBytes: effectiveCap,
-      imageCompression,
+      mime: media.mime,
+      maxBytes,
     });
 
-    const normalizedMedia = await normalizeImageDescriptionInput({
-      buffer: optimizedMedia.buffer,
-      fileName: optimizedMedia.fileName ?? media.fileName,
-      mime: optimizedMedia.contentType,
+    // Optimize the normalized image buffer, applying the configured
+    // compression policy. The effective cap (min of base and policy) is
+    // enforced here, after the source has had a chance to compress down.
+    const effectiveCap = effectiveImageBytesCap(maxBytes, imageCompression) ?? maxBytes;
+    const normalizedFileName = normalizedMedia.fileName ?? media.fileName;
+    const optimizedMedia = await optimizeImageBufferForWebMedia({
+      buffer: normalizedMedia.buffer,
+      contentType: normalizedMedia.mime,
+      fileName: normalizedFileName,
       maxBytes: effectiveCap,
+      imageCompression,
     });
     const requestOverrides = resolveMediaRequestOverrides(params.config);
     const provider = getMediaUnderstandingProvider(requestProviderId, params.providerRegistry);
     const imageInput = {
-      buffer: normalizedMedia.buffer,
-      fileName: optimizedMedia.fileName ?? media.fileName,
-      mime: normalizedMedia.mime,
+      buffer: optimizedMedia.buffer,
+      fileName: optimizedMedia.fileName ?? normalizedFileName,
+      mime: optimizedMedia.contentType,
       model: modelId,
       provider: requestProviderId,
       prompt: requestOverrides.prompt ?? prompt,

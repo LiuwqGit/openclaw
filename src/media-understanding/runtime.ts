@@ -262,35 +262,41 @@ export async function prepareImageDescriptionInput(params: PrepareImageDescripti
     timeoutMs,
   });
 
-  // Resolve image compression policy to ensure explicit model calls follow the same
-  // resize ladder as the image tool (agents.defaults + provider/model mediaInput.image limits).
-  const imageCompression = resolveImageCompressionPolicyFromConfig(params.cfg, {
+  // Resolve image compression policy using the shared model-aware resolver
+  // so explicit model calls follow the same resize ladder as the image tool.
+  const imageCompression = await resolveImageCompressionPolicyFromConfig(params.cfg, {
     provider: params.provider,
     model: params.model,
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   });
 
-  // Optimize the image buffer before provider execution.
+  // Normalize HEIC/HEIF to JPEG before optimization so the optimizer
+  // receives a format it can resize. HEIC conversion must precede the
+  // web-media optimization boundary established by the merged HEIC fix.
+  const normalizedImage = await normalizeImageDescriptionInput({
+    buffer: image.buffer,
+    fileName: image.fileName,
+    mime: image.mime,
+    maxBytes: DEFAULT_MAX_BYTES.image,
+  });
+
+  // Optimize the normalized image buffer. The effective cap is enforced
+  // after normalization, giving the source a chance to compress down.
   const effectiveCap =
     effectiveImageBytesCap(DEFAULT_MAX_BYTES.image, imageCompression) ?? DEFAULT_MAX_BYTES.image;
+  const normalizedFileName = normalizedImage.fileName ?? image.fileName;
   const optimizedImage = await optimizeImageBufferForWebMedia({
-    buffer: image.buffer,
-    contentType: image.mime,
-    fileName: image.fileName,
+    buffer: normalizedImage.buffer,
+    contentType: normalizedImage.mime,
+    fileName: normalizedFileName,
     maxBytes: effectiveCap,
     imageCompression,
   });
 
-  const normalizedImage = await normalizeImageDescriptionInput({
-    buffer: optimizedImage.buffer,
-    fileName: optimizedImage.fileName ?? image.fileName,
-    mime: optimizedImage.contentType,
-    maxBytes: effectiveCap,
-  });
   return {
-    buffer: normalizedImage.buffer,
-    fileName: optimizedImage.fileName ?? image.fileName,
-    mime: normalizedImage.mime,
+    buffer: optimizedImage.buffer,
+    fileName: optimizedImage.fileName ?? normalizedFileName,
+    mime: optimizedImage.contentType,
   };
 }
 
