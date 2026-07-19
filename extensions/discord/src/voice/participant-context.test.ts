@@ -55,7 +55,7 @@ describe("normalizeLabel (via formatDiscordVoiceParticipantStateLine)", () => {
     });
     const match = line.match(/display_name="(.*)"/);
     expect(match).not.toBeNull();
-    const displayName = match![1];
+    const displayName = match![1]!;
     expect(displayName.length).toBeLessThanOrEqual(201);
     expect(displayName).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
     expect(displayName).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
@@ -83,7 +83,7 @@ describe("normalizeLabel (via formatDiscordVoiceParticipantStateLine)", () => {
     });
     const match = line.match(/display_name="(.*)"/);
     expect(match).not.toBeNull();
-    const displayName = match![1];
+    const displayName = match![1]!;
     expect(displayName.length).toBeLessThanOrEqual(101);
   });
 });
