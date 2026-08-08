@@ -25,6 +25,14 @@ const PROC_MOUNTINFO_PATH = "/proc/self/mountinfo";
 // Filesystem classification runs during database open, so never let the fallback probe stall it.
 const MOUNT_COMMAND_TIMEOUT_MS = 1_000;
 const NETWORK_FILESYSTEM_TYPES = new Set(["cifs", "smbfs", "smb2", "smb3"]);
+// Cross-VM filesystems cannot safely coordinate SQLite writes via the
+// shared-memory / mmap coherence that WAL requires. Host bind mounts served
+// by Docker Desktop, OrbStack, or Podman expose virtiofs / 9p to the guest,
+// where writes that appear successful at the VFS layer can leave zero-filled
+// pages when the host↔VM shared-memory cache breaks under pressure. See
+// https://www.sqlite.org/wal.html ("WAL does not work over a network
+// filesystem") and #120549 for the corruption forensics.
+const CROSS_VM_FILESYSTEM_TYPES = new Set(["virtiofs", "fuse.virtiofs", "9p", "9p2000.l"]);
 const JOURNAL_MODE_RETRY_INTERVAL_MS = 10;
 const JOURNAL_MODE_RETRY_SLEEP = new Int32Array(new SharedArrayBuffer(4));
 
@@ -230,6 +238,9 @@ function isSshfsMountSource(source: string | undefined): boolean {
 function resolveMountTypeJournalPolicy(entry: MountEntry): SqliteFilesystemJournalPolicy {
   const normalized = entry.fsType.toLowerCase();
   if (normalized.startsWith("nfs") || NETWORK_FILESYSTEM_TYPES.has(normalized)) {
+    return "rollback";
+  }
+  if (CROSS_VM_FILESYSTEM_TYPES.has(normalized) || normalized.startsWith("9p")) {
     return "rollback";
   }
   if (normalized === "fuse.sshfs") {
