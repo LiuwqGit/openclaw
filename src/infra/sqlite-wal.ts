@@ -21,7 +21,6 @@ const LINUX_NFS_SUPER_MAGIC = 0x6969;
 const LINUX_SMB_SUPER_MAGIC = 0x517b;
 const LINUX_CIFS_SUPER_MAGIC = 0xff534d42;
 const LINUX_SMB2_SUPER_MAGIC = 0xfe534d42;
-const LINUX_VIRTIOFS_SUPER_MAGIC = 0x6b656700; // Linux virtiofs
 const LINUX_V9FS_SUPER_MAGIC = 0x01021997; // Linux 9p (V9FS)
 const PROC_MOUNTINFO_PATH = "/proc/self/mountinfo";
 // Filesystem classification runs during database open, so never let the fallback probe stall it.
@@ -319,7 +318,6 @@ function resolvePathJournalPolicy(targetPath: string): SqliteFilesystemJournalPo
       filesystemType === LINUX_SMB_SUPER_MAGIC ||
       filesystemType === LINUX_CIFS_SUPER_MAGIC ||
       filesystemType === LINUX_SMB2_SUPER_MAGIC ||
-      filesystemType === LINUX_VIRTIOFS_SUPER_MAGIC ||
       filesystemType === LINUX_V9FS_SUPER_MAGIC
     ) {
       return "rollback";

@@ -76,7 +76,6 @@ describe("sqlite WAL maintenance", () => {
     ["SMB", 0x517b],
     ["CIFS", 0xff534d42],
     ["SMB2", 0xfe534d42],
-    ["virtiofs", 0x6b656700],
     ["9p (V9FS)", 0x01021997],
   ])("uses rollback journaling for databases on Linux %s volumes", (_label, fsType) => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-network-"));
