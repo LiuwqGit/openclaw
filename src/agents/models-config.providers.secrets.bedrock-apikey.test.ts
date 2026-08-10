@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
 import type { ProviderConfig } from "./models-config.providers.secret-helpers.js";
 import {
+  normalizeConfiguredProviderApiKey,
   resolveApiKeyFromCredential,
   resolveMissingProviderApiKey,
 } from "./models-config.providers.secret-helpers.js";
@@ -171,5 +172,59 @@ describe("provider discovery auth marker guardrails", () => {
 
     expect(resolved?.apiKey).toBe("ALLCAPS_SAMPLE");
     expect(resolved?.discoveryApiKey).toBe("ALLCAPS_SAMPLE");
+  });
+});
+
+describe("normalizeConfiguredProviderApiKey — env SecretRef persistence", () => {
+  const baseProvider: ProviderConfig = {
+    baseUrl: "https://factchat.example.com/v1",
+    api: "openai-completions",
+    apiKey: "${FACTCHAT_API_KEY}",
+    models: [
+      {
+        id: "grok-4.1-fast",
+        name: "Grok 4.1 Fast",
+        input: ["text"],
+        reasoning: false,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 32000,
+      },
+    ],
+  };
+
+  it("persists env SecretRefs as bare env-var name markers for models.json (#121543)", () => {
+    const secretRefManagedProviders = new Set<string>();
+
+    const result = normalizeConfiguredProviderApiKey({
+      providerKey: "custom-factchat",
+      provider: baseProvider,
+      secretDefaults: undefined,
+      profileApiKey: undefined,
+      secretRefManagedProviders,
+    });
+
+    // The bare env-var name is the persisted marker form: secrets audit and the
+    // runtime resolver recognize it as an env reference, never as a literal key.
+    expect(result.apiKey).toBe("FACTCHAT_API_KEY");
+    expect(secretRefManagedProviders.has("custom-factchat")).toBe(true);
+  });
+
+  it("records non-env SecretRefs as managed providers with the non-env marker", () => {
+    const secretRefManagedProviders = new Set<string>();
+
+    const result = normalizeConfiguredProviderApiKey({
+      providerKey: "custom-vault",
+      provider: {
+        ...baseProvider,
+        apiKey: { source: "file", provider: "vault", id: "/factchat/apiKey" },
+      },
+      secretDefaults: undefined,
+      profileApiKey: undefined,
+      secretRefManagedProviders,
+    });
+
+    expect(result.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
+    expect(secretRefManagedProviders.has("custom-vault")).toBe(true);
   });
 });

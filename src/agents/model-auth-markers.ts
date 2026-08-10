@@ -33,6 +33,10 @@ const AWS_SDK_ENV_MARKERS = new Set([
   "AWS_ACCESS_KEY_ID",
   "AWS_PROFILE",
 ]);
+
+/** Matches a bare uppercase env-var name persisted as an API-key marker. */
+export const BARE_ENV_VAR_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
+
 const CORE_NON_SECRET_API_KEY_MARKERS = [
   CUSTOM_LOCAL_AUTH_MARKER,
   CODEX_APP_SERVER_AUTH_MARKER,
@@ -86,6 +90,17 @@ function isAwsSdkAuthMarker(value: string): boolean {
 export function isKnownEnvApiKeyMarker(value: string): boolean {
   const trimmed = value.trim();
   return listKnownEnvApiKeyMarkers().has(trimmed) && !isAwsSdkAuthMarker(trimmed);
+}
+
+/**
+ * Return true when a value is shaped like a bare env-var name marker
+ * (e.g. "FACTCHAT_API_KEY"). models.json persists env-backed provider apiKeys
+ * as the bare uppercase env var name so the value never touches disk; callers
+ * that recognize this shape must still verify the variable is actually backed
+ * by an env value or a configured env SecretRef before treating it as a marker.
+ */
+export function isBareEnvVarNameMarker(value: string): boolean {
+  return BARE_ENV_VAR_NAME_RE.test(value.trim());
 }
 
 /** Build the persisted OAuth marker for one provider id. */

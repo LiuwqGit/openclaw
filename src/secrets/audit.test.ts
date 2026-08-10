@@ -566,6 +566,52 @@ describe("secrets audit", () => {
     });
   });
 
+  it("does not flag bare env-var name apiKey markers backed by the environment", async () => {
+    await writeModelsProvider({ apiKey: "FACTCHAT_API_KEY" }); // pragma: allowlist secret
+
+    const report = await runSecretsAudit({
+      env: { ...fixture.env, FACTCHAT_API_KEY: "env-factchat-key" }, // pragma: allowlist secret
+    });
+    expectModelsFinding(report, {
+      code: "PLAINTEXT_FOUND",
+      jsonPath: "providers.openai.apiKey",
+      present: false,
+    });
+  });
+
+  it("does not flag bare env-var name apiKey markers declared as env SecretRefs in config", async () => {
+    await writeJsonFile(fixture.configPath, {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-completions",
+            apiKey: { source: "env", provider: "default", id: "FACTCHAT_API_KEY" },
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+          },
+        },
+      },
+    });
+    await writeModelsProvider({ apiKey: "FACTCHAT_API_KEY" }); // pragma: allowlist secret
+
+    const report = await runSecretsAudit({ env: fixture.env });
+    expectModelsFinding(report, {
+      code: "PLAINTEXT_FOUND",
+      jsonPath: "providers.openai.apiKey",
+      present: false,
+    });
+  });
+
+  it("still flags bare all-caps apiKey values that are not env-backed", async () => {
+    await writeModelsProvider({ apiKey: "UNSET_VAR_NAME" }); // pragma: allowlist secret
+
+    const report = await runSecretsAudit({ env: fixture.env });
+    expectModelsFinding(report, {
+      code: "PLAINTEXT_FOUND",
+      jsonPath: "providers.openai.apiKey",
+    });
+  });
+
   it("does not flag models.json header marker values as plaintext", async () => {
     await writeModelsProvider({
       headers: {

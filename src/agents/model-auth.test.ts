@@ -606,6 +606,54 @@ describe("resolveUsableCustomProviderApiKey", () => {
     }
   });
 
+  it("resolves bare custom env-var name markers from process env (#121543)", () => {
+    const previous = process.env.FACTCHAT_API_KEY;
+    process.env.FACTCHAT_API_KEY = "sk-factchat-env"; // pragma: allowlist secret
+    try {
+      const resolved = resolveUsableCustomProviderApiKey({
+        cfg: {
+          models: {
+            providers: {
+              custom: {
+                baseUrl: "https://example.com/v1",
+                apiKey: "FACTCHAT_API_KEY",
+                models: [],
+              },
+            },
+          },
+        },
+        provider: "custom",
+        secretSentinels: true,
+      });
+      expect(resolved?.apiKey).toBe("sk-factchat-env");
+      expect(resolved?.source).toContain("FACTCHAT_API_KEY");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.FACTCHAT_API_KEY;
+      } else {
+        process.env.FACTCHAT_API_KEY = previous;
+      }
+    }
+  });
+
+  it("does not treat an unset bare env-var name as a literal custom provider key (#121543)", () => {
+    const resolved = resolveUsableCustomProviderApiKey({
+      cfg: {
+        models: {
+          providers: {
+            custom: {
+              baseUrl: "https://example.com/v1",
+              apiKey: "UNSET_CUSTOM_API_KEY",
+              models: [],
+            },
+          },
+        },
+      },
+      provider: "custom",
+    });
+    expect(resolved).toBeNull();
+  });
+
   it("resolves env SecretRefs from process env for custom providers", () => {
     const previous = process.env.OPENAI_API_KEY;
     process.env.OPENAI_API_KEY = "sk-secretref-env"; // pragma: allowlist secret
