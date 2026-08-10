@@ -21,18 +21,14 @@ const LINUX_NFS_SUPER_MAGIC = 0x6969;
 const LINUX_SMB_SUPER_MAGIC = 0x517b;
 const LINUX_CIFS_SUPER_MAGIC = 0xff534d42;
 const LINUX_SMB2_SUPER_MAGIC = 0xfe534d42;
-const LINUX_VIRTIOFS_SUPER_MAGIC = 0x6b656700; // "virt" — Linux virtiofs filesystem
+const LINUX_VIRTIOFS_SUPER_MAGIC = 0x6b656700; // Linux virtiofs
+const LINUX_V9FS_SUPER_MAGIC = 0x01021997; // Linux 9p (V9FS)
 const PROC_MOUNTINFO_PATH = "/proc/self/mountinfo";
 // Filesystem classification runs during database open, so never let the fallback probe stall it.
 const MOUNT_COMMAND_TIMEOUT_MS = 1_000;
 const NETWORK_FILESYSTEM_TYPES = new Set(["cifs", "smbfs", "smb2", "smb3"]);
-// Cross-VM filesystems cannot safely coordinate SQLite writes via the
-// shared-memory / mmap coherence that WAL requires. Host bind mounts served
-// by Docker Desktop, OrbStack, or Podman expose virtiofs / 9p to the guest,
-// where writes that appear successful at the VFS layer can leave zero-filled
-// pages when the host↔VM shared-memory cache breaks under pressure. See
-// https://www.sqlite.org/wal.html ("WAL does not work over a network
-// filesystem") and #120549 for the corruption forensics.
+// Cross-VM filesystems (virtiofs, 9p) cannot provide the shared-memory
+// coherence SQLite WAL requires; fall back to rollback journaling.
 const CROSS_VM_FILESYSTEM_TYPES = new Set(["virtiofs", "fuse.virtiofs", "9p", "9p2000.l"]);
 const JOURNAL_MODE_RETRY_INTERVAL_MS = 10;
 const JOURNAL_MODE_RETRY_SLEEP = new Int32Array(new SharedArrayBuffer(4));
@@ -323,7 +319,8 @@ function resolvePathJournalPolicy(targetPath: string): SqliteFilesystemJournalPo
       filesystemType === LINUX_SMB_SUPER_MAGIC ||
       filesystemType === LINUX_CIFS_SUPER_MAGIC ||
       filesystemType === LINUX_SMB2_SUPER_MAGIC ||
-      filesystemType === LINUX_VIRTIOFS_SUPER_MAGIC // virtiofs native Linux fs
+      filesystemType === LINUX_VIRTIOFS_SUPER_MAGIC ||
+      filesystemType === LINUX_V9FS_SUPER_MAGIC
     ) {
       return "rollback";
     }
