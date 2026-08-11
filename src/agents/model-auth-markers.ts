@@ -1,4 +1,3 @@
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 /**
  * Non-secret model-auth marker helpers.
  * Distinguishes persisted auth markers, env-var placeholders, OAuth markers,
@@ -8,10 +7,10 @@ import {
   normalizeTrimmedStringList,
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
+import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
 import type { SecretRefSource } from "../config/types.secrets.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
 import { listOpenClawPluginManifestMetadata } from "../plugins/manifest-metadata-scan.js";
-import { isRecord } from "../utils.js";
 import { listKnownProviderEnvApiKeyNames } from "./model-auth-env-vars.js";
 
 /** @deprecated MiniMax provider-owned marker; do not use from third-party plugins. */
@@ -100,27 +99,6 @@ function isBareEnvVarNameMarker(value: string): boolean {
   return BARE_ENV_VAR_NAME_RE.test(value.trim());
 }
 
-/** Resolve a provider entry using exact-then-normalized key matching (#121543). */
-function resolveProviderEntry(
-  config: { models?: { providers?: Record<string, unknown> } } | undefined,
-  providerId: string,
-): unknown {
-  const providers = config?.models?.providers;
-  if (!providers) {
-    return undefined;
-  }
-  if (Object.hasOwn(providers, providerId)) {
-    return providers[providerId];
-  }
-  const normalized = normalizeProviderId(providerId);
-  for (const [key, value] of Object.entries(providers)) {
-    if (normalizeProviderId(key) === normalized) {
-      return value;
-    }
-  }
-  return undefined;
-}
-
 /**
  * Return true when a models.json apiKey is a bare env-var name marker whose
  * provenance is the same provider's canonical env SecretRef (#121543).
@@ -134,8 +112,8 @@ export function isBareEnvVarNameApiKeyMarker(
   if (!isBareEnvVarNameMarker(trimmed)) {
     return false;
   }
-  const provider = resolveProviderEntry(config, providerId);
-  const ref = isRecord(provider) ? coerceSecretRef(provider.apiKey) : null;
+  const providerConfig = resolveMergedModelProviderConfig(config as unknown as never, providerId);
+  const ref = coerceSecretRef(providerConfig?.apiKey);
   return ref?.source === "env" && ref.id.trim() === trimmed;
 }
 

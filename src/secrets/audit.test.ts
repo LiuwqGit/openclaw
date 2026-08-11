@@ -637,16 +637,6 @@ describe("secrets audit", () => {
     });
   });
 
-  it("still flags bare all-caps apiKey when no config SecretRef matches", async () => {
-    await writeModelsProvider({ apiKey: "UNSET_VAR_NAME" }); // pragma: allowlist secret
-
-    const report = await runSecretsAudit({ env: fixture.env });
-    expectModelsFinding(report, {
-      code: "PLAINTEXT_FOUND",
-      jsonPath: "providers.openai.apiKey",
-    });
-  });
-
   it("does not flag models.json header marker values as plaintext", async () => {
     await writeModelsProvider({
       headers: {

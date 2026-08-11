@@ -238,13 +238,7 @@ function collectConfigSecrets(params: {
       continue;
     }
 
-    if (isNonSecretHeader) {
-      continue;
-    }
-    if (isModelMarker) {
-      continue;
-    }
-    if (!hasPlaintext) {
+    if (isNonSecretHeader || isModelMarker || !hasPlaintext) {
       continue;
     }
     addFinding(params.collector, {
@@ -399,13 +393,11 @@ function collectModelsJsonSecrets(params: {
         });
         continue;
       }
-      if (!isNonEmptyString(headerValue)) {
-        continue;
-      }
-      if (isSecretRefHeaderValueMarker(headerValue)) {
-        continue;
-      }
-      if (!isLikelySensitiveModelProviderHeaderName(headerKey)) {
+      if (
+        !isNonEmptyString(headerValue) ||
+        isSecretRefHeaderValueMarker(headerValue) ||
+        !isLikelySensitiveModelProviderHeaderName(headerKey)
+      ) {
         continue;
       }
       addFinding(params.collector, {
