@@ -613,6 +613,30 @@ describe("secrets audit", () => {
     });
   });
 
+  it("does not flag bare env-var name apiKey when config uses a mixed-case provider key (#121543)", async () => {
+    await writeJsonFile(fixture.configPath, {
+      models: {
+        providers: {
+          // Authored config uses mixed-case key; models.json canonicalizes to "openai".
+          OpenAI: {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-completions",
+            apiKey: { source: "env", provider: "default", id: "FACTCHAT_API_KEY" },
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+          },
+        },
+      },
+    });
+    await writeModelsProvider({ apiKey: "FACTCHAT_API_KEY" }); // pragma: allowlist secret
+
+    const report = await runSecretsAudit({ env: fixture.env });
+    expectModelsFinding(report, {
+      code: "PLAINTEXT_FOUND",
+      jsonPath: "providers.openai.apiKey",
+      present: false,
+    });
+  });
+
   it("still flags bare all-caps apiKey when no config SecretRef matches", async () => {
     await writeModelsProvider({ apiKey: "UNSET_VAR_NAME" }); // pragma: allowlist secret
 

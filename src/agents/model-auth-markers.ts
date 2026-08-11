@@ -1,3 +1,4 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 /**
  * Non-secret model-auth marker helpers.
  * Distinguishes persisted auth markers, env-var placeholders, OAuth markers,
@@ -94,15 +95,30 @@ export function isKnownEnvApiKeyMarker(value: string): boolean {
   return listKnownEnvApiKeyMarkers().has(trimmed) && !isAwsSdkAuthMarker(trimmed);
 }
 
-/**
- * Return true when a value is shaped like a bare env-var name marker
- * (e.g. "FACTCHAT_API_KEY"). models.json persists env-backed provider apiKeys
- * as the bare uppercase env var name so the value never touches disk; callers
- * that recognize this shape must still verify the variable is actually backed
- * by an env value or a configured env SecretRef before treating it as a marker.
- */
-export function isBareEnvVarNameMarker(value: string): boolean {
+/** Return true when a value is shaped like a bare env-var name marker. */
+function isBareEnvVarNameMarker(value: string): boolean {
   return BARE_ENV_VAR_NAME_RE.test(value.trim());
+}
+
+/** Resolve a provider entry using exact-then-normalized key matching (#121543). */
+function resolveProviderEntry(
+  config: { models?: { providers?: Record<string, unknown> } } | undefined,
+  providerId: string,
+): unknown {
+  const providers = config?.models?.providers;
+  if (!providers) {
+    return undefined;
+  }
+  if (Object.hasOwn(providers, providerId)) {
+    return providers[providerId];
+  }
+  const normalized = normalizeProviderId(providerId);
+  for (const [key, value] of Object.entries(providers)) {
+    if (normalizeProviderId(key) === normalized) {
+      return value;
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -118,7 +134,7 @@ export function isBareEnvVarNameApiKeyMarker(
   if (!isBareEnvVarNameMarker(trimmed)) {
     return false;
   }
-  const provider = config?.models?.providers?.[providerId];
+  const provider = resolveProviderEntry(config, providerId);
   const ref = isRecord(provider) ? coerceSecretRef(provider.apiKey) : null;
   return ref?.source === "env" && ref.id.trim() === trimmed;
 }
