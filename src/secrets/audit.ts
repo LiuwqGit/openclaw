@@ -10,7 +10,7 @@ import {
   resolveAuthProfileDatabasePath,
 } from "../agents/auth-profiles/sqlite.js";
 import {
-  isBareEnvVarNameMarker,
+  isBareEnvVarNameApiKeyMarker,
   isNonSecretApiKeyMarker,
   isSecretRefHeaderValueMarker,
 } from "../agents/model-auth-markers.js";
@@ -325,24 +325,6 @@ function collectAuthStoreSecrets(params: {
   }
 }
 
-/** True when a models.json apiKey is a bare env-var marker whose provenance is the same provider's canonical env SecretRef (#121543). */
-function isBareEnvVarNameApiKeyMarker(
-  providerId: string,
-  apiKey: string,
-  params: { config?: OpenClawConfig },
-): boolean {
-  const trimmed = apiKey.trim();
-  if (!isBareEnvVarNameMarker(trimmed)) {
-    return false;
-  }
-  const provider = params.config?.models?.providers?.[providerId];
-  if (!isRecord(provider)) {
-    return false;
-  }
-  const ref = coerceSecretRef(provider.apiKey);
-  return ref?.source === "env" && ref.id.trim() === trimmed;
-}
-
 function collectModelsJsonSecrets(params: {
   modelsJsonPath: string;
   collector: AuditCollector;
@@ -387,7 +369,7 @@ function collectModelsJsonSecrets(params: {
     } else if (
       isNonEmptyString(apiKey) &&
       !isNonSecretApiKeyMarker(apiKey) &&
-      !isBareEnvVarNameApiKeyMarker(providerId, apiKey, { config: params.config })
+      !isBareEnvVarNameApiKeyMarker(apiKey, providerId, params.config)
     ) {
       addFinding(params.collector, {
         code: "PLAINTEXT_FOUND",
@@ -703,11 +685,7 @@ export async function runSecretsAudit(
       });
     }
     for (const modelsJsonPath of listAgentModelsJsonPaths(config, stateDir, env)) {
-      collectModelsJsonSecrets({
-        modelsJsonPath,
-        collector,
-        config,
-      });
+      collectModelsJsonSecrets({ modelsJsonPath, collector, config });
     }
     const unresolvedRefResult = await collectUnresolvedRefFindings({
       collector,

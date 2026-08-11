@@ -8,7 +8,9 @@ import {
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 import type { SecretRefSource } from "../config/types.secrets.js";
+import { coerceSecretRef } from "../config/types.secrets.js";
 import { listOpenClawPluginManifestMetadata } from "../plugins/manifest-metadata-scan.js";
+import { isRecord } from "../utils.js";
 import { listKnownProviderEnvApiKeyNames } from "./model-auth-env-vars.js";
 
 /** @deprecated MiniMax provider-owned marker; do not use from third-party plugins. */
@@ -101,6 +103,24 @@ export function isKnownEnvApiKeyMarker(value: string): boolean {
  */
 export function isBareEnvVarNameMarker(value: string): boolean {
   return BARE_ENV_VAR_NAME_RE.test(value.trim());
+}
+
+/**
+ * Return true when a models.json apiKey is a bare env-var name marker whose
+ * provenance is the same provider's canonical env SecretRef (#121543).
+ */
+export function isBareEnvVarNameApiKeyMarker(
+  apiKey: string,
+  providerId: string,
+  config: { models?: { providers?: Record<string, unknown> } } | undefined,
+): boolean {
+  const trimmed = apiKey.trim();
+  if (!isBareEnvVarNameMarker(trimmed)) {
+    return false;
+  }
+  const provider = config?.models?.providers?.[providerId];
+  const ref = isRecord(provider) ? coerceSecretRef(provider.apiKey) : null;
+  return ref?.source === "env" && ref.id.trim() === trimmed;
 }
 
 /** Build the persisted OAuth marker for one provider id. */
