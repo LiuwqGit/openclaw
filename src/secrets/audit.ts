@@ -325,27 +325,27 @@ function collectAuthStoreSecrets(params: {
   }
 }
 
-/** True when a models.json apiKey is a bare env-var marker backed by env/config (#121543). */
+/** True when a models.json apiKey is a bare env-var marker whose provenance is the same provider's canonical env SecretRef (#121543). */
 function isBareEnvVarNameApiKeyMarker(
+  providerId: string,
   apiKey: string,
-  params: { env?: NodeJS.ProcessEnv; config?: OpenClawConfig },
+  params: { config?: OpenClawConfig },
 ): boolean {
   const trimmed = apiKey.trim();
-  const providers = params.config?.models?.providers ?? {};
-  return (
-    isBareEnvVarNameMarker(trimmed) &&
-    (params.env?.[trimmed] !== undefined ||
-      Object.values(providers).some((provider) => {
-        const ref = isRecord(provider) ? coerceSecretRef(provider.apiKey) : null;
-        return ref?.source === "env" && ref.id.trim() === trimmed;
-      }))
-  );
+  if (!isBareEnvVarNameMarker(trimmed)) {
+    return false;
+  }
+  const provider = params.config?.models?.providers?.[providerId];
+  if (!isRecord(provider)) {
+    return false;
+  }
+  const ref = coerceSecretRef(provider.apiKey);
+  return ref?.source === "env" && ref.id.trim() === trimmed;
 }
 
 function collectModelsJsonSecrets(params: {
   modelsJsonPath: string;
   collector: AuditCollector;
-  env?: NodeJS.ProcessEnv;
   config?: OpenClawConfig;
 }): void {
   if (!fs.existsSync(params.modelsJsonPath)) {
@@ -387,7 +387,7 @@ function collectModelsJsonSecrets(params: {
     } else if (
       isNonEmptyString(apiKey) &&
       !isNonSecretApiKeyMarker(apiKey) &&
-      !isBareEnvVarNameApiKeyMarker(apiKey, { env: params.env, config: params.config })
+      !isBareEnvVarNameApiKeyMarker(providerId, apiKey, { config: params.config })
     ) {
       addFinding(params.collector, {
         code: "PLAINTEXT_FOUND",
@@ -706,7 +706,6 @@ export async function runSecretsAudit(
       collectModelsJsonSecrets({
         modelsJsonPath,
         collector,
-        env,
         config,
       });
     }

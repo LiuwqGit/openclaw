@@ -35,7 +35,7 @@ const AWS_SDK_ENV_MARKERS = new Set([
 ]);
 
 /** Matches a bare uppercase env-var name persisted as an API-key marker. */
-export const BARE_ENV_VAR_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
+const BARE_ENV_VAR_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
 
 const CORE_NON_SECRET_API_KEY_MARKERS = [
   CUSTOM_LOCAL_AUTH_MARKER,

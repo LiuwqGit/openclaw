@@ -28,7 +28,6 @@ import {
 import { resolveEnvApiKey, type EnvApiKeyResult } from "./model-auth-env.js";
 import {
   CUSTOM_LOCAL_AUTH_MARKER,
-  isBareEnvVarNameMarker,
   isKnownEnvApiKeyMarker,
   isNonSecretApiKeyMarker,
   NON_ENV_SECRETREF_MARKER,
@@ -170,24 +169,6 @@ export function resolveUsableCustomProviderApiKey(params: {
   const customKey = getCustomProviderApiKey(params.cfg, params.provider);
   if (!customKey) {
     return null;
-  }
-  if (isBareEnvVarNameMarker(customKey)) {
-    // Bare env-var name marker persisted in models.json for a custom env
-    // SecretRef (e.g. "FACTCHAT_API_KEY"): resolve it from the environment
-    // instead of treating the name itself as a literal key. (#121543)
-    const envValue = normalizeOptionalSecretInput((params.env ?? process.env)[customKey]);
-    if (!envValue) {
-      return null;
-    }
-    const applied = new Set(getShellEnvAppliedKeys());
-    return {
-      apiKey: envValue,
-      source: resolveEnvSourceLabel({
-        applied,
-        envVars: [customKey],
-        label: `${customKey} (models.json env marker)`,
-      }),
-    };
   }
   if (!isNonSecretApiKeyMarker(customKey)) {
     return { apiKey: customKey, source: "models.json" };

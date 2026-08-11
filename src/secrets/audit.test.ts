@@ -566,20 +566,7 @@ describe("secrets audit", () => {
     });
   });
 
-  it("does not flag bare env-var name apiKey markers backed by the environment", async () => {
-    await writeModelsProvider({ apiKey: "FACTCHAT_API_KEY" }); // pragma: allowlist secret
-
-    const report = await runSecretsAudit({
-      env: { ...fixture.env, FACTCHAT_API_KEY: "env-factchat-key" }, // pragma: allowlist secret
-    });
-    expectModelsFinding(report, {
-      code: "PLAINTEXT_FOUND",
-      jsonPath: "providers.openai.apiKey",
-      present: false,
-    });
-  });
-
-  it("does not flag bare env-var name apiKey markers declared as env SecretRefs in config", async () => {
+  it("does not flag bare env-var name apiKey when the same provider declares a matching env SecretRef", async () => {
     await writeJsonFile(fixture.configPath, {
       models: {
         providers: {
@@ -602,7 +589,31 @@ describe("secrets audit", () => {
     });
   });
 
-  it("still flags bare all-caps apiKey values that are not env-backed", async () => {
+  it("flags bare env-var name apiKey when a different provider owns the SecretRef (cross-provider)", async () => {
+    await writeJsonFile(fixture.configPath, {
+      models: {
+        providers: {
+          "custom-factchat": {
+            baseUrl: "https://factchat.example.com/v1",
+            api: "openai-completions",
+            apiKey: { source: "env", provider: "default", id: "FACTCHAT_API_KEY" },
+            models: [{ id: "grok-4.1-fast", name: "Grok 4.1 Fast" }],
+          },
+        },
+      },
+    });
+    await writeModelsProvider({ apiKey: "FACTCHAT_API_KEY" }); // pragma: allowlist secret
+
+    const report = await runSecretsAudit({ env: fixture.env });
+    // "openai" provider in models.json does NOT own the FACTCHAT_API_KEY SecretRef
+    // (it belongs to "custom-factchat"), so this should still flag as plaintext.
+    expectModelsFinding(report, {
+      code: "PLAINTEXT_FOUND",
+      jsonPath: "providers.openai.apiKey",
+    });
+  });
+
+  it("still flags bare all-caps apiKey when no config SecretRef matches", async () => {
     await writeModelsProvider({ apiKey: "UNSET_VAR_NAME" }); // pragma: allowlist secret
 
     const report = await runSecretsAudit({ env: fixture.env });
