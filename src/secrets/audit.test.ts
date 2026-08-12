@@ -637,6 +637,38 @@ describe("secrets audit", () => {
     });
   });
 
+  it("flags literal apiKey when a conflicting alias hides behind the same env SecretRef (#121543)", async () => {
+    // Config has two aliases for "openai": an env SecretRef (OpenAI) and a
+    // later literal key (" OPENAI "). Generation picks the later alias (literal),
+    // so models.json writes the literal and audit must NOT suppress it.
+    await writeJsonFile(fixture.configPath, {
+      models: {
+        providers: {
+          OpenAI: {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-completions",
+            apiKey: { source: "env", provider: "default", id: "FACTCHAT_API_KEY" },
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+          },
+          " OPENAI ": {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-completions",
+            apiKey: "FACTCHAT_API_KEY", // pragma: allowlist secret — literal, not a ref
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+          },
+        },
+      },
+    });
+    // models.json holds the literal value from the later alias.
+    await writeModelsProvider({ apiKey: "FACTCHAT_API_KEY" }); // pragma: allowlist secret
+
+    const report = await runSecretsAudit({ env: fixture.env });
+    expectModelsFinding(report, {
+      code: "PLAINTEXT_FOUND",
+      jsonPath: "providers.openai.apiKey",
+    });
+  });
+
   it("does not flag models.json header marker values as plaintext", async () => {
     await writeModelsProvider({
       headers: {
