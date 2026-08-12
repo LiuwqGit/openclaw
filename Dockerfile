@@ -116,10 +116,25 @@ RUN set -eux; \
 # these after the dependency layer so a new timestamp does not invalidate install.
 ARG GIT_COMMIT=""
 ARG OPENCLAW_BUILD_TIMESTAMP=""
+# Resolved release version supplied by release automation. Correction-release
+# sources carry the base version in package.json (e.g. `2026.7.1`); stamping
+# the resolved correction version (e.g. `2026.7.1-2`) here makes the runtime
+# image's package.json and dist/build-info.json agree with the image tag and
+# the npm dist-tag, mirroring what the npm publish path already does.
+ARG OPENCLAW_RELEASE_VERSION=""
 ENV GIT_COMMIT=${GIT_COMMIT} \
-    OPENCLAW_BUILD_TIMESTAMP=${OPENCLAW_BUILD_TIMESTAMP}
+    OPENCLAW_BUILD_TIMESTAMP=${OPENCLAW_BUILD_TIMESTAMP} \
+    OPENCLAW_RELEASE_VERSION=${OPENCLAW_RELEASE_VERSION}
 
 COPY . .
+
+# Stamp the resolved release version into package.json before the build runs so
+# the runtime image's verbatim package.json copy and the build-info manifest
+# both carry the full correction version. A no-op for non-release builds where
+# OPENCLAW_RELEASE_VERSION is empty.
+RUN if [ -n "$OPENCLAW_RELEASE_VERSION" ]; then \
+      node -e "const fs=require('fs');const path='package.json';const pkg=JSON.parse(fs.readFileSync(path,'utf8'));if(pkg.version!==process.env.OPENCLAW_RELEASE_VERSION){pkg.version=process.env.OPENCLAW_RELEASE_VERSION;fs.writeFileSync(path,JSON.stringify(pkg,null,2)+'\n');}"; \
+    fi
 
 # The build stage also backs non-root live-test containers. Build contexts preserve
 # host modes, so normalize copied source readability without re-walking installed deps.
