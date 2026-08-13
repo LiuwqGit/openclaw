@@ -784,4 +784,51 @@ describe("processDiscordMessage draft streaming progress", () => {
 
     expect(draftStream.update).toHaveBeenCalledWith("Clawing...\n\n🧩 First\n🧩 Second\n🧩 Third");
   });
+
+  it("repairs a name-only tool row in raw mode when a later event carries the resolved args", async () => {
+    // A streaming tool start can fire before its args arrive, rendering a
+    // name-only Discord progress row; a later richer event for the same
+    // tool-call id repairs that row in place via the draft compositor's
+    // id-merge (the same merge path the non-start phase:"update" uses —
+    // the update lifecycle itself is proven by the parser + execute-events
+    // one-start-diagnostic regression).
+    const elapseProgressDraftStartDelay = useProgressDraftStartDelay();
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({
+        name: "exec",
+        toolCallId: "tool-exec-raw",
+        phase: "start",
+        args: {},
+        detailMode: "raw",
+      });
+      await params?.replyOptions?.onToolStart?.({
+        name: "exec",
+        toolCallId: "tool-exec-raw",
+        phase: "start",
+        args: { command: "pnpm test -- --watch=false" },
+        detailMode: "raw",
+      });
+      await params?.replyOptions?.onItemEvent?.({ progressText: "done" });
+      await elapseProgressDraftStartDelay();
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: { label: "Shelling" },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    // The single tool row carries the resolved command, not a bare name.
+    expect(draftStream.update).toHaveBeenCalledWith(
+      "Shelling\n\n🛠️ run tests, `pnpm test -- --watch=false`\n• done",
+    );
+  });
 });
