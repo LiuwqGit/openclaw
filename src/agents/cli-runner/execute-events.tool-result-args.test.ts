@@ -2,6 +2,7 @@
 // results must not duplicate that potentially large payload.
 import { describe, expect, it, vi } from "vitest";
 import { type AgentEventRuntimePayload, onAgentEvent } from "../../infra/agent-events.js";
+import { onInternalDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import { createCliEventHandlers } from "./execute-events.js";
 import type { CliToolTracking } from "./execute-tool-tracking.js";
@@ -156,6 +157,69 @@ describe("cli tool result events", () => {
       expect(results[1]?.data.args).toBeUndefined();
     } finally {
       dispose();
+    }
+  });
+
+  it("emits exactly one tool.execution.started when a later snapshot enriches empty args", async () => {
+    // Regression for the raw Discord/CLI progress arg-loss fix: a streaming
+    // tool start that fires before its args arrive must be upgradable from a
+    // later snapshot through a NON-start update, so the tool-start lifecycle
+    // (diagnostics + tracking) stays one-per-call while the live draft still
+    // receives the resolved args.
+    const runId = "run-one-start-diagnostic";
+    const handlers = createCliEventHandlers({
+      context: buildContext(runId),
+      toolTracking: buildToolTracking(),
+      getRunState: () => ({ failed: false, error: undefined }),
+    });
+    const toolEvents: AgentEventRuntimePayload[] = [];
+    const stopTool = onAgentEvent((event) => {
+      if (event.runId === runId && event.stream === "tool") {
+        toolEvents.push(event);
+      }
+    });
+    let startedDiagnostics = 0;
+    const stopDiag = onInternalDiagnosticEvent((event) => {
+      if (event.type === "tool.execution.started") {
+        startedDiagnostics += 1;
+      }
+    });
+
+    try {
+      // 1. Streaming start with empty args (the name-only row).
+      handlers.emitParsedToolUseStart({
+        toolCallId: "call-up",
+        name: "Bash",
+        kind: "tool_use",
+        args: {},
+      });
+      // 2. Late snapshot enriches the args via a non-start update.
+      handlers.emitCliToolUseUpdate({
+        toolCallId: "call-up",
+        name: "Bash",
+        args: { command: "echo hi" },
+      });
+
+      // tool.execution.started is dispatched on the async diagnostic queue.
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
+
+      // Exactly one start lifecycle diagnostic; the update did not re-fire it.
+      expect(startedDiagnostics).toBe(1);
+      // The live event stream carries one start (empty) plus one update (rich).
+      const starts = toolEvents.filter((event) => event.data.phase === "start");
+      const updates = toolEvents.filter((event) => event.data.phase === "update");
+      expect(starts).toHaveLength(1);
+      expect(starts[0]?.data.args).toEqual({});
+      expect(updates).toHaveLength(1);
+      expect(updates[0]?.data.args).toEqual({ command: "echo hi" });
+    } finally {
+      stopDiag();
+      stopTool();
     }
   });
 });

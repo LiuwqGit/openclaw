@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import type { CliToolResultDelta, CliToolUseStartDelta } from "./cli-output-contracts.js";
+import type {
+  CliToolResultDelta,
+  CliToolUseStartDelta,
+  CliToolUseUpdateDelta,
+} from "./cli-output-contracts.js";
 import { createCliJsonlStreamingParser } from "./cli-output-stream.js";
 
 function joinJsonlFrames(...frames: unknown[]) {
@@ -30,6 +34,25 @@ function claudeTextDelta(text: string, index?: number | string) {
     ...(index === undefined ? {} : { index }),
     delta: { type: "text_delta", text },
   });
+}
+
+function claudeBlockStop(index?: number) {
+  return claudeStreamEvent({
+    type: "content_block_stop",
+    ...(index === undefined ? {} : { index }),
+  });
+}
+
+function claudeInputJsonDelta(partialJson: string, index?: number) {
+  return claudeStreamEvent({
+    type: "content_block_delta",
+    ...(index === undefined ? {} : { index }),
+    delta: { type: "input_json_delta", partial_json: partialJson },
+  });
+}
+
+function claudeAssistantSnapshot(messageId: string, content: unknown[]) {
+  return { type: "assistant", message: { id: messageId, content } };
 }
 
 describe("createCliJsonlStreamingParser events", () => {
@@ -613,5 +636,109 @@ describe("createCliJsonlStreamingParser events", () => {
 
     expect(commentaryTexts).toEqual(expectedCommentary);
     expect(deltas).toEqual(expectedDeltas);
+  });
+
+  it("uses block.input from content_block_start when no input_json_delta arrives", () => {
+    const starts: CliToolUseStartDelta[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: () => undefined,
+      onToolUseStart: (delta) => starts.push(delta),
+    });
+
+    parser.push(
+      joinJsonlFrames(
+        claudeBlockStart(
+          { type: "tool_use", id: "toolu_inline", name: "Bash", input: { command: "ls -la" } },
+          0,
+        ),
+        claudeBlockStop(0),
+        "",
+      ),
+    );
+    parser.finish();
+
+    expect(starts).toEqual([
+      { toolCallId: "toolu_inline", name: "Bash", kind: "tool_use", args: { command: "ls -la" } },
+    ]);
+  });
+
+  it("upgrades an empty-args start from the assistant-record snapshot via a non-start update", () => {
+    const starts: CliToolUseStartDelta[] = [];
+    const updates: CliToolUseUpdateDelta[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: () => undefined,
+      onToolUseStart: (delta) => starts.push(delta),
+      onToolUseUpdate: (delta) => updates.push(delta),
+    });
+
+    parser.push(
+      joinJsonlFrames(
+        claudeBlockStart({ type: "tool_use", id: "toolu_upgrade", name: "Bash", input: {} }, 0),
+        claudeBlockStop(0),
+        claudeAssistantSnapshot("msg-1", [
+          { type: "tool_use", id: "toolu_upgrade", name: "Bash", input: { command: "echo hi" } },
+        ]),
+        "",
+      ),
+    );
+    parser.finish();
+
+    // Exactly one tool-start lifecycle fires; the richer snapshot args reach
+    // the live draft through a separate non-start update callback.
+    expect(starts).toEqual([
+      { toolCallId: "toolu_upgrade", name: "Bash", kind: "tool_use", args: {} },
+    ]);
+    expect(updates).toEqual([
+      { toolCallId: "toolu_upgrade", name: "Bash", args: { command: "echo hi" } },
+    ]);
+  });
+
+  it("does not upgrade a start that already carried args", () => {
+    const starts: CliToolUseStartDelta[] = [];
+    const updates: CliToolUseUpdateDelta[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: () => undefined,
+      onToolUseStart: (delta) => starts.push(delta),
+      onToolUseUpdate: (delta) => updates.push(delta),
+    });
+
+    parser.push(
+      joinJsonlFrames(
+        claudeBlockStart({ type: "tool_use", id: "toolu_full", name: "Bash", input: {} }, 0),
+        claudeInputJsonDelta('{"command":"ls"}', 0),
+        claudeBlockStop(0),
+        claudeAssistantSnapshot("msg-1", [
+          { type: "tool_use", id: "toolu_full", name: "Bash", input: { command: "ls" } },
+        ]),
+        "",
+      ),
+    );
+    parser.finish();
+
+    expect(starts).toEqual([
+      { toolCallId: "toolu_full", name: "Bash", kind: "tool_use", args: { command: "ls" } },
+    ]);
+    expect(updates).toEqual([]);
   });
 });
