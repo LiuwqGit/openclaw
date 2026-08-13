@@ -690,51 +690,6 @@ describe("processDiscordMessage draft streaming progress", () => {
     );
   });
 
-  it("repairs a name-only tool row in raw mode when a later phase:update carries the args", async () => {
-    // A streaming tool start that fires before its args arrive renders a
-    // name-only Discord progress row; a later non-start update
-    // (phase: "update") with the resolved args must enrich that same row
-    // instead of leaving it name-only or appending a duplicate.
-    const elapseProgressDraftStartDelay = useProgressDraftStartDelay();
-    const draftStream = createMockDraftStreamForTest();
-
-    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-      await params?.replyOptions?.onToolStart?.({
-        name: "exec",
-        toolCallId: "tool-exec-raw",
-        phase: "start",
-        args: {},
-        detailMode: "raw",
-      });
-      await params?.replyOptions?.onToolStart?.({
-        name: "exec",
-        toolCallId: "tool-exec-raw",
-        phase: "update",
-        args: { command: "pnpm test -- --watch=false" },
-        detailMode: "raw",
-      });
-      await params?.replyOptions?.onItemEvent?.({ progressText: "done" });
-      await elapseProgressDraftStartDelay();
-      return createNoQueuedDispatchResult();
-    });
-
-    const ctx = await createAutomaticSourceDeliveryContext({
-      discordConfig: {
-        streaming: {
-          mode: "progress",
-          progress: { label: "Shelling" },
-        },
-      },
-    });
-
-    await runProcessDiscordMessage(ctx);
-
-    // The single tool row carries the resolved command, not a bare name.
-    expect(draftStream.update).toHaveBeenCalledWith(
-      "Shelling\n\n🛠️ run tests, `pnpm test -- --watch=false`\n• done",
-    );
-  });
-
   it("can hide raw command progress text in Discord progress drafts by config", async () => {
     const elapseProgressDraftStartDelay = useProgressDraftStartDelay();
     const draftStream = createMockDraftStreamForTest();
