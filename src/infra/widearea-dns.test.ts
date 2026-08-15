@@ -290,6 +290,28 @@ describe("wide-area DNS zone writes", () => {
     );
   });
 
+  it("wraps the maximum 32-bit serial instead of overflowing", async () => {
+    // 0xffffffff + 1 must stay within 32 bits (RFC 1982). Today's base is
+    // serial-greater than the max, so the writer reuses it; it must never emit
+    // 4294967296.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-13T12:00:00.000Z"));
+    vi.spyOn(fs, "readFileSync").mockReturnValue(
+      renderWideAreaGatewayZoneText({ ...makeZoneOpts(), serial: 0xffffffff }),
+    );
+
+    await writeWideAreaGatewayZone(
+      makeZoneOpts({ gatewayTlsEnabled: true, gatewayTlsFingerprintSha256: "abc123" }),
+    );
+
+    const written = replaceFileAtomicSyncMock.mock.calls.at(-1)?.[0]?.content as string;
+    // Never emits an out-of-range 33-bit serial.
+    expect(written).not.toContain("4294967296");
+    // Today's base (2026031301) is serial-greater than 0xffffffff, so the
+    // writer reuses it — a valid, monotonic 32-bit value.
+    expect(written).toContain("2026031301");
+  });
+
   it.runIf(process.platform !== "win32")(
     "preserves the previous zone when the replacement exceeds the OS file-size limit",
     () => {

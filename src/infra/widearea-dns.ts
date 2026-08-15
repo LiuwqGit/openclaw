@@ -100,18 +100,37 @@ function formatYyyyMmDd(date: Date): string {
   return `${y}${m}${d}`;
 }
 
+/** 32-bit SOA serial space (RFC 1035 / RFC 1982). */
+const SOA_SERIAL_MOD = 2 ** 32;
+
+/**
+ * RFC 1982 serial comparison: `a` is strictly greater than `b` when the modular
+ * difference lies in (0, 2^(SERIAL_BITS-1)). Stays correct across the 32-bit
+ * wrap boundary (e.g. 0xffffffff advancing to 0).
+ */
+function serialGreaterThan(a: number, b: number): boolean {
+  const diff = (((a - b) % SOA_SERIAL_MOD) + SOA_SERIAL_MOD) % SOA_SERIAL_MOD;
+  return diff > 0 && diff < SOA_SERIAL_MOD / 2;
+}
+
 function nextSerial(existingSerial: number | null, now: Date): number {
   const today = formatYyyyMmDd(now);
   const base = Number.parseInt(`${today}01`, 10);
   if (!existingSerial || !Number.isFinite(existingSerial)) {
     return base;
   }
-  const candidate = String(existingSerial).startsWith(today) ? existingSerial + 1 : base;
-  // SOA serials must be monotonically increasing (RFC 1035 §3.3.1). A
-  // future-dated or non-YYYYMMDDNN serial (clock skew, manual edit, or a
-  // same-day counter that already rolled past 99) must never regress below
-  // existing + 1, otherwise secondaries skip the zone transfer.
-  return Math.max(candidate, existingSerial + 1);
+  // Bounded serial arithmetic (RFC 1982): the increment wraps modulo 2^32 so
+  // the maximum SOA serial (0xffffffff) advances to 0 instead of producing an
+  // out-of-range 33-bit value that secondaries reject.
+  const incremented = (existingSerial + 1) % SOA_SERIAL_MOD;
+  if (String(existingSerial).startsWith(today)) {
+    return incremented;
+  }
+  // SOA serials must be monotonically increasing (RFC 1035 §3.3.1). Today's
+  // base is the natural next value on a new day, but only when it is already
+  // ahead of the existing serial in bounded serial arithmetic; otherwise
+  // advance by one so a future-dated/foreign serial never regresses.
+  return serialGreaterThan(base, existingSerial) ? base : incremented;
 }
 
 function extractSerial(zoneText: string): number | null {
