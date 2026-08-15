@@ -106,11 +106,12 @@ function nextSerial(existingSerial: number | null, now: Date): number {
   if (!existingSerial || !Number.isFinite(existingSerial)) {
     return base;
   }
-  const existing = String(existingSerial);
-  if (existing.startsWith(today)) {
-    return existingSerial + 1;
-  }
-  return base;
+  const candidate = String(existingSerial).startsWith(today) ? existingSerial + 1 : base;
+  // SOA serials must be monotonically increasing (RFC 1035 §3.3.1). A
+  // future-dated or non-YYYYMMDDNN serial (clock skew, manual edit, or a
+  // same-day counter that already rolled past 99) must never regress below
+  // existing + 1, otherwise secondaries skip the zone transfer.
+  return Math.max(candidate, existingSerial + 1);
 }
 
 function extractSerial(zoneText: string): number | null {

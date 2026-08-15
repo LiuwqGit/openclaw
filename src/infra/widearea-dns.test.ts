@@ -247,6 +247,49 @@ describe("wide-area DNS zone writes", () => {
     });
   });
 
+  it("never regresses below a future-dated existing serial", async () => {
+    // Clock skew / a foreign numbering scheme can leave the existing serial
+    // ahead of the current day; the next write must stay above it so
+    // secondaries transfer the updated zone.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-13T12:00:00.000Z"));
+    vi.spyOn(fs, "readFileSync").mockReturnValue(
+      renderWideAreaGatewayZoneText({ ...makeZoneOpts(), serial: 2027010101 }),
+    );
+
+    await writeWideAreaGatewayZone(
+      makeZoneOpts({ gatewayTlsEnabled: true, gatewayTlsFingerprintSha256: "abc123" }),
+    );
+
+    expect(replaceFileAtomicSyncMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filePath: getWideAreaZonePath("openclaw.internal."),
+        content: expect.stringContaining("2027010102"),
+      }),
+    );
+  });
+
+  it("does not regress after the same-day counter rolls past 99", async () => {
+    // 2026031399 + 1 corrupts the date prefix to 2026031400; a follow-up write
+    // on the same day must not fall back to 2026031301 (a regression).
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-13T12:00:00.000Z"));
+    vi.spyOn(fs, "readFileSync").mockReturnValue(
+      renderWideAreaGatewayZoneText({ ...makeZoneOpts(), serial: 2026031400 }),
+    );
+
+    await writeWideAreaGatewayZone(
+      makeZoneOpts({ gatewayTlsEnabled: true, gatewayTlsFingerprintSha256: "abc123" }),
+    );
+
+    expect(replaceFileAtomicSyncMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filePath: getWideAreaZonePath("openclaw.internal."),
+        content: expect.stringContaining("2026031401"),
+      }),
+    );
+  });
+
   it.runIf(process.platform !== "win32")(
     "preserves the previous zone when the replacement exceeds the OS file-size limit",
     () => {
