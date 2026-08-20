@@ -327,6 +327,7 @@ describe("resolveCommandsSystemPromptBundle", () => {
         mode: "workspace-write",
       } as never);
       vi.mocked(ensureSandboxWorkspaceForSession).mockResolvedValue({
+        backendId: "docker",
         workspaceDir,
         containerWorkdir: "/workspace",
         skillsWorkspaceDir,
@@ -353,9 +354,7 @@ describe("resolveCommandsSystemPromptBundle", () => {
 
       const result = await resolveCommandsSystemPromptBundle(params);
 
-      expect(result.skillsPrompt).toContain(
-        "/workspace/.openclaw/sandbox-skills/skills/gog/SKILL.md",
-      );
+      expect(result.skillsPrompt).toContain("/workspace/.openclaw-skills/skills/gog/SKILL.md");
       expect(result.skillsPrompt).not.toContain("~/.npm-global");
       expect(vi.mocked(resolveReusableWorkspaceSkillSnapshot)).not.toHaveBeenCalled();
       const promptParams = requireFirstArg(
@@ -363,7 +362,7 @@ describe("resolveCommandsSystemPromptBundle", () => {
         "buildAgentSystemPrompt",
       );
       expect(promptParams.skillsPrompt).toContain(
-        "/workspace/.openclaw/sandbox-skills/skills/gog/SKILL.md",
+        "/workspace/.openclaw-skills/skills/gog/SKILL.md",
       );
       expect(String(promptParams.skillsPrompt)).not.toContain("~/.npm-global");
     } finally {
