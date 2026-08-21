@@ -172,7 +172,19 @@ export function chunkByNewline(
   }
 
   if (pendingBlankLines > 0 && chunks.length > 0) {
-    chunks[chunks.length - 1] += "\n".repeat(pendingBlankLines);
+    // Trailing blank lines have no following line to fold into, so cap them to
+    // the remaining headroom on the final chunk just like mid-message blank
+    // lines are capped to `lineLimit - 1`; otherwise a run of trailing newlines
+    // could push the last chunk past the platform length limit.
+    const lastIndex = chunks.length - 1;
+    const lastChunk = chunks[lastIndex];
+    if (lastChunk !== undefined) {
+      const remaining = Math.max(0, lineLimit - lastChunk.length);
+      const cappedTrailing = Math.min(pendingBlankLines, remaining);
+      if (cappedTrailing > 0) {
+        chunks[lastIndex] = `${lastChunk}${"\n".repeat(cappedTrailing)}`;
+      }
+    }
   }
 
   return chunks;

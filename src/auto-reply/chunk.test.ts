@@ -609,6 +609,22 @@ describe("chunkByNewline", () => {
     expect(chunks).not.toContain("");
     expect(chunks.join("")).toBe(text);
   });
+
+  it("caps trailing blank lines so the final chunk never exceeds the limit", () => {
+    // Mid-message blank lines are capped to `lineLimit - 1`; trailing blank lines
+    // fold onto the last chunk and must honor the same headroom, otherwise a run
+    // of trailing newlines pushes the last chunk past the platform length limit.
+    const text = "x" + "\n".repeat(50);
+    const limit = 10;
+    const chunks = chunkByNewline(text, limit);
+
+    expect(chunks.length).toBeGreaterThan(0);
+    for (const chunk of chunks) {
+      expect(chunk.length, `chunk ${JSON.stringify(chunk)} exceeds limit`).toBeLessThanOrEqual(limit);
+    }
+    // The single line plus as many trailing newlines as fit (limit - 1) are retained.
+    expect(chunks).toEqual(["x" + "\n".repeat(limit - 1)]);
+  });
 });
 
 describe("chunkTextWithMode", () => {
