@@ -620,7 +620,9 @@ describe("chunkByNewline", () => {
 
     expect(chunks.length).toBeGreaterThan(0);
     for (const chunk of chunks) {
-      expect(chunk.length, `chunk ${JSON.stringify(chunk)} exceeds limit`).toBeLessThanOrEqual(limit);
+      expect(chunk.length, `chunk ${JSON.stringify(chunk)} exceeds limit`).toBeLessThanOrEqual(
+        limit,
+      );
     }
     // The single line plus as many trailing newlines as fit (limit - 1) are retained.
     expect(chunks).toEqual(["x" + "\n".repeat(limit - 1)]);
