@@ -116,8 +116,17 @@ export function resolveChunkMode(
 
 /**
  * Split text on newlines, trimming line whitespace.
- * Blank lines are folded into the next non-empty line as leading "\n" prefixes.
+ *
+ * Contract: every returned chunk is no longer than `maxLineLength` (code-point
+ * units), including folded leading or trailing blank-line prefixes. Blank lines
+ * are folded into the next non-empty line as leading "\n" prefixes (capped to
+ * the remaining headroom), and a run of trailing blank lines is capped to the
+ * final chunk's remaining headroom so it never exceeds the limit.
+ *
  * Long lines can be split by length (default) or kept intact via splitLongLines:false.
+ * This helper is exposed to plugin consumers as `channelRuntime.text.chunkByNewline`;
+ * bundled delivery routes use the markdown-aware `chunkTextWithMode`/
+ * `chunkMarkdownTextWithMode` dispatchers instead.
  */
 export function chunkByNewline(
   text: string,
