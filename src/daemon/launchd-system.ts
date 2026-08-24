@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
+import { isMissingPathError } from "../infra/errors.js";
 import { execFileUtf8 } from "./exec-file.js";
 import {
   execLaunchctl,
@@ -30,10 +31,6 @@ type SystemLaunchDaemonConflict = Exclude<SystemLaunchDaemonOwnership, { status:
 function formatUnknownError(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error);
   return truncateUtf16Safe(sanitizeForLog(raw), 500);
-}
-
-function isMissingPathError(error: unknown): boolean {
-  return (error as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
 }
 
 function quotePosixArgument(value: string): string {
@@ -219,7 +216,7 @@ function classifySystemLaunchDaemonQuery(
 
 export async function inspectSystemLaunchDaemonOwnership(
   label: string,
-  options: { scanInstalledPlists?: boolean } = {},
+  options: { scanInstalledPlists?: boolean; timeoutMs?: number } = {},
 ): Promise<SystemLaunchDaemonOwnership> {
   const serviceTarget = `system/${label}`;
   if (process.platform !== "darwin") {
@@ -228,7 +225,7 @@ export async function inspectSystemLaunchDaemonOwnership(
 
   const initialQuery = classifySystemLaunchDaemonQuery(
     serviceTarget,
-    await execLaunchctl(["print", serviceTarget]),
+    await execLaunchctl(["print", serviceTarget], options.timeoutMs),
   );
   if (initialQuery.status !== "absent") {
     return initialQuery;
@@ -254,7 +251,7 @@ export async function inspectSystemLaunchDaemonOwnership(
   // activation paths therefore repeat this complete probe immediately before use.
   return classifySystemLaunchDaemonQuery(
     serviceTarget,
-    await execLaunchctl(["print", serviceTarget]),
+    await execLaunchctl(["print", serviceTarget], options.timeoutMs),
   );
 }
 

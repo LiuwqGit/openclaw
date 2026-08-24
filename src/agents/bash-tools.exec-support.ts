@@ -5,16 +5,35 @@ import { resolveAgentConfig } from "./agent-scope-config.js";
 import { renderExecOutputText } from "./bash-tools.exec-output.js";
 import type { ExecToolArgs } from "./bash-tools.exec-request-preparation.js";
 import { type ExecProcessOutcome, resolveExecTarget } from "./bash-tools.exec-runtime.js";
-import type { ExecToolDefaults, ExecToolDetails } from "./bash-tools.exec-types.js";
+import type {
+  ExecToolApprovalReview,
+  ExecToolDefaults,
+  ExecToolDetails,
+} from "./bash-tools.exec-types.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { failedTextResult, textResult } from "./tools/common.js";
+
+export function attachExecApprovalReview(
+  result: AgentToolResult<ExecToolDetails>,
+  review?: ExecToolApprovalReview,
+): AgentToolResult<ExecToolDetails> {
+  if (review) {
+    result.details.approvalReviews = [review];
+    result.details.approvalReviewOutcome = review.status === "approved" ? "approved" : "denied";
+  }
+  return result;
+}
 
 export function buildExecForegroundResult(params: {
   outcome: ExecProcessOutcome;
   cwd?: string;
   warningText?: string;
+  aggregateOutputDropped?: boolean;
 }): AgentToolResult<ExecToolDetails> {
   const warningText = params.warningText?.trim() ? `${params.warningText}\n\n` : "";
+  const retentionCapNote = params.aggregateOutputDropped
+    ? "\n\n[earlier output was discarded at the retention cap and cannot be recovered]"
+    : "";
   if (params.outcome.status === "failed") {
     const linuxOomGuidance =
       params.outcome.failureKind === "signal" &&
@@ -25,7 +44,8 @@ export function buildExecForegroundResult(params: {
           "SIGKILL alone does not identify whether the Linux OOM killer, an operator, or another process sent it. " +
           "Check cgroup memory events or kernel logs. If they show memory pressure, narrow the command or adjust memory, concurrency, or resource limits."
         : "";
-    return failedTextResult(`${warningText}${params.outcome.reason}${linuxOomGuidance}`, {
+    const outputText = `${warningText}${params.outcome.reason}${linuxOomGuidance}${retentionCapNote}`;
+    return failedTextResult(outputText, {
       status: "failed",
       exitCode: params.outcome.exitCode ?? null,
       exitSignal: params.outcome.exitSignal,
@@ -38,7 +58,8 @@ export function buildExecForegroundResult(params: {
       cwd: params.cwd,
     });
   }
-  return textResult(`${warningText}${renderExecOutputText(params.outcome.aggregated)}`, {
+  const outputText = `${warningText}${renderExecOutputText(params.outcome.aggregated)}${retentionCapNote}`;
+  return textResult(outputText, {
     status: "completed",
     exitCode: params.outcome.exitCode,
     exitSignal: params.outcome.exitSignal,

@@ -55,16 +55,6 @@ function setCodexConversationModel(
   return setCodexConversationModelImpl({ ...rest, ...controlTarget(sessionFile) });
 }
 
-function setCodexConversationPermissions(
-  params: Omit<
-    Parameters<typeof setCodexConversationPermissionsImpl>[0],
-    "identity" | "bindingStore"
-  > & { sessionFile: string },
-) {
-  const { sessionFile, ...rest } = params;
-  return setCodexConversationPermissionsImpl({ ...rest, ...controlTarget(sessionFile) });
-}
-
 let tempDir: string;
 
 const sharedClientMocks = vi.hoisted(() => ({
@@ -98,8 +88,20 @@ describe("codex conversation controls", () => {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
-  it("persists fast mode and permissions for later bound turns", async () => {
+  it("persists fast mode on the binding and permissions on the session", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
+    const session = {
+      agentId: "main",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+    };
+    const storePath = resolveStorePath(undefined, { agentId: session.agentId });
+    await upsertSessionEntry({
+      agentId: session.agentId,
+      sessionKey: session.sessionKey,
+      storePath,
+      entry: { sessionId: session.sessionId, updatedAt: Date.now(), permissionMode: "full" },
+    });
     await writeCodexAppServerBinding(sessionFile, {
       threadId: "thread-1",
       cwd: tempDir,
@@ -112,15 +114,35 @@ describe("codex conversation controls", () => {
     await expect(setCodexConversationFastMode({ sessionFile, enabled: true })).resolves.toBe(
       "Codex fast mode enabled.",
     );
-    await expect(setCodexConversationPermissions({ sessionFile, mode: "default" })).resolves.toBe(
-      "Codex permissions set to default.",
-    );
+    await expect(
+      setCodexConversationPermissionsImpl({ session, mode: "default", config: {} }),
+    ).resolves.toBe("Codex permissions set to default.");
 
     const binding = await readCodexAppServerBinding(sessionFile);
     expect(binding?.threadId).toBe("thread-1");
     expect(binding?.serviceTier).toBe("priority");
-    expect(binding?.approvalPolicy).toBe("on-request");
-    expect(binding?.sandbox).toBe("workspace-write");
+    expect(binding?.approvalPolicy).toBe("never");
+    expect(binding?.sandbox).toBe("danger-full-access");
+    expect(
+      getSessionEntry({
+        agentId: session.agentId,
+        sessionKey: session.sessionKey,
+        storePath,
+        readConsistency: "latest",
+      })?.permissionMode,
+    ).toBeUndefined();
+
+    await expect(
+      setCodexConversationPermissionsImpl({ session, mode: "yolo", config: {} }),
+    ).resolves.toBe("Codex permissions set to full access.");
+    expect(
+      getSessionEntry({
+        agentId: session.agentId,
+        sessionKey: session.sessionKey,
+        storePath,
+        readConsistency: "latest",
+      })?.permissionMode,
+    ).toBe("full");
   });
 
   it("routes supervised stop and steer requests through the native user-home connection", async () => {
@@ -399,6 +421,48 @@ describe("codex conversation controls", () => {
       model: "gpt-5.4",
     });
     expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
+  });
+
+  it("drops an incompatible pinned auth profile when selecting another provider", async () => {
+    const sessionKey = "agent:main:model-provider-switch";
+    const sessionId = "session-provider-switch";
+    const identity = { kind: "session" as const, agentId: "main", sessionId, sessionKey };
+    const storePath = resolveStorePath(undefined, { agentId: "main" });
+    await upsertSessionEntry({
+      agentId: "main",
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId,
+        updatedAt: Date.now(),
+        authProfileOverride: "lmstudio:work",
+        authProfileOverrideSource: "user",
+      },
+    });
+    await testCodexAppServerBindingStore.mutate(identity, {
+      kind: "set",
+      binding: {
+        threadId: "thread-provider-switch",
+        cwd: tempDir,
+        model: "local-model",
+        modelProvider: "lmstudio",
+      },
+    });
+
+    await expect(
+      setCodexConversationModelImpl({
+        identity,
+        bindingStore: testCodexAppServerBindingStore,
+        model: "openai/gpt-5.5",
+      }),
+    ).resolves.toBe("Codex model set to gpt-5.5.");
+
+    expect(getSessionEntry({ storePath, sessionKey })).toMatchObject({
+      providerOverride: "openai",
+      modelOverride: "gpt-5.5",
+      liveModelSwitchPending: true,
+    });
+    expect(getSessionEntry({ storePath, sessionKey })?.authProfileOverride).toBeUndefined();
   });
 
   it("escapes requested model names before chat display", async () => {
