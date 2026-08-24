@@ -289,6 +289,78 @@ describe("sessions.usage", () => {
     expect(sessions.map((session) => session.agentId)).toEqual(["opus", "main"]);
   });
 
+  it("attributes a named session to its store owner when a subagent reuses its sessionId", async () => {
+    // Regression for #128755: after spawning a subagent from a Telegram DM
+    // session, the all-agent Sessions dashboard labeled the durable row with
+    // the subagent's id instead of the owning agent. Discovery surfaces both
+    // the owner transcript and the reused subagent transcript under the same
+    // sessionId; the durable store row must win attribution.
+    const storeKey = "agent:main:telegram:dm";
+    const sessionId = "tg-dm-session";
+
+    // Discovery order follows the configured agent list: main first, then opus.
+    // The opus transcript reuses the parent sessionId, simulating a subagent
+    // spawned from the main Telegram session.
+    vi.mocked(discoverAllSessions)
+      .mockResolvedValueOnce([
+        {
+          sessionId,
+          sessionFile: `/tmp/agents/main/sessions/${sessionId}.jsonl`,
+          mtime: 100,
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          sessionId,
+          sessionFile: `/tmp/agents/opus/sessions/${sessionId}.jsonl`,
+          mtime: 200,
+        },
+      ]);
+
+    vi.mocked(resolveExistingUsageSessionFile).mockImplementationOnce((params) => {
+      return `sqlite:${params.agentId}:${params.sessionId}:/tmp/agents/${params.agentId}/openclaw-agent.sqlite`;
+    });
+
+    vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
+      durableTargets: [],
+      storePath: "(multiple)",
+      store: {
+        [storeKey]: {
+          sessionId,
+          sessionFile: `${sessionId}.jsonl`,
+          label: "Telegram DM",
+          updatedAt: 1_500,
+        },
+      },
+    });
+
+    const respond = await runSessionsUsage({ ...BASE_USAGE_RANGE, agentScope: "all" });
+
+    const sessions = expectSuccessfulSessionsUsage(respond);
+    // The reused subagent transcript must not duplicate or shadow the owner row.
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]?.key).toBe(storeKey);
+    expect(sessions[0]?.agentId).toBe("main");
+    // Usage must be loaded under the owner agent, not the spawned subagent.
+    expect(vi.mocked(loadSessionCostSummariesFromCache)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        sessions: expect.arrayContaining([
+          expect.objectContaining({
+            sessionId,
+            sessionFile: expect.stringContaining("sqlite:main:"),
+          }),
+        ]),
+      }),
+    );
+    // The subagent transcript reuse must not produce an opus-attributed load.
+    expect(
+      vi
+        .mocked(loadSessionCostSummariesFromCache)
+        .mock.calls.some((call) => call[0]?.agentId === "opus"),
+    ).toBe(false);
+  });
+
   it("rejects all-agent scope with a specific agent or key", async () => {
     const withAgent = await runSessionsUsage({
       ...BASE_USAGE_RANGE,

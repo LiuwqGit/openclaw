@@ -1198,21 +1198,40 @@ export const usageHandlers: GatewayRequestHandlers = {
               }
             }
 
+            // A durable store row owns a named session's agent attribution. A
+            // subagent spawned from a session can leave discovery transcripts that
+            // reuse the parent sessionId; without owner-aware attribution the
+            // all-agent list would label the durable row with the subagent's id
+            // (issue #128755). Attribute each named row to its store owner and
+            // de-duplicate by store key so a reused discovery transcript cannot
+            // shadow or duplicate the owner row.
+            const attributedStoreKeys = new Set<string>();
             for (const discovered of discoveredSessions) {
               const storeMatch = storeBySessionId.get(discovered.sessionId);
               if (visibilityFilter && !storeMatch) {
                 continue;
               }
               if (storeMatch) {
+                if (attributedStoreKeys.has(storeMatch.key)) {
+                  continue;
+                }
+                attributedStoreKeys.add(storeMatch.key);
                 // Named session from store
+                const ownerAgentId = resolveSessionStoreAgentId(config, storeMatch.key);
+                const ownerSessionFile =
+                  resolveExistingUsageSessionFile({
+                    agentId: ownerAgentId,
+                    sessionId: discovered.sessionId,
+                    sessionEntry: storeMatch.entry,
+                  }) ?? discovered.sessionFile;
                 maybeMergeFamilyEntry({
                   mergedEntries,
                   groupingMode,
                   base: {
                     key: storeMatch.key,
-                    agentId: discovered.agentId,
+                    agentId: ownerAgentId,
                     sessionId: discovered.sessionId,
-                    sessionFile: discovered.sessionFile,
+                    sessionFile: ownerSessionFile,
                     label: storeMatch.entry.label,
                     updatedAt: storeMatch.entry.updatedAt ?? discovered.mtime,
                     storeEntry: storeMatch.entry,
