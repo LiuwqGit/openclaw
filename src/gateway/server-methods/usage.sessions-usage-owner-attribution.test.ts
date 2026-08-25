@@ -72,7 +72,10 @@ const TEST_RUNTIME_CONFIG = {
 
 const BASE_USAGE_RANGE = { startDate: "2026-02-01", endDate: "2026-02-02", limit: 10 } as const;
 
-async function runSessionsUsage(params: Record<string, unknown>) {
+async function runSessionsUsage(
+  params: Record<string, unknown>,
+  config: OpenClawConfig = TEST_RUNTIME_CONFIG,
+) {
   const respond = vi.fn();
   await expectDefined(
     usageHandlers["sessions.usage"],
@@ -80,7 +83,7 @@ async function runSessionsUsage(params: Record<string, unknown>) {
   )({
     respond,
     params,
-    context: { getRuntimeConfig: () => TEST_RUNTIME_CONFIG },
+    context: { getRuntimeConfig: () => config },
   } as unknown as Parameters<(typeof usageHandlers)["sessions.usage"]>[0]);
   return respond;
 }
@@ -278,6 +281,63 @@ describe("sessions.usage owner attribution (#128755)", () => {
       vi
         .mocked(loadSessionCostSummariesFromCache)
         .mock.calls.some((call) => call[0]?.agentId === "opus"),
+    ).toBe(false);
+  });
+
+  it("keeps the requested agent for a scoped global session list row (#128755)", async () => {
+    // Regression for the scoped-global list path the all-agent owner rule would
+    // otherwise regress: a no-key request scoped to `agentId: "opus"` retains
+    // the `global` store row (config.session.scope === "global"), and discovery
+    // is limited to the requested agent. The durable-owner resolution must not
+    // rewrite that row to the logical/default agent; the row stays attributed
+    // to the explicitly requested agent (opus), matching pre-fix behavior.
+    const GLOBAL_CONFIG = {
+      agents: { list: [{ id: "main", default: true }, { id: "opus" }] },
+      session: { scope: "global" },
+    } as OpenClawConfig;
+    vi.mocked(discoverAllSessions).mockResolvedValueOnce([
+      {
+        sessionId: SESSION_ID,
+        sessionFile: `/tmp/agents/opus/sessions/${SESSION_ID}.jsonl`,
+        mtime: 300,
+      },
+    ]);
+    vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
+      durableTargets: [],
+      storePath: "(multiple)",
+      store: {
+        global: {
+          sessionId: SESSION_ID,
+          sessionFile: `${SESSION_ID}.jsonl`,
+          label: "Opus global",
+          updatedAt: 1_500,
+        },
+      },
+    });
+
+    const respond = await runSessionsUsage({ ...BASE_USAGE_RANGE, agentId: "opus" }, GLOBAL_CONFIG);
+    const sessions = expectSuccessfulSessionsUsage(respond);
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]?.key).toBe("global");
+    // The requested agent is preserved; the row is not relabeled to main.
+    expect(sessions[0]?.agentId).toBe("opus");
+    // global rows carry no owning agent, so the discovered (request-scoped)
+    // transcript file is used as-is rather than re-resolved under another agent.
+    expect(vi.mocked(loadSessionCostSummariesFromCache)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "opus",
+        sessions: expect.arrayContaining([
+          expect.objectContaining({
+            sessionId: SESSION_ID,
+            sessionFile: `/tmp/agents/opus/sessions/${SESSION_ID}.jsonl`,
+          }),
+        ]),
+      }),
+    );
+    expect(
+      vi
+        .mocked(loadSessionCostSummariesFromCache)
+        .mock.calls.some((call) => call[0]?.agentId === "main"),
     ).toBe(false);
   });
 });

@@ -294,6 +294,29 @@ describe("session cost usage", () => {
     });
   });
 
+  it("keeps an entry marker whose agent matches the requested agent (#128755)", async () => {
+    // Positive counterpart to the mismatch case: when the store entry's
+    // `sessionFile` marker is owned by the requested agent, it is used as-is
+    // and not dropped by the new agent-equality guard.
+    const root = await makeSessionCostRoot("entry-marker-agent-match");
+    const sessionId = "match-session";
+    const mainMarker = `sqlite:main:${sessionId}:${path.join(root, "agents", "main", "sessions", "sessions.json")}`;
+
+    await withStateDir(root, async () => {
+      expect(
+        resolveExistingUsageSessionFile({
+          agentId: "main",
+          sessionEntry: {
+            sessionFile: mainMarker,
+            sessionId,
+            updatedAt: 1,
+          } as SessionEntry & { sessionFile: string },
+          sessionId,
+        }),
+      ).toBe(mainMarker);
+    });
+  });
+
   afterAll(async () => {
     await suiteRootTracker.cleanup();
   });

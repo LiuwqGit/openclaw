@@ -1216,26 +1216,29 @@ export const usageHandlers: GatewayRequestHandlers = {
                   continue;
                 }
                 attributedStoreKeys.add(storeMatch.key);
-                // Named session from store
-                const ownerAgentId = resolveSessionStoreAgentId(config, storeMatch.key);
-                // Resolve only the owner's transcript. Falling back to the
-                // discovered file would reintroduce #128755: the discovered
-                // transcript may belong to the subagent that reused this
-                // session id. When the owner transcript is absent the row
-                // stays attributed to the owner with no usage (cold cache)
-                // rather than loading another agent's transcript.
-                //
-                // resolveExistingUsageSessionFile already validates the store
-                // entry's SQLite marker against the owner agentId, so a
-                // subagent marker reusing this sessionId is ignored and the
-                // owner's own transcript directory is searched instead. Do not
-                // fall back to the discovered file: it may belong to the
-                // subagent (#128755).
-                const ownerSessionFile = resolveExistingUsageSessionFile({
-                  agentId: ownerAgentId,
-                  sessionId: discovered.sessionId,
-                  sessionEntry: storeMatch.entry,
-                });
+                // #128755: a durable named row must be attributed to the agent
+                // encoded in its store key (e.g. agent:main:telegram:dm), not to
+                // whichever subagent transcript discovery surfaced. Only agent-
+                // scoped keys carry an owner; global/unknown are scope-shared and
+                // keep the discovered (request-scoped) agentId so a selected-agent
+                // list request still attributes its own global row to the requested
+                // agent rather than the logical default.
+                const parsedKey = parseAgentSessionKey(storeMatch.key);
+                const ownerAgentId = parsedKey?.agentId
+                  ? resolveSessionStoreAgentId(config, storeMatch.key)
+                  : discovered.agentId;
+                // Re-resolve the owner's own transcript; falling back to the
+                // discovered file would let a reused subagent transcript shadow
+                // the owner (#128755). When the owner transcript is absent the
+                // row stays attributed to the owner with no usage (cold cache).
+                const ownerSessionFile =
+                  ownerAgentId === discovered.agentId
+                    ? discovered.sessionFile
+                    : resolveExistingUsageSessionFile({
+                        agentId: ownerAgentId,
+                        sessionId: discovered.sessionId,
+                        sessionEntry: storeMatch.entry,
+                      });
                 maybeMergeFamilyEntry({
                   mergedEntries,
                   groupingMode,
