@@ -100,37 +100,14 @@ function formatYyyyMmDd(date: Date): string {
   return `${y}${m}${d}`;
 }
 
-/** 32-bit SOA serial space (RFC 1035 / RFC 1982). */
-const SOA_SERIAL_MOD = 2 ** 32;
-
-/**
- * RFC 1982 serial comparison: `a` is strictly greater than `b` when the modular
- * difference lies in (0, 2^(SERIAL_BITS-1)). Stays correct across the 32-bit
- * wrap boundary (e.g. 0xffffffff advancing to 0).
- */
-function serialGreaterThan(a: number, b: number): boolean {
-  const diff = (((a - b) % SOA_SERIAL_MOD) + SOA_SERIAL_MOD) % SOA_SERIAL_MOD;
-  return diff > 0 && diff < SOA_SERIAL_MOD / 2;
-}
-
 function nextSerial(existingSerial: number | null, now: Date): number {
-  const today = formatYyyyMmDd(now);
-  const base = Number.parseInt(`${today}01`, 10);
-  if (!existingSerial || !Number.isFinite(existingSerial)) {
+  const base = Number.parseInt(`${formatYyyyMmDd(now)}01`, 10);
+  if (existingSerial === null || !Number.isFinite(existingSerial)) {
     return base;
   }
-  // Bounded serial arithmetic (RFC 1982): the increment wraps modulo 2^32 so
-  // the maximum SOA serial (0xffffffff) advances to 0 instead of producing an
-  // out-of-range 33-bit value that secondaries reject.
-  const incremented = (existingSerial + 1) % SOA_SERIAL_MOD;
-  if (String(existingSerial).startsWith(today)) {
-    return incremented;
-  }
-  // SOA serials must be monotonically increasing (RFC 1035 §3.3.1). Today's
-  // base is the natural next value on a new day, but only when it is already
-  // ahead of the existing serial in bounded serial arithmetic; otherwise
-  // advance by one so a future-dated/foreign serial never regresses.
-  return serialGreaterThan(base, existingSerial) ? base : incremented;
+  // RFC 1982 accepts only advances smaller than half the unsigned serial space.
+  const distance = (base - existingSerial) >>> 0;
+  return distance > 0 && distance < 0x80000000 ? base : (existingSerial + 1) >>> 0;
 }
 
 function extractSerial(zoneText: string): number | null {
