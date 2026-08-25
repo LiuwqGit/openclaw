@@ -69,7 +69,7 @@ it("attributes a durable named row to its owner over authenticated WebSocket RPC
       storePath: opusStorePath,
     });
 
-    const { server, port } = await startServer(WS_PROOF_TOKEN);
+    const { server, port, prevToken } = await startServer(WS_PROOF_TOKEN);
     const client = await connectGatewayClient({
       url: `ws://127.0.0.1:${port}`,
       token: WS_PROOF_TOKEN,
@@ -114,6 +114,13 @@ it("attributes a durable named row to its owner over authenticated WebSocket RPC
     } finally {
       await disconnectGatewayClient(client);
       await server.close();
+      // startServer sets OPENCLAW_GATEWAY_TOKEN; restore so sibling tests in
+      // the same shard see the same env they would without this proof test.
+      if (prevToken === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      } else {
+        process.env.OPENCLAW_GATEWAY_TOKEN = prevToken;
+      }
     }
   } finally {
     if (prevStateDir === undefined) {
