@@ -1218,12 +1218,17 @@ export const usageHandlers: GatewayRequestHandlers = {
                 attributedStoreKeys.add(storeMatch.key);
                 // Named session from store
                 const ownerAgentId = resolveSessionStoreAgentId(config, storeMatch.key);
-                const ownerSessionFile =
-                  resolveExistingUsageSessionFile({
-                    agentId: ownerAgentId,
-                    sessionId: discovered.sessionId,
-                    sessionEntry: storeMatch.entry,
-                  }) ?? discovered.sessionFile;
+                // Resolve only the owner's transcript. Falling back to the
+                // discovered file would reintroduce #128755: the discovered
+                // transcript may belong to the subagent that reused this
+                // session id. When the owner transcript is absent the row
+                // stays attributed to the owner with no usage (cold cache)
+                // rather than loading another agent's transcript.
+                const ownerSessionFile = resolveExistingUsageSessionFile({
+                  agentId: ownerAgentId,
+                  sessionId: discovered.sessionId,
+                  sessionEntry: storeMatch.entry,
+                });
                 maybeMergeFamilyEntry({
                   mergedEntries,
                   groupingMode,
@@ -1231,7 +1236,7 @@ export const usageHandlers: GatewayRequestHandlers = {
                     key: storeMatch.key,
                     agentId: ownerAgentId,
                     sessionId: discovered.sessionId,
-                    sessionFile: ownerSessionFile,
+                    sessionFile: ownerSessionFile ?? "",
                     label: storeMatch.entry.label,
                     updatedAt: storeMatch.entry.updatedAt ?? discovered.mtime,
                     storeEntry: storeMatch.entry,
