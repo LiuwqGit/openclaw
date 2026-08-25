@@ -340,4 +340,64 @@ describe("sessions.usage owner attribution (#128755)", () => {
         .mock.calls.some((call) => call[0]?.agentId === "main"),
     ).toBe(false);
   });
+
+  it("resolves a global durable row to its logical owner in all-agent lists (#128755)", async () => {
+    // All-agent discovery is newest-first: a subagent transcript that reuses a
+    // global durable row's sessionId must not relabel that row. The row resolves
+    // to its logical owner (the default agent) instead of the newer subagent.
+    vi.mocked(discoverAllSessions)
+      .mockResolvedValueOnce([
+        {
+          sessionId: SESSION_ID,
+          sessionFile: `/tmp/agents/main/sessions/${SESSION_ID}.jsonl`,
+          mtime: 100,
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          sessionId: SESSION_ID,
+          sessionFile: `/tmp/agents/opus/sessions/${SESSION_ID}.jsonl`,
+          mtime: 200,
+        },
+      ]);
+    vi.mocked(resolveExistingUsageSessionFile).mockImplementationOnce(
+      (params) =>
+        `sqlite:${params.agentId}:${params.sessionId}:/tmp/agents/${params.agentId}/openclaw-agent.sqlite`,
+    );
+    vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
+      durableTargets: [],
+      storePath: "(multiple)",
+      store: {
+        global: {
+          sessionId: SESSION_ID,
+          sessionFile: `${SESSION_ID}.jsonl`,
+          label: "Global session",
+          updatedAt: 1_500,
+        },
+      },
+    });
+
+    const respond = await runSessionsUsage({ ...BASE_USAGE_RANGE, agentScope: "all" });
+    const sessions = expectSuccessfulSessionsUsage(respond);
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]?.key).toBe("global");
+    // The logical owner wins over the newer subagent discovery transcript.
+    expect(sessions[0]?.agentId).toBe("main");
+    expect(vi.mocked(loadSessionCostSummariesFromCache)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        sessions: expect.arrayContaining([
+          expect.objectContaining({
+            sessionId: SESSION_ID,
+            sessionFile: expect.stringContaining("sqlite:main:"),
+          }),
+        ]),
+      }),
+    );
+    expect(
+      vi
+        .mocked(loadSessionCostSummariesFromCache)
+        .mock.calls.some((call) => call[0]?.agentId === "opus"),
+    ).toBe(false);
+  });
 });

@@ -1216,17 +1216,20 @@ export const usageHandlers: GatewayRequestHandlers = {
                   continue;
                 }
                 attributedStoreKeys.add(storeMatch.key);
-                // #128755: a durable named row must be attributed to the agent
-                // encoded in its store key (e.g. agent:main:telegram:dm), not to
-                // whichever subagent transcript discovery surfaced. Only agent-
-                // scoped keys carry an owner; global/unknown are scope-shared and
-                // keep the discovered (request-scoped) agentId so a selected-agent
-                // list request still attributes its own global row to the requested
-                // agent rather than the logical default.
+                // #128755: a durable row must be attributed to the agent that
+                // owns it, not to whichever subagent transcript discovery
+                // surfaced (all-agent discovery is newest-first, so a newer
+                // subagent transcript could otherwise relabel the row). Agent-
+                // prefixed keys carry their owner in the key; global/unknown
+                // resolve to the logical owner via the canonical resolver. The
+                // one exception is a scoped list request, where discovery is
+                // limited to the explicitly requested agent and its own global
+                // row must keep that agent.
                 const parsedKey = parseAgentSessionKey(storeMatch.key);
-                const ownerAgentId = parsedKey?.agentId
-                  ? resolveSessionStoreAgentId(config, storeMatch.key)
-                  : discovered.agentId;
+                const ownerAgentId =
+                  parsedKey?.agentId || !effectiveAgentId
+                    ? resolveSessionStoreAgentId(config, storeMatch.key)
+                    : discovered.agentId;
                 // Re-resolve the owner's own transcript; falling back to the
                 // discovered file would let a reused subagent transcript shadow
                 // the owner (#128755). When the owner transcript is absent the
