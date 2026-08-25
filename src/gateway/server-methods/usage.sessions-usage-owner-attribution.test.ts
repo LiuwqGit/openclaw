@@ -213,4 +213,70 @@ describe("sessions.usage owner attribution (#128755)", () => {
     // subagent's reused transcript must not be substituted.
     expect(vi.mocked(loadSessionCostSummariesFromCache)).not.toHaveBeenCalled();
   });
+
+  it("ignores a store entry marker whose agent differs from the resolved owner", async () => {
+    // Regression for the marker-ownership finding on #128755: a store entry
+    // marker reusing the sessionId under a different agent must not be
+    // substituted for the owner's transcript.
+    const opusMarker = `sqlite:opus:${SESSION_ID}:/tmp/agents/opus/openclaw-agent.sqlite`;
+    vi.mocked(discoverAllSessions)
+      .mockResolvedValueOnce([
+        {
+          sessionId: SESSION_ID,
+          sessionFile: `/tmp/agents/main/sessions/${SESSION_ID}.jsonl`,
+          mtime: 100,
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          sessionId: SESSION_ID,
+          sessionFile: `/tmp/agents/opus/sessions/${SESSION_ID}.jsonl`,
+          mtime: 200,
+        },
+      ]);
+    // Simulate the resolver: when the entry is dropped (guard active) it returns
+    // the owner file; if the opus entry were passed through it would return the
+    // opus marker — the bug the guard prevents.
+    vi.mocked(resolveExistingUsageSessionFile).mockImplementationOnce((params) =>
+      params.sessionEntry === undefined
+        ? `sqlite:${params.agentId}:${params.sessionId}:/tmp/agents/${params.agentId}/openclaw-agent.sqlite`
+        : opusMarker,
+    );
+    vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
+      durableTargets: [],
+      storePath: "(multiple)",
+      store: {
+        [STORE_KEY]: {
+          sessionId: SESSION_ID,
+          sessionFile: opusMarker,
+          label: "Telegram DM",
+          updatedAt: 1_500,
+        },
+      },
+    });
+
+    const respond = await runSessionsUsage({ ...BASE_USAGE_RANGE, agentScope: "all" });
+    const sessions = expectSuccessfulSessionsUsage(respond);
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]?.key).toBe(STORE_KEY);
+    expect(sessions[0]?.agentId).toBe("main");
+    // The opus marker must not be substituted: usage loads under main with a
+    // main-owned session file.
+    expect(vi.mocked(loadSessionCostSummariesFromCache)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        sessions: expect.arrayContaining([
+          expect.objectContaining({
+            sessionId: SESSION_ID,
+            sessionFile: expect.stringContaining("sqlite:main:"),
+          }),
+        ]),
+      }),
+    );
+    expect(
+      vi
+        .mocked(loadSessionCostSummariesFromCache)
+        .mock.calls.some((call) => call[0]?.agentId === "opus"),
+    ).toBe(false);
+  });
 });

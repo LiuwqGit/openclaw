@@ -1224,10 +1224,23 @@ export const usageHandlers: GatewayRequestHandlers = {
                 // session id. When the owner transcript is absent the row
                 // stays attributed to the owner with no usage (cold cache)
                 // rather than loading another agent's transcript.
+                //
+                // The store entry marker is authoritative only when its
+                // embedded agent matches the resolved owner; a subagent's
+                // marker reusing the same sessionId must not be substituted,
+                // so drop the entry when it would mis-attribute.
+                const entrySessionFile = (storeMatch.entry as { sessionFile?: unknown } | undefined)
+                  ?.sessionFile;
+                const entryMarker = parseSqliteSessionFileMarker(
+                  typeof entrySessionFile === "string" ? entrySessionFile : undefined,
+                );
                 const ownerSessionFile = resolveExistingUsageSessionFile({
                   agentId: ownerAgentId,
                   sessionId: discovered.sessionId,
-                  sessionEntry: storeMatch.entry,
+                  sessionEntry:
+                    !entryMarker || entryMarker.agentId === ownerAgentId
+                      ? storeMatch.entry
+                      : undefined,
                 });
                 maybeMergeFamilyEntry({
                   mergedEntries,
