@@ -1229,11 +1229,7 @@ export const usageHandlers: GatewayRequestHandlers = {
                 // embedded agent matches the resolved owner; a subagent's
                 // marker reusing the same sessionId must not be substituted,
                 // so drop the entry when it would mis-attribute.
-                const entrySessionFile = (storeMatch.entry as { sessionFile?: unknown } | undefined)
-                  ?.sessionFile;
-                const entryMarker = parseSqliteSessionFileMarker(
-                  typeof entrySessionFile === "string" ? entrySessionFile : undefined,
-                );
+                const entryMarker = parseSqliteSessionFileMarker(storeMatch.entry.sessionFile);
                 const ownerSessionFile = resolveExistingUsageSessionFile({
                   agentId: ownerAgentId,
                   sessionId: discovered.sessionId,
