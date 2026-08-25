@@ -270,6 +270,30 @@ describe("session cost usage", () => {
     });
   });
 
+  it("ignores an entry marker whose agent differs from the requested agent (#128755)", async () => {
+    // A subagent spawned from a session can leave a store entry whose
+    // `sessionFile` marker reuses the parent sessionId under a different
+    // agent. The resolver must not substitute that marker for the requested
+    // owner; it is dropped and resolution falls back instead of mis-attributing.
+    const root = await makeSessionCostRoot("entry-marker-agent-mismatch");
+    const sessionId = "mismatch-session";
+    const opusMarker = `sqlite:opus:${sessionId}:${path.join(root, "agents", "opus", "sessions", "sessions.json")}`;
+
+    await withStateDir(root, async () => {
+      expect(
+        resolveExistingUsageSessionFile({
+          agentId: "main",
+          sessionEntry: {
+            sessionFile: opusMarker,
+            sessionId,
+            updatedAt: 1,
+          } as SessionEntry & { sessionFile: string },
+          sessionId,
+        }),
+      ).toBeUndefined();
+    });
+  });
+
   afterAll(async () => {
     await suiteRootTracker.cleanup();
   });

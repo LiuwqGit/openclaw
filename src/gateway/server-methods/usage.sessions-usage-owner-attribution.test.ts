@@ -234,12 +234,13 @@ describe("sessions.usage owner attribution (#128755)", () => {
           mtime: 200,
         },
       ]);
-    // Simulate the resolver: when the entry is dropped (guard active) it returns
-    // the owner file; if the opus entry were passed through it would return the
-    // opus marker — the bug the guard prevents.
+    // The store entry carries an opus marker reusing this sessionId. The
+    // resolver now validates the entry marker's agentId against the requested
+    // owner internally (collection.ts), so an opus marker is ignored and the
+    // owner (main) file is returned instead.
     vi.mocked(resolveExistingUsageSessionFile).mockImplementationOnce((params) =>
-      params.sessionEntry === undefined
-        ? `sqlite:${params.agentId}:${params.sessionId}:/tmp/agents/${params.agentId}/openclaw-agent.sqlite`
+      params.agentId === "main"
+        ? `sqlite:main:${params.sessionId}:/tmp/agents/main/openclaw-agent.sqlite`
         : opusMarker,
     );
     vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
