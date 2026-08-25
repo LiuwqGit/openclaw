@@ -92,7 +92,6 @@ test("sessions.usage attributes a durable named row to its owner over real state
         })),
       },
     };
-    // eslint-disable-next-line no-console
     console.log(`[#128755 remote-proof] ${JSON.stringify(trace)}`);
 
     expect(result.ok).toBe(true);
