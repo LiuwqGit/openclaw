@@ -1521,10 +1521,26 @@ describe("tools.invoke Gateway RPC", () => {
       expect(currentPty.resizes).toEqual([[120, 40]]);
 
       spawn.mockClear();
-      const opened = await invokeTerminal({ action: "open" });
+      // The 'open' action is now legitimate; test it on a context where
+      // terminal opening is disabled so the rejection still proves the
+      // security boundary holds.
+      const disabledContext = {
+        terminalSessions: manager,
+        isTerminalEnabled: () => false,
+        resolveTerminalLaunchPolicy: () => ({
+          ok: false as const,
+          block: { kind: "disabled" as const, message: "terminal disabled" },
+        }),
+      } as never;
+      const invokeTerminalDisabled = (args: Record<string, unknown>) =>
+        withPluginRuntimeGatewayRequestScope(
+          { context: disabledContext, isWebchatConnect: () => false },
+          () => invokeToolsRpc({ name: "terminal", args, sessionKey: "main" }, ["operator.admin"]),
+        );
+      const opened = await invokeTerminalDisabled({ action: "open" });
       expect(opened?.[1]).toMatchObject({
         ok: false,
-        error: { message: expect.stringContaining("terminal action unavailable") },
+        error: { message: expect.stringContaining("terminal disabled") },
       });
       const input = await invokeTerminal({
         action: "input",

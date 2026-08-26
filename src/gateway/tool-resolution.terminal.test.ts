@@ -28,7 +28,14 @@ describe("resolveGatewayScopedTools terminal ownership", () => {
       throw new Error("expected operator-opened terminals");
     }
     currentPty.emitData("current session output\n");
-    const context = { terminalSessions: manager } as unknown as GatewayRequestContext;
+    const context = {
+      terminalSessions: manager,
+      isTerminalEnabled: () => false,
+      resolveTerminalLaunchPolicy: () => ({
+        ok: false as const,
+        block: { kind: "disabled" as const, message: "terminal disabled" },
+      }),
+    } as unknown as GatewayRequestContext;
 
     try {
       const result = withPluginRuntimeGatewayRequestScope(
@@ -72,7 +79,7 @@ describe("resolveGatewayScopedTools terminal ownership", () => {
       ).resolves.toMatchObject({ details: { ok: true } });
       expect(currentPty.resizes).toEqual([[100, 30]]);
       spawn.mockClear();
-      await expect(execute({ action: "open" })).rejects.toThrow("terminal action unavailable");
+      await expect(execute({ action: "open" })).rejects.toThrow("terminal disabled");
       await expect(
         execute({ action: "input", sessionId: current.sessionId, data: "unsafe\r" }),
       ).rejects.toThrow("Terminal input denied by execution policy");
