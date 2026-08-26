@@ -317,6 +317,56 @@ describe("session cost usage", () => {
     });
   });
 
+  it("binds the resolved transcript to the durable owner target and ignores a cross-agent legacy file (#128755)", async () => {
+    // A reused subagent transcript can leave a cross-agent legacy JSONL path on
+    // the durable owner's store entry. resolveSessionFilePathCore accepts such
+    // absolute paths (src/config/sessions/paths.ts), so loading via the entry
+    // would pull the subagent's usage into the owner's group. A complete owner
+    // sessionTarget is authoritative: it validates owner identity and returns
+    // the owner's canonical SQLite marker, never consulting the cross-agent
+    // legacy file even when it exists on disk.
+    const root = await makeSessionCostRoot("owner-target-rejects-cross-agent-legacy");
+    const storePath = path.join(root, "agents", "main", "sessions", "sessions.json");
+    const sessionId = "owner-target-session";
+    const opusTranscript = path.join(root, "agents", "opus", "sessions", `${sessionId}.jsonl`);
+    const sessionTarget = {
+      agentId: "main",
+      sessionId,
+      sessionKey: "agent:main:owner-target",
+      storePath,
+    };
+
+    await withStateDir(root, async () => {
+      await fs.mkdir(path.dirname(opusTranscript), { recursive: true });
+      await fs.writeFile(
+        opusTranscript,
+        transcriptText(sessionId, {
+          type: "message",
+          timestamp: "2026-08-26T00:00:00.000Z",
+          message: {
+            role: "assistant",
+            usage: { input: 7, output: 7, totalTokens: 14, cost: { total: 0.07 } },
+          },
+        }),
+        "utf-8",
+      );
+      // The owner's durable row carries the subagent's legacy transcript path.
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: sessionTarget.sessionKey, storePath },
+        { sessionId, sessionFile: opusTranscript, updatedAt: 1 },
+      );
+
+      const resolved = resolveExistingUsageSessionFile({
+        agentId: "main",
+        sessionId,
+        sessionTarget,
+      });
+      // The canonical owner marker wins; the cross-agent opus file is never used.
+      expect(resolved).toContain("sqlite:main:");
+      expect(resolved).not.toContain("opus");
+    });
+  });
+
   afterAll(async () => {
     await suiteRootTracker.cleanup();
   });

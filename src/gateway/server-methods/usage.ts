@@ -18,6 +18,7 @@ import {
   resolveSessionFilePathCore,
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
+import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -1240,7 +1241,26 @@ export const usageHandlers: GatewayRequestHandlers = {
                     : resolveExistingUsageSessionFile({
                         agentId: ownerAgentId,
                         sessionId: discovered.sessionId,
-                        sessionEntry: storeMatch.entry,
+                        // #128755: bind the owner transcript to the canonical
+                        // durable target instead of storeMatch.entry.sessionFile.
+                        // A reused subagent transcript can leave a cross-agent
+                        // legacy JSONL path on the durable entry, and the legacy
+                        // resolver accepts absolute paths from other agents
+                        // (src/config/sessions/paths.ts resolveSessionFilePathCore).
+                        // Loading that file would pull the subagent's usage into
+                        // the owner's group. The complete target validates owner
+                        // identity (agent id + store key agent + store entry
+                        // sessionId) and returns the owner's canonical SQLite
+                        // marker, so a cross-agent legacy file is never used.
+                        sessionTarget: {
+                          agentId: ownerAgentId,
+                          sessionId: discovered.sessionId,
+                          sessionKey: storeMatch.key,
+                          storePath: resolveSessionStorePathForScope({
+                            agentId: ownerAgentId,
+                            sessionKey: storeMatch.key,
+                          }),
+                        },
                       });
                 maybeMergeFamilyEntry({
                   mergedEntries,
