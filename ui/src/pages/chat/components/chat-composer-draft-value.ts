@@ -9,8 +9,8 @@
 // since the previous render AND the DOM does not already hold it, so typing,
 // native undo, and uncommitted local input all survive rerenders untouched.
 import { noChange, type PropertyPart } from "lit";
-import { Directive, PartType, directive, type PartInfo } from "lit/directive.js";
 import { setCommittedValue } from "lit/directive-helpers.js";
+import { Directive, PartType, directive, type PartInfo } from "lit/directive.js";
 
 class ComposerDraftValueDirective extends Directive {
   private committed: string | undefined;
