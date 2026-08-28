@@ -1110,10 +1110,12 @@ export async function ensureAgentWorkspace(params?: {
 
   let bootstrapExists = await pathExists(bootstrapPath);
   if (!state.bootstrapSeededAt && bootstrapExists) {
-    // Record at the producer boundary whether onboarding profiles were already
-    // customized (operator preseed) before this seed marker existed. After
-    // seeding, profile diffs cannot distinguish preseed from later user edits.
-    markState({
+    // Record provenance at the producer boundary, in the same write
+    // transaction that wins the initial seed marker: profiles already
+    // differing from templates now mean operator preseed. The canonical
+    // state the store returns is authoritative for everything downstream,
+    // so a stale concurrent writer cannot reclassify this workspace.
+    state = mergeWorkspaceSetupState(dir, {
       bootstrapSeededAt: nowIso(),
       ...(state.profilePreseeded || (await workspaceOnboardingProfilesDifferFromTemplates(dir))
         ? { profilePreseeded: true }

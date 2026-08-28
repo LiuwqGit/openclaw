@@ -392,8 +392,14 @@ export function mergeWorkspaceSetupState(
     const snapshot = readSnapshotFromDatabase({ identity, database });
     const bootstrapSeededAt = snapshot.setup.bootstrapSeededAt ?? next.bootstrapSeededAt;
     const setupCompletedAt = snapshot.setup.setupCompletedAt ?? next.setupCompletedAt;
-    // Write-once provenance: once recorded, a preseed marker never clears.
-    const profilePreseeded = snapshot.setup.profilePreseeded || next.profilePreseeded || false;
+    // Provenance belongs to the transaction that wins the initial seed marker:
+    // once a workspace is already seeded, a later writer's classification is
+    // discarded (it may have observed post-seed user edits), and a recorded
+    // marker never clears. Unseeded legacy rows keep NULL (not preseeded).
+    const winsInitialSeed = !snapshot.setup.bootstrapSeededAt && next.bootstrapSeededAt;
+    const profilePreseeded = winsInitialSeed
+      ? next.profilePreseeded === true
+      : Boolean(snapshot.setup.profilePreseeded);
     const merged: WorkspaceSetupState = {
       version: WORKSPACE_SETUP_STATE_VERSION,
       ...(bootstrapSeededAt ? { bootstrapSeededAt } : {}),
