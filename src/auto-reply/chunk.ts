@@ -116,17 +116,8 @@ export function resolveChunkMode(
 
 /**
  * Split text on newlines, trimming line whitespace.
- *
- * Contract: every returned chunk is no longer than `maxLineLength` (code-point
- * units), including folded leading or trailing blank-line prefixes. Blank lines
- * are folded into the next non-empty line as leading "\n" prefixes (capped to
- * the remaining headroom), and a run of trailing blank lines is capped to the
- * final chunk's remaining headroom so it never exceeds the limit.
- *
+ * Blank lines are folded into the next non-empty line as leading "\n" prefixes.
  * Long lines can be split by length (default) or kept intact via splitLongLines:false.
- * This helper is exposed to plugin consumers as `channelRuntime.text.chunkByNewline`;
- * bundled delivery routes use the markdown-aware `chunkTextWithMode`/
- * `chunkMarkdownTextWithMode` dispatchers instead.
  */
 export function chunkByNewline(
   text: string,
@@ -181,19 +172,7 @@ export function chunkByNewline(
   }
 
   if (pendingBlankLines > 0 && chunks.length > 0) {
-    // Trailing blank lines have no following line to fold into, so cap them to
-    // the remaining headroom on the final chunk just like mid-message blank
-    // lines are capped to `lineLimit - 1`; otherwise a run of trailing newlines
-    // could push the last chunk past the platform length limit.
-    const lastIndex = chunks.length - 1;
-    const lastChunk = chunks[lastIndex];
-    if (lastChunk !== undefined) {
-      const remaining = Math.max(0, lineLimit - lastChunk.length);
-      const cappedTrailing = Math.min(pendingBlankLines, remaining);
-      if (cappedTrailing > 0) {
-        chunks[lastIndex] = `${lastChunk}${"\n".repeat(cappedTrailing)}`;
-      }
-    }
+    chunks[chunks.length - 1] += "\n".repeat(pendingBlankLines);
   }
 
   return chunks;
