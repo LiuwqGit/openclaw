@@ -61,7 +61,6 @@ export {
   isPersistentBrowserProfileMutation,
   movePathToTrash,
   normalizeBrowserFormField,
-  normalizeBrowserFormFieldValue,
   normalizeBrowserRequestPath,
   parseBrowserMajorVersion,
   type ProfileStatus,

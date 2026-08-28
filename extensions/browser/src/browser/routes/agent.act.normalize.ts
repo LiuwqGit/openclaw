@@ -74,14 +74,18 @@ export function canonicalizeActTargetIds(
 
 function normalizeFields(rawFields: unknown): BrowserFormField[] {
   const entries = Array.isArray(rawFields) ? rawFields : [];
-  return entries
-    .map((field) => {
-      if (!field || typeof field !== "object") {
-        return null;
-      }
+  return entries.map((field, index) => {
+    if (!field || typeof field !== "object" || Array.isArray(field)) {
+      throw new Error(`fields[${index}] must be an object`);
+    }
+    try {
       return normalizeBrowserFormField(field as Record<string, unknown>);
-    })
-    .filter((field): field is BrowserFormField => field !== null);
+    } catch (err) {
+      throw new Error(`fields[${index}] ${err instanceof Error ? err.message : String(err)}`, {
+        cause: err,
+      });
+    }
+  });
 }
 
 function normalizeBatchAction(value: unknown, depth: number): BrowserActRequest {

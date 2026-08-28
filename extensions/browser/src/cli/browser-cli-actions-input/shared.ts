@@ -11,7 +11,6 @@ import {
   danger,
   defaultRuntime,
   normalizeBrowserFormField,
-  normalizeBrowserFormFieldValue,
   type BrowserFormField,
 } from "../core-api.js";
 
@@ -113,19 +112,13 @@ export async function readFields(opts: {
     if (!entry || typeof entry !== "object") {
       throw new Error(`fields[${index}] must be an object`);
     }
-    const rec = entry as Record<string, unknown>;
-    const parsedField = normalizeBrowserFormField(rec);
-    if (!parsedField) {
-      throw new Error(`fields[${index}] must include ref`);
+    try {
+      return normalizeBrowserFormField(entry as Record<string, unknown>);
+    } catch (err) {
+      throw new Error(`fields[${index}] ${err instanceof Error ? err.message : String(err)}`, {
+        cause: err,
+      });
     }
-    if (
-      rec.value === undefined ||
-      rec.value === null ||
-      normalizeBrowserFormFieldValue(rec.value) !== undefined
-    ) {
-      return parsedField;
-    }
-    throw new Error(`fields[${index}].value must be string, number, boolean, or null`);
   });
 }
 

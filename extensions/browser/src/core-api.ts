@@ -8,7 +8,6 @@ export {
   isBrowserHostLocalRoute,
   isPersistentBrowserProfileMutation,
   normalizeBrowserFormField,
-  normalizeBrowserFormFieldValue,
   redactCdpUrl,
   resolveBrowserConfig,
   resolveExistingUploadPaths,
