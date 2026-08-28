@@ -7,7 +7,7 @@ export {
   createBrowserRouteDispatcher,
   isBrowserHostLocalRoute,
   isPersistentBrowserProfileMutation,
-  normalizeBrowserFormField,
+  normalizeBrowserFormFields,
   redactCdpUrl,
   resolveBrowserConfig,
   resolveExistingUploadPaths,

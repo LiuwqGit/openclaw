@@ -60,7 +60,7 @@ export {
   installBrowserCommonMiddleware,
   isPersistentBrowserProfileMutation,
   movePathToTrash,
-  normalizeBrowserFormField,
+  normalizeBrowserFormFields,
   normalizeBrowserRequestPath,
   parseBrowserMajorVersion,
   type ProfileStatus,

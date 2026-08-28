@@ -4,7 +4,7 @@
  * Converts model/client fill field payloads into the compact field shape used
  * by Playwright and Chrome MCP fill actions.
  */
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { BrowserFormField } from "./client-actions.types.js";
 
 /** Default field type for fill actions when no type is provided. */
@@ -31,24 +31,39 @@ function normalizeBrowserFormFieldValue(value: unknown): BrowserFormFieldValue |
     : undefined;
 }
 
-/** Normalize one form field descriptor from untrusted route/tool input. */
-export function normalizeBrowserFormField(record: Record<string, unknown>): BrowserFormField {
+function normalizeBrowserFormField(
+  record: Record<string, unknown>,
+  index: number,
+): BrowserFormField {
+  const prefix = `fields[${index}]`;
   const ref = normalizeBrowserFormFieldRef(record.ref);
   if (!ref) {
-    throw new Error("must include ref");
+    throw new Error(`${prefix} must include ref`);
   }
   for (const key of Object.keys(record)) {
     if (!FIELD_ENTRY_KEYS.has(key)) {
-      throw new Error(`unsupported field key "${key}"; supported keys are ref, type, value`);
+      throw new Error(
+        `${prefix} unsupported field key "${key}"; supported keys are ref, type, value`,
+      );
     }
   }
   if (record.value === undefined) {
-    throw new Error('must include value; use value: "" to clear a field');
+    throw new Error(`${prefix} must include value; use value: "" to clear a field`);
   }
   const value = normalizeBrowserFormFieldValue(record.value);
   if (value === undefined) {
-    throw new Error("value must be a string, number, or boolean");
+    throw new Error(`${prefix} value must be a string, number, or boolean`);
   }
   const type = normalizeBrowserFormFieldType(record.type);
   return { ref, type, value };
+}
+
+/** Normalize form field descriptors and preserve the failing entry index. */
+export function normalizeBrowserFormFields(entries: unknown[]): BrowserFormField[] {
+  return entries.map((field, index) => {
+    if (!isRecord(field)) {
+      throw new Error(`fields[${index}] must be an object`);
+    }
+    return normalizeBrowserFormField(field, index);
+  });
 }

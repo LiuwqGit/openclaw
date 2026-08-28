@@ -10,7 +10,7 @@ import { callBrowserRequest, type BrowserParentOpts } from "../browser-cli-share
 import {
   danger,
   defaultRuntime,
-  normalizeBrowserFormField,
+  normalizeBrowserFormFields,
   type BrowserFormField,
 } from "../core-api.js";
 
@@ -108,18 +108,7 @@ export async function readFields(opts: {
   if (!Array.isArray(parsed)) {
     throw new Error("fields must be an array");
   }
-  return parsed.map((entry, index) => {
-    if (!entry || typeof entry !== "object") {
-      throw new Error(`fields[${index}] must be an object`);
-    }
-    try {
-      return normalizeBrowserFormField(entry as Record<string, unknown>);
-    } catch (err) {
-      throw new Error(`fields[${index}] ${err instanceof Error ? err.message : String(err)}`, {
-        cause: err,
-      });
-    }
-  });
+  return normalizeBrowserFormFields(parsed);
 }
 
 /** Cap on batch action JSON read from files or stdin. */

@@ -13,8 +13,8 @@ import {
   ACT_MAX_WAIT_TIME_MS,
   normalizeActBoundedNonNegativeMs,
 } from "../act-policy.js";
-import type { BrowserActRequest, BrowserFormField } from "../client-actions.types.js";
-import { normalizeBrowserFormField } from "../form-fields.js";
+import type { BrowserActRequest } from "../client-actions.types.js";
+import { normalizeBrowserFormFields } from "../form-fields.js";
 import { resolveTargetIdFromTabs } from "../target-id.js";
 import { isActKind, parseClickButton, parseClickModifiers } from "./agent.act.shared.js";
 import {
@@ -72,20 +72,8 @@ export function canonicalizeActTargetIds(
   return null;
 }
 
-function normalizeFields(rawFields: unknown): BrowserFormField[] {
-  const entries = Array.isArray(rawFields) ? rawFields : [];
-  return entries.map((field, index) => {
-    if (!field || typeof field !== "object" || Array.isArray(field)) {
-      throw new Error(`fields[${index}] must be an object`);
-    }
-    try {
-      return normalizeBrowserFormField(field as Record<string, unknown>);
-    } catch (err) {
-      throw new Error(`fields[${index}] ${err instanceof Error ? err.message : String(err)}`, {
-        cause: err,
-      });
-    }
-  });
+function normalizeFields(rawFields: unknown) {
+  return normalizeBrowserFormFields(Array.isArray(rawFields) ? rawFields : []);
 }
 
 function normalizeBatchAction(value: unknown, depth: number): BrowserActRequest {

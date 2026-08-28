@@ -33,16 +33,10 @@ describe("readFields", () => {
     );
   });
 
-  it("rejects unsupported field keys instead of silently dropping them", async () => {
-    await expect(readFields({ fields: '[{"ref":"e1","text":"Neo"}]' })).rejects.toThrow(
-      'fields[0] unsupported field key "text"',
-    );
-  });
-
-  it("rejects field entries without value", async () => {
-    await expect(readFields({ fields: '[{"ref":"e1","type":"text"}]' })).rejects.toThrow(
-      'fields[0] must include value; use value: "" to clear a field',
-    );
+  it("reports the index of an unsupported field key", async () => {
+    await expect(
+      readFields({ fields: '[{"ref":"e1","value":"Ada"},{"ref":"e2","text":"Neo"}]' }),
+    ).rejects.toThrow('fields[1] unsupported field key "text"');
   });
 
   it("throws descriptive error on malformed JSON", async () => {

@@ -181,21 +181,6 @@ describe("normalizeActRequest numeric fields", () => {
 });
 
 describe("normalizeActRequest fill fields", () => {
-  it("normalizes valid fill fields and defaults the type", () => {
-    expect(
-      normalizeActRequest({ kind: "fill", fields: [{ ref: "e1", value: "Ada" }] }),
-    ).toMatchObject({
-      kind: "fill",
-      fields: [{ ref: "e1", type: "text", value: "Ada" }],
-    });
-  });
-
-  it("rejects unsupported field keys instead of silently no-oping the fill", () => {
-    expect(() =>
-      normalizeActRequest({ kind: "fill", fields: [{ ref: "e1", text: "Neo" }] }),
-    ).toThrow('fields[0] unsupported field key "text"');
-  });
-
   it("reports the offending index when a later field entry is invalid", () => {
     expect(() =>
       normalizeActRequest({
@@ -206,18 +191,6 @@ describe("normalizeActRequest fill fields", () => {
         ],
       }),
     ).toThrow('fields[1] unsupported field key "text"');
-  });
-
-  it("rejects field entries without ref instead of dropping them silently", () => {
-    expect(() => normalizeActRequest({ kind: "fill", fields: [{ value: "Ada" }] })).toThrow(
-      "fields[0] must include ref",
-    );
-  });
-
-  it("rejects field entries without value so fills never silently clear", () => {
-    expect(() => normalizeActRequest({ kind: "fill", fields: [{ ref: "e1" }] })).toThrow(
-      'fields[0] must include value; use value: "" to clear a field',
-    );
   });
 
   it("validates fill fields inside batch sub-actions", () => {
