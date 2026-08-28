@@ -65,7 +65,7 @@ describe("plugin newline chunk delivery", () => {
       transportLimit: 2,
       expected: ["ok", "😀"],
     },
-  ])("$name", async ({ text, limit, transportLimit, options, expected }) => {
+  ])("$name", ({ text, limit, transportLimit, options, expected }) => {
     const accepted: string[] = [];
     const plugin = definePluginEntry({
       id: "newline-report-test",
@@ -98,7 +98,7 @@ describe("plugin newline chunk delivery", () => {
     });
     const api = registry.createApi(record, { config: {} });
 
-    await plugin.register(api);
+    plugin.register(api);
 
     expect(accepted).toEqual(expected);
   });
