@@ -249,7 +249,12 @@ describe("ensureAgentWorkspace", () => {
     });
   });
 
-  it.each([
+  it.each<
+    [
+      string,
+      { remnant?: string; keepDir?: boolean; futureAttestation?: boolean; emptyHashes?: boolean },
+    ]
+  >([
     ["after the directory disappears", { keepDir: false }],
     ["after its contents are wiped", {}],
     ["after only generated remnants survive", { remnant: "generated" }],
