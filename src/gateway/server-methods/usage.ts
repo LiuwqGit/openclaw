@@ -18,7 +18,6 @@ import {
   resolveSessionFilePathCore,
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
-import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -71,10 +70,7 @@ import { listGatewayAgentsBasic } from "../agent-list.js";
 import { operatorSessionCap } from "../operator-role-policy.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { createSessionListEntryFilter, isGatewayAdmin } from "../session-sharing.js";
-import {
-  resolveSessionStoreAgentId,
-  resolveStoredSessionKeyForAgentStore,
-} from "../session-store-key.js";
+import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import {
   loadCombinedSessionStoreForGatewayCore,
   loadGatewaySessionEntryReadOnly,
@@ -705,51 +701,40 @@ type MergedEntry = {
   includedSessionIds?: string[];
 };
 
-function buildStoreBySessionId(
+function usageSessionIdentity(agentId: string, sessionId: string): string {
+  return `${agentId}\0${sessionId}`;
+}
+
+function buildStoreBySessionIdentity(
   store: Record<string, SessionEntry>,
+  agentIdBySessionKey: ReadonlyMap<string, string>,
 ): Map<string, { key: string; entry: SessionEntry }> {
-  const matchesBySessionId = new Map<string, Array<[string, SessionEntry]>>();
+  const matchesByIdentity = new Map<string, Array<[string, SessionEntry]>>();
   for (const [key, entry] of Object.entries(store)) {
     if (!entry?.sessionId) {
       continue;
     }
-    const matches = matchesBySessionId.get(entry.sessionId) ?? [];
+    const agentId = expectDefined(agentIdBySessionKey.get(key), "stored session owner");
+    const identity = usageSessionIdentity(agentId, entry.sessionId);
+    const matches = matchesByIdentity.get(identity) ?? [];
     matches.push([key, entry]);
-    matchesBySessionId.set(entry.sessionId, matches);
+    matchesByIdentity.set(identity, matches);
   }
 
-  const storeBySessionId = new Map<string, { key: string; entry: SessionEntry }>();
-  for (const [sessionId, matches] of matchesBySessionId) {
-    // Multiple store keys can point at one transcript; choose the UI-facing canonical key.
+  const storeByIdentity = new Map<string, { key: string; entry: SessionEntry }>();
+  for (const [identity, matches] of matchesByIdentity) {
+    // Aliases within one agent share a transcript; another agent's identical id does not.
+    const sessionId = expectDefined(matches[0], "stored session match")[1].sessionId;
     const preferredKey = resolvePreferredSessionKeyForSessionIdMatches(matches, sessionId);
     if (!preferredKey) {
       continue;
     }
     const preferredEntry = store[preferredKey];
     if (preferredEntry) {
-      storeBySessionId.set(sessionId, { key: preferredKey, entry: preferredEntry });
+      storeByIdentity.set(identity, { key: preferredKey, entry: preferredEntry });
     }
   }
-  return storeBySessionId;
-}
-
-function filterSessionStoreByAgent(params: {
-  config: OpenClawConfig;
-  store: Record<string, SessionEntry>;
-  agentId: string;
-}): Record<string, SessionEntry> {
-  const scopedAgentId = normalizeAgentId(params.agentId);
-  const scopedStore: Record<string, SessionEntry> = {};
-  for (const [key, entry] of Object.entries(params.store)) {
-    if (key.trim().toLowerCase() === "global") {
-      scopedStore[key] = entry;
-      continue;
-    }
-    if (resolveSessionStoreAgentId(params.config, key) === scopedAgentId) {
-      scopedStore[key] = entry;
-    }
-  }
-  return scopedStore;
+  return storeByIdentity;
 }
 
 async function discoverAllSessionsForUsage(params: {
@@ -1077,19 +1062,21 @@ export const usageHandlers: GatewayRequestHandlers = {
         load: async () => {
           // Load session store for named sessions only on a result-cache miss.
           const sessionStoreOpts = effectiveAgentId ? { agentId: effectiveAgentId } : {};
-          const { store } = loadCombinedSessionStoreForGatewayCore(config, sessionStoreOpts);
-          const agentStore = effectiveAgentId
-            ? filterSessionStoreByAgent({
-                config,
-                store,
-                agentId: effectiveAgentId,
-              })
-            : store;
-          const scopedStore = visibilityFilter
-            ? Object.fromEntries(
-                Object.entries(agentStore).filter(([key, entry]) => visibilityFilter(key, entry)),
-              )
-            : agentStore;
+          const { store, agentIdBySessionKey } = loadCombinedSessionStoreForGatewayCore(
+            config,
+            sessionStoreOpts,
+          );
+          const scopedStore = Object.fromEntries(
+            Object.entries(store).filter(
+              ([key, entry]) =>
+                (!effectiveAgentId || agentIdBySessionKey.get(key) === effectiveAgentId) &&
+                (!visibilityFilter || visibilityFilter(key, entry)),
+            ),
+          );
+          const storeBySessionIdentity = buildStoreBySessionIdentity(
+            scopedStore,
+            agentIdBySessionKey,
+          );
           const now = Date.now();
 
           const mergedEntries: MergedEntry[] = [];
@@ -1112,16 +1099,16 @@ export const usageHandlers: GatewayRequestHandlers = {
 
             // Prefer the store entry when available, even if the caller provides a discovered key
             // (`agent:<id>:<sessionId>`) for a session that now has a canonical store key.
-            const storeBySessionId = buildStoreBySessionId(scopedStore);
-
             const storeMatch = scopedStore[scopedSpecificKey]
               ? { key: scopedSpecificKey, entry: scopedStore[scopedSpecificKey] }
               : scopedStore[specificKey]
                 ? { key: specificKey, entry: scopedStore[specificKey] }
                 : null;
             const storeByIdMatch =
-              storeBySessionId.get(keyRest) ??
-              (keyRest !== specificKey ? storeBySessionId.get(specificKey) : undefined) ??
+              storeBySessionIdentity.get(usageSessionIdentity(agentIdFromKey, keyRest)) ??
+              (keyRest !== specificKey
+                ? storeBySessionIdentity.get(usageSessionIdentity(agentIdFromKey, specificKey))
+                : undefined) ??
               null;
             const resolvedStoreKey = storeMatch?.key ?? storeByIdMatch?.key ?? scopedSpecificKey;
             const storeEntry = storeMatch?.entry ?? storeByIdMatch?.entry;
@@ -1188,95 +1175,39 @@ export const usageHandlers: GatewayRequestHandlers = {
               endMs,
             });
 
-            // Build a map of sessionId -> store entry for quick lookup
-            const storeBySessionId = buildStoreBySessionId(scopedStore);
             const storeFamilySessionIds = new Set<string>();
             if (groupingMode === "family") {
-              for (const entry of Object.values(scopedStore)) {
+              for (const [key, entry] of Object.entries(scopedStore)) {
+                const agentId = expectDefined(agentIdBySessionKey.get(key), "stored session owner");
                 for (const sessionId of entry?.usageFamilySessionIds ?? []) {
-                  storeFamilySessionIds.add(sessionId);
+                  storeFamilySessionIds.add(usageSessionIdentity(agentId, sessionId));
                 }
               }
             }
 
-            // A durable store row owns a named session's agent attribution. A
-            // subagent spawned from a session can leave discovery transcripts that
-            // reuse the parent sessionId; without owner-aware attribution the
-            // all-agent list would label the durable row with the subagent's id
-            // (issue #128755). Attribute each named row to its store owner and
-            // de-duplicate by store key so a reused discovery transcript cannot
-            // shadow or duplicate the owner row.
-            const attributedStoreKeys = new Set<string>();
             for (const discovered of discoveredSessions) {
-              const storeMatch = storeBySessionId.get(discovered.sessionId);
+              const identity = usageSessionIdentity(discovered.agentId, discovered.sessionId);
+              const storeMatch = storeBySessionIdentity.get(identity);
               if (visibilityFilter && !storeMatch) {
                 continue;
               }
               if (storeMatch) {
-                if (attributedStoreKeys.has(storeMatch.key)) {
-                  continue;
-                }
-                attributedStoreKeys.add(storeMatch.key);
-                // #128755: a durable row must be attributed to the agent that
-                // owns it, not to whichever subagent transcript discovery
-                // surfaced (all-agent discovery is newest-first, so a newer
-                // subagent transcript could otherwise relabel the row). Agent-
-                // prefixed keys carry their owner in the key; global/unknown
-                // resolve to the logical owner via the canonical resolver. The
-                // one exception is a scoped list request, where discovery is
-                // limited to the explicitly requested agent and its own global
-                // row must keep that agent.
-                const parsedKey = parseAgentSessionKey(storeMatch.key);
-                const ownerAgentId =
-                  parsedKey?.agentId || !effectiveAgentId
-                    ? resolveSessionStoreAgentId(config, storeMatch.key)
-                    : discovered.agentId;
-                // Re-resolve the owner's own transcript; falling back to the
-                // discovered file would let a reused subagent transcript shadow
-                // the owner (#128755). When the owner transcript is absent the
-                // row stays attributed to the owner with no usage (cold cache).
-                const ownerSessionFile =
-                  ownerAgentId === discovered.agentId
-                    ? discovered.sessionFile
-                    : resolveExistingUsageSessionFile({
-                        agentId: ownerAgentId,
-                        sessionId: discovered.sessionId,
-                        // #128755: bind the owner transcript to the canonical
-                        // durable target instead of storeMatch.entry.sessionFile.
-                        // A reused subagent transcript can leave a cross-agent
-                        // legacy JSONL path on the durable entry, and the legacy
-                        // resolver accepts absolute paths from other agents
-                        // (src/config/sessions/paths.ts resolveSessionFilePathCore).
-                        // Loading that file would pull the subagent's usage into
-                        // the owner's group. The complete target validates owner
-                        // identity (agent id + store key agent + store entry
-                        // sessionId) and returns the owner's canonical SQLite
-                        // marker, so a cross-agent legacy file is never used.
-                        sessionTarget: {
-                          agentId: ownerAgentId,
-                          sessionId: discovered.sessionId,
-                          sessionKey: storeMatch.key,
-                          storePath: resolveSessionStorePathForScope({
-                            agentId: ownerAgentId,
-                            sessionKey: storeMatch.key,
-                          }),
-                        },
-                      });
+                // Named session from store
                 maybeMergeFamilyEntry({
                   mergedEntries,
                   groupingMode,
                   base: {
                     key: storeMatch.key,
-                    agentId: ownerAgentId,
+                    agentId: discovered.agentId,
                     sessionId: discovered.sessionId,
-                    sessionFile: ownerSessionFile ?? "",
+                    sessionFile: discovered.sessionFile,
                     label: storeMatch.entry.label,
                     updatedAt: storeMatch.entry.updatedAt ?? discovered.mtime,
                     storeEntry: storeMatch.entry,
                   },
                 });
               } else {
-                if (groupingMode === "family" && storeFamilySessionIds.has(discovered.sessionId)) {
+                if (groupingMode === "family" && storeFamilySessionIds.has(identity)) {
                   // The current store row will load this historical transcript through included ids.
                   continue;
                 }

@@ -1,9 +1,12 @@
-// Regression coverage for #128755: the all-agent Sessions dashboard must
-// attribute durable (store-backed) session rows to their stored owning agent,
-// not to a subagent that reused the parent sessionId in discovery.
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { SessionsUsageResult } from "../../shared/usage-types.js";
+import { withEnvAsync } from "../../test-utils/env.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import { withTempDir } from "../../test-utils/temp-dir.js";
 
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: vi.fn(() => ({
@@ -12,392 +15,230 @@ vi.mock("../../config/config.js", () => ({
   })),
 }));
 
-vi.mock("../session-utils.js", async () => {
-  const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
-  return {
-    ...actual,
-    loadGatewaySessionEntryReadOnly: vi.fn(actual.loadGatewaySessionEntryReadOnly),
-    loadCombinedSessionStoreForGatewayCore: vi.fn(() => ({
-      durableTargets: [],
-      storePath: "(multiple)",
-      store: {},
-    })),
-  };
-});
+vi.mock("../session-utils.js", async () => ({
+  ...(await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js")),
+  loadCombinedSessionStoreForGatewayCore: vi.fn(),
+}));
 
-vi.mock("../../infra/session-cost-usage.js", async () => {
-  const actual = await vi.importActual<typeof import("../../infra/session-cost-usage.js")>(
+vi.mock("../../infra/session-cost-usage.js", async () => ({
+  ...(await vi.importActual<typeof import("../../infra/session-cost-usage.js")>(
     "../../infra/session-cost-usage.js",
-  );
-  return {
-    ...actual,
-    resolveExistingUsageSessionFile: vi.fn(actual.resolveExistingUsageSessionFile),
-    discoverAllSessions: vi.fn(async () => []),
-    loadSessionCostSummariesFromCache: vi.fn(async (params: { sessions: unknown[] }) => ({
-      summaries: params.sessions.map(() => ({
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        totalCost: 0,
-        inputCost: 0,
-        outputCost: 0,
-        cacheReadCost: 0,
-        cacheWriteCost: 0,
-        missingCostEntries: 0,
-      })),
-      cacheStatus: {
-        status: "fresh",
-        cachedFiles: params.sessions.length,
-        pendingFiles: 0,
-        staleFiles: 0,
-      },
-    })),
-  };
-});
+  )),
+  discoverAllSessions: vi.fn(),
+  loadSessionCostSummariesFromCache: vi.fn(),
+}));
 
+import { createEmptyCostUsageTotals } from "../../infra/session-cost-usage-totals.js";
 import {
   discoverAllSessions,
   loadSessionCostSummariesFromCache,
-  resolveExistingUsageSessionFile,
 } from "../../infra/session-cost-usage.js";
 import { loadCombinedSessionStoreForGatewayCore } from "../session-utils.js";
 import { testApi, usageHandlers } from "./usage.js";
 
-const TEST_RUNTIME_CONFIG = {
+type StoredFixture = { key: string; agentId: string; entry: SessionEntry };
+type DiscoveredFixture = { agentId: string; sessionId: string };
+
+const mainRow: StoredFixture = {
+  key: "agent:main:telegram:dm",
+  agentId: "main",
+  entry: { sessionId: "shared", updatedAt: 10, label: "Main chat" },
+};
+const opusRow: StoredFixture = {
+  key: "agent:opus:slack:dm",
+  agentId: "opus",
+  entry: { sessionId: "shared", updatedAt: 20, label: "Opus chat" },
+};
+const sharedDiscovery: DiscoveredFixture[] = [
+  { agentId: "main", sessionId: "shared" },
+  { agentId: "opus", sessionId: "shared" },
+];
+const defaultConfig: OpenClawConfig = {
   agents: { list: [{ id: "main", default: true }, { id: "opus" }] },
-  session: {},
-} as OpenClawConfig;
+};
+const explicitConfig: OpenClawConfig = {
+  agents: { ownership: "explicit", list: [{ id: "main" }, { id: "opus" }] },
+};
 
-const BASE_USAGE_RANGE = { startDate: "2026-02-01", endDate: "2026-02-02", limit: 10 } as const;
+async function queryUsage(options: {
+  rows: StoredFixture[];
+  discovered?: DiscoveredFixture[];
+  newestAgent?: string;
+  config?: OpenClawConfig;
+  params?: Record<string, unknown>;
+}): Promise<SessionsUsageResult> {
+  return await withTempDir("usage-owner-", async (stateDir) =>
+    withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const fixtureStore = {
+        durableTargets: [],
+        storePath: "(multiple)",
+        store: Object.fromEntries(options.rows.map(({ key, entry }) => [key, entry])),
+        agentIdBySessionKey: new Map(options.rows.map(({ key, agentId }) => [key, agentId])),
+      };
+      vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue(fixtureStore);
+      vi.mocked(discoverAllSessions).mockImplementation(async ({ agentId }) =>
+        (options.discovered ?? sharedDiscovery)
+          .filter((session) => session.agentId === agentId)
+          .map(({ sessionId }) => ({
+            sessionId,
+            sessionFile: path.join(stateDir, "agents", agentId, "sessions", `${sessionId}.jsonl`),
+            mtime: agentId === options.newestAgent ? 200 : 100,
+          })),
+      );
+      vi.mocked(loadSessionCostSummariesFromCache).mockImplementation(async (params) => ({
+        summaries: params.sessions.map(() => ({
+          ...createEmptyCostUsageTotals(),
+          totalTokens: params.agentId === "main" ? 10 : 100,
+          totalCost: params.agentId === "main" ? 0.01 : 0.1,
+        })),
+        cacheStatus: {
+          status: "fresh",
+          cachedFiles: params.sessions.length,
+          pendingFiles: 0,
+          staleFiles: 0,
+        },
+      }));
+      const respond = vi.fn();
+      try {
+        await expectDefined(
+          usageHandlers["sessions.usage"],
+          "sessions.usage handler",
+        )({
+          respond,
+          params: { range: "all", limit: 10, agentScope: "all", ...options.params },
+          context: { getRuntimeConfig: () => options.config ?? defaultConfig },
+        } as unknown as Parameters<(typeof usageHandlers)["sessions.usage"]>[0]);
+        expect(respond).toHaveBeenCalledTimes(1);
+        const call = expectDefined(respond.mock.calls[0], "sessions.usage response");
+        expect(call[0]).toBe(true);
+        return call[1] as SessionsUsageResult;
+      } finally {
+        await cleanupSessionStateForTest({ stateDir });
+      }
+    }),
+  );
+}
 
-async function runSessionsUsage(
-  params: Record<string, unknown>,
-  config: OpenClawConfig = TEST_RUNTIME_CONFIG,
+function expectRows(
+  result: SessionsUsageResult,
+  expected: Array<{ key: string; agentId: string; label?: string; tokens: number }>,
 ) {
-  const respond = vi.fn();
-  await expectDefined(
-    usageHandlers["sessions.usage"],
-    'usageHandlers["sessions.usage"] test invariant',
-  )({
-    respond,
-    params,
-    context: { getRuntimeConfig: () => config },
-  } as unknown as Parameters<(typeof usageHandlers)["sessions.usage"]>[0]);
-  return respond;
+  const rows = result.sessions.map(({ key, agentId, label, usage }) => ({
+    key,
+    agentId,
+    label,
+    tokens: usage?.totalTokens,
+  }));
+  expect(rows.toSorted((a, b) => a.key.localeCompare(b.key))).toEqual(
+    expected.toSorted((a, b) => a.key.localeCompare(b.key)),
+  );
+  expect(result.totals.totalTokens).toBe(expected.reduce((sum, row) => sum + row.tokens, 0));
+  for (const agentId of new Set(expected.map((row) => row.agentId))) {
+    expect(
+      result.aggregates.byAgent.find((agent) => agent.agentId === agentId)?.totals.totalTokens,
+    ).toBe(
+      expected.filter((row) => row.agentId === agentId).reduce((sum, row) => sum + row.tokens, 0),
+    );
+  }
 }
 
-function expectSuccessfulSessionsUsage(
-  respond: ReturnType<typeof vi.fn>,
-): Array<{ key: string; agentId: string }> {
-  expect(respond).toHaveBeenCalledTimes(1);
-  const call = expectDefined(respond.mock.calls[0], "sessions.usage respond call");
-  expect(call[0]).toBe(true);
-  const result = expectDefined(call[1], "sessions.usage result") as {
-    sessions: Array<{ key: string; agentId: string }>;
-  };
-  return result.sessions;
-}
-
-const STORE_KEY = "agent:main:telegram:dm";
-const SESSION_ID = "tg-dm-session";
-
-describe("sessions.usage owner attribution (#128755)", () => {
+describe("sessions.usage owner attribution", () => {
   beforeEach(() => {
     testApi.sessionsUsageCache.clear();
     vi.clearAllMocks();
   });
 
-  it("attributes a named session to its store owner when a subagent reuses its sessionId", async () => {
-    // After spawning a subagent from a Telegram DM session, the all-agent
-    // Sessions dashboard labeled the durable row with the subagent's id instead
-    // of the owning agent. Discovery surfaces both the owner transcript and the
-    // reused subagent transcript under the same sessionId; the durable store row
-    // must win attribution.
-    vi.mocked(discoverAllSessions)
-      .mockResolvedValueOnce([
-        {
-          sessionId: SESSION_ID,
-          sessionFile: `/tmp/agents/main/sessions/${SESSION_ID}.jsonl`,
-          mtime: 100,
-        },
-      ])
-      .mockResolvedValueOnce([
-        {
-          sessionId: SESSION_ID,
-          sessionFile: `/tmp/agents/opus/sessions/${SESSION_ID}.jsonl`,
-          mtime: 200,
-        },
+  it.each(["main", "opus"])(
+    "retains independent same-id transcripts when %s discovery is newest",
+    async (newestAgent) => {
+      const result = await queryUsage({ rows: [mainRow], newestAgent });
+      expectRows(result, [
+        { key: mainRow.key, agentId: "main", label: "Main chat", tokens: 10 },
+        { key: "agent:opus:shared", agentId: "opus", label: undefined, tokens: 100 },
       ]);
-    vi.mocked(resolveExistingUsageSessionFile).mockImplementationOnce(
-      (params) =>
-        `sqlite:${params.agentId}:${params.sessionId}:/tmp/agents/${params.agentId}/openclaw-agent.sqlite`,
-    );
-    vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
-      durableTargets: [],
-      storePath: "(multiple)",
-      store: {
-        [STORE_KEY]: {
-          sessionId: SESSION_ID,
-          sessionFile: `${SESSION_ID}.jsonl`,
-          label: "Telegram DM",
-          updatedAt: 1_500,
-        },
-      },
-    });
+    },
+  );
 
-    const respond = await runSessionsUsage({ ...BASE_USAGE_RANGE, agentScope: "all" });
-    const sessions = expectSuccessfulSessionsUsage(respond);
-    // The reused subagent transcript must not duplicate or shadow the owner row.
-    expect(sessions).toHaveLength(1);
-    expect(sessions[0]?.key).toBe(STORE_KEY);
-    expect(sessions[0]?.agentId).toBe("main");
-    // Usage must be loaded under the owner agent, not the spawned subagent.
-    expect(vi.mocked(loadSessionCostSummariesFromCache)).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "main",
-        sessions: expect.arrayContaining([
-          expect.objectContaining({
-            sessionId: SESSION_ID,
-            sessionFile: expect.stringContaining("sqlite:main:"),
-          }),
-        ]),
-      }),
-    );
-    // The subagent transcript reuse must not produce an opus-attributed load.
-    expect(
-      vi
-        .mocked(loadSessionCostSummariesFromCache)
-        .mock.calls.some((call) => call[0]?.agentId === "opus"),
-    ).toBe(false);
-  });
-
-  it("does not fall back to a subagent transcript when the owner transcript is absent", async () => {
-    // Cross-agent fallback finding on #128755: when owner transcript resolution
-    // returns no file, the durable row stays attributed to the owner with no
-    // usage rather than load the subagent's reused transcript under another agent.
-    vi.mocked(discoverAllSessions)
-      .mockResolvedValueOnce([
-        {
-          sessionId: SESSION_ID,
-          sessionFile: `/tmp/agents/main/sessions/${SESSION_ID}.jsonl`,
-          mtime: 100,
-        },
-      ])
-      .mockResolvedValueOnce([
-        {
-          sessionId: SESSION_ID,
-          sessionFile: `/tmp/agents/opus/sessions/${SESSION_ID}.jsonl`,
-          mtime: 200,
-        },
+  it.each(["main", "opus"])(
+    "keeps both durable owners sharing an id when %s discovery is newest",
+    async (newestAgent) => {
+      const result = await queryUsage({ rows: [mainRow, opusRow], newestAgent });
+      expectRows(result, [
+        { key: mainRow.key, agentId: "main", label: "Main chat", tokens: 10 },
+        { key: opusRow.key, agentId: "opus", label: "Opus chat", tokens: 100 },
       ]);
-    // Owner transcript cannot be resolved (cold/stale cache).
-    vi.mocked(resolveExistingUsageSessionFile).mockImplementationOnce(() => undefined);
-    vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
-      durableTargets: [],
-      storePath: "(multiple)",
-      store: {
-        [STORE_KEY]: {
-          sessionId: SESSION_ID,
-          sessionFile: `${SESSION_ID}.jsonl`,
-          label: "Telegram DM",
-          updatedAt: 1_500,
-        },
-      },
-    });
+    },
+  );
 
-    const respond = await runSessionsUsage({ ...BASE_USAGE_RANGE, agentScope: "all" });
-    const sessions = expectSuccessfulSessionsUsage(respond);
-    expect(sessions).toHaveLength(1);
-    expect(sessions[0]?.key).toBe(STORE_KEY);
-    expect(sessions[0]?.agentId).toBe("main");
-    // No transcript is loaded for any agent: the owner file is absent and the
-    // subagent's reused transcript must not be substituted.
-    expect(vi.mocked(loadSessionCostSummariesFromCache)).not.toHaveBeenCalled();
-  });
-
-  it("ignores a store entry marker whose agent differs from the resolved owner", async () => {
-    // Regression for the marker-ownership finding on #128755: a store entry
-    // marker reusing the sessionId under a different agent must not be
-    // substituted for the owner's transcript.
-    const opusMarker = `sqlite:opus:${SESSION_ID}:/tmp/agents/opus/openclaw-agent.sqlite`;
-    vi.mocked(discoverAllSessions)
-      .mockResolvedValueOnce([
+  it("keeps canonical alias selection within a single owner", async () => {
+    const result = await queryUsage({
+      rows: [
+        mainRow,
         {
-          sessionId: SESSION_ID,
-          sessionFile: `/tmp/agents/main/sessions/${SESSION_ID}.jsonl`,
-          mtime: 100,
+          ...mainRow,
+          key: "agent:main:shared",
+          entry: { ...mainRow.entry, updatedAt: 1, label: "Canonical main" },
         },
-      ])
-      .mockResolvedValueOnce([
-        {
-          sessionId: SESSION_ID,
-          sessionFile: `/tmp/agents/opus/sessions/${SESSION_ID}.jsonl`,
-          mtime: 200,
-        },
-      ]);
-    // The store entry carries an opus marker reusing this sessionId. The
-    // resolver now validates the entry marker's agentId against the requested
-    // owner internally (collection.ts), so an opus marker is ignored and the
-    // owner (main) file is returned instead.
-    vi.mocked(resolveExistingUsageSessionFile).mockImplementationOnce((params) =>
-      params.agentId === "main"
-        ? `sqlite:main:${params.sessionId}:/tmp/agents/main/openclaw-agent.sqlite`
-        : opusMarker,
-    );
-    vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
-      durableTargets: [],
-      storePath: "(multiple)",
-      store: {
-        [STORE_KEY]: {
-          sessionId: SESSION_ID,
-          sessionFile: opusMarker,
-          label: "Telegram DM",
-          updatedAt: 1_500,
-        },
-      },
+      ],
+      discovered: [{ agentId: "main", sessionId: "shared" }],
     });
-
-    const respond = await runSessionsUsage({ ...BASE_USAGE_RANGE, agentScope: "all" });
-    const sessions = expectSuccessfulSessionsUsage(respond);
-    expect(sessions).toHaveLength(1);
-    expect(sessions[0]?.key).toBe(STORE_KEY);
-    expect(sessions[0]?.agentId).toBe("main");
-    // The opus marker must not be substituted: usage loads under main with a
-    // main-owned session file.
-    expect(vi.mocked(loadSessionCostSummariesFromCache)).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "main",
-        sessions: expect.arrayContaining([
-          expect.objectContaining({
-            sessionId: SESSION_ID,
-            sessionFile: expect.stringContaining("sqlite:main:"),
-          }),
-        ]),
-      }),
-    );
-    expect(
-      vi
-        .mocked(loadSessionCostSummariesFromCache)
-        .mock.calls.some((call) => call[0]?.agentId === "opus"),
-    ).toBe(false);
-  });
-
-  it("keeps the requested agent for a scoped global session list row (#128755)", async () => {
-    // Regression for the scoped-global list path the all-agent owner rule would
-    // otherwise regress: a no-key request scoped to `agentId: "opus"` retains
-    // the `global` store row (config.session.scope === "global"), and discovery
-    // is limited to the requested agent. The durable-owner resolution must not
-    // rewrite that row to the logical/default agent; the row stays attributed
-    // to the explicitly requested agent (opus), matching pre-fix behavior.
-    const GLOBAL_CONFIG = {
-      agents: { list: [{ id: "main", default: true }, { id: "opus" }] },
-      session: { scope: "global" },
-    } as OpenClawConfig;
-    vi.mocked(discoverAllSessions).mockResolvedValueOnce([
-      {
-        sessionId: SESSION_ID,
-        sessionFile: `/tmp/agents/opus/sessions/${SESSION_ID}.jsonl`,
-        mtime: 300,
-      },
+    expectRows(result, [
+      { key: "agent:main:shared", agentId: "main", label: "Canonical main", tokens: 10 },
     ]);
-    vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
-      durableTargets: [],
-      storePath: "(multiple)",
-      store: {
-        global: {
-          sessionId: SESSION_ID,
-          sessionFile: `${SESSION_ID}.jsonl`,
-          label: "Opus global",
-          updatedAt: 1_500,
-        },
-      },
-    });
-
-    const respond = await runSessionsUsage({ ...BASE_USAGE_RANGE, agentId: "opus" }, GLOBAL_CONFIG);
-    const sessions = expectSuccessfulSessionsUsage(respond);
-    expect(sessions).toHaveLength(1);
-    expect(sessions[0]?.key).toBe("global");
-    // The requested agent is preserved; the row is not relabeled to main.
-    expect(sessions[0]?.agentId).toBe("opus");
-    // global rows carry no owning agent, so the discovered (request-scoped)
-    // transcript file is used as-is rather than re-resolved under another agent.
-    expect(vi.mocked(loadSessionCostSummariesFromCache)).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "opus",
-        sessions: expect.arrayContaining([
-          expect.objectContaining({
-            sessionId: SESSION_ID,
-            sessionFile: `/tmp/agents/opus/sessions/${SESSION_ID}.jsonl`,
-          }),
-        ]),
-      }),
-    );
-    expect(
-      vi
-        .mocked(loadSessionCostSummariesFromCache)
-        .mock.calls.some((call) => call[0]?.agentId === "main"),
-    ).toBe(false);
   });
 
-  it("resolves a global durable row to its logical owner in all-agent lists (#128755)", async () => {
-    // All-agent discovery is newest-first: a subagent transcript that reuses a
-    // global durable row's sessionId must not relabel that row. The row resolves
-    // to its logical owner (the default agent) instead of the newer subagent.
-    vi.mocked(discoverAllSessions)
-      .mockResolvedValueOnce([
-        {
-          sessionId: SESSION_ID,
-          sessionFile: `/tmp/agents/main/sessions/${SESSION_ID}.jsonl`,
-          mtime: 100,
-        },
-      ])
-      .mockResolvedValueOnce([
-        {
-          sessionId: SESSION_ID,
-          sessionFile: `/tmp/agents/opus/sessions/${SESSION_ID}.jsonl`,
-          mtime: 200,
-        },
-      ]);
-    vi.mocked(resolveExistingUsageSessionFile).mockImplementationOnce(
-      (params) =>
-        `sqlite:${params.agentId}:${params.sessionId}:/tmp/agents/${params.agentId}/openclaw-agent.sqlite`,
-    );
-    vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
-      durableTargets: [],
-      storePath: "(multiple)",
-      store: {
-        global: {
-          sessionId: SESSION_ID,
-          sessionFile: `${SESSION_ID}.jsonl`,
-          label: "Global session",
-          updatedAt: 1_500,
-        },
-      },
+  it("does not substitute another agent's transcript for an absent owner transcript", async () => {
+    const result = await queryUsage({
+      rows: [mainRow],
+      discovered: [{ agentId: "opus", sessionId: "shared" }],
     });
+    expectRows(result, [
+      { key: "agent:opus:shared", agentId: "opus", label: undefined, tokens: 100 },
+    ]);
+  });
 
-    const respond = await runSessionsUsage({ ...BASE_USAGE_RANGE, agentScope: "all" });
-    const sessions = expectSuccessfulSessionsUsage(respond);
-    expect(sessions).toHaveLength(1);
-    expect(sessions[0]?.key).toBe("global");
-    // The logical owner wins over the newer subagent discovery transcript.
-    expect(sessions[0]?.agentId).toBe("main");
-    expect(vi.mocked(loadSessionCostSummariesFromCache)).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "main",
-        sessions: expect.arrayContaining([
-          expect.objectContaining({
-            sessionId: SESSION_ID,
-            sessionFile: expect.stringContaining("sqlite:main:"),
-          }),
-        ]),
-      }),
-    );
+  it.each([
+    { name: "nondefault global owner", key: "global", config: defaultConfig },
+    { name: "global owner without a default", key: "global", config: explicitConfig },
+    { name: "unknown owner without a default", key: "unknown", config: explicitConfig },
+  ])("uses the projected source owner for $name", async ({ key, config }) => {
+    const result = await queryUsage({
+      rows: [{ ...opusRow, key }],
+      newestAgent: "main",
+      config,
+    });
+    expectRows(result, [
+      { key: "agent:main:shared", agentId: "main", label: undefined, tokens: 10 },
+      { key, agentId: "opus", label: "Opus chat", tokens: 100 },
+    ]);
+  });
+
+  it("keeps the explicitly requested global owner without an ambient default", async () => {
+    const result = await queryUsage({
+      rows: [{ ...opusRow, key: "global" }],
+      config: explicitConfig,
+      params: { agentScope: undefined, agentId: "opus" },
+    });
+    expectRows(result, [{ key: "global", agentId: "opus", label: "Opus chat", tokens: 100 }]);
+  });
+
+  it("suppresses historical instances only within their owner's family", async () => {
+    const result = await queryUsage({
+      rows: [
+        {
+          ...mainRow,
+          entry: { ...mainRow.entry, sessionId: "current", usageFamilySessionIds: ["shared"] },
+        },
+      ],
+      discovered: [{ agentId: "main", sessionId: "current" }, ...sharedDiscovery],
+      params: { groupBy: "family" },
+    });
+    expectRows(result, [
+      { key: mainRow.key, agentId: "main", label: "Main chat", tokens: 20 },
+      { key: "agent:opus:shared", agentId: "opus", label: undefined, tokens: 100 },
+    ]);
     expect(
-      vi
-        .mocked(loadSessionCostSummariesFromCache)
-        .mock.calls.some((call) => call[0]?.agentId === "opus"),
-    ).toBe(false);
+      result.sessions.find((session) => session.key === mainRow.key)?.includedSessionIds,
+    ).toEqual(["current", "shared"]);
   });
 });

@@ -270,100 +270,20 @@ describe("session cost usage", () => {
     });
   });
 
-  it("ignores an entry marker whose agent differs from the requested agent (#128755)", async () => {
-    // A subagent spawned from a session can leave a store entry whose
-    // `sessionFile` marker reuses the parent sessionId under a different
-    // agent. The resolver must not substitute that marker for the requested
-    // owner; it is dropped and resolution falls back instead of mis-attributing.
-    const root = await makeSessionCostRoot("entry-marker-agent-mismatch");
-    const sessionId = "mismatch-session";
-    const opusMarker = `sqlite:opus:${sessionId}:${path.join(root, "agents", "opus", "sessions", "sessions.json")}`;
-
+  it.each(["main", "opus"])("validates the owner of a legacy %s entry marker", async (agentId) => {
+    const root = await makeSessionCostRoot("entry-marker-owner");
+    const sessionId = "shared";
+    const marker = `sqlite:${agentId}:${sessionId}:${path.join(root, "agents", agentId, "sessions", "sessions.json")}`;
     await withStateDir(root, async () => {
       expect(
         resolveExistingUsageSessionFile({
           agentId: "main",
-          sessionEntry: {
-            sessionFile: opusMarker,
-            sessionId,
-            updatedAt: 1,
-          } as SessionEntry & { sessionFile: string },
           sessionId,
-        }),
-      ).toBeUndefined();
-    });
-  });
-
-  it("keeps an entry marker whose agent matches the requested agent (#128755)", async () => {
-    // Positive counterpart to the mismatch case: when the store entry's
-    // `sessionFile` marker is owned by the requested agent, it is used as-is
-    // and not dropped by the new agent-equality guard.
-    const root = await makeSessionCostRoot("entry-marker-agent-match");
-    const sessionId = "match-session";
-    const mainMarker = `sqlite:main:${sessionId}:${path.join(root, "agents", "main", "sessions", "sessions.json")}`;
-
-    await withStateDir(root, async () => {
-      expect(
-        resolveExistingUsageSessionFile({
-          agentId: "main",
-          sessionEntry: {
-            sessionFile: mainMarker,
-            sessionId,
-            updatedAt: 1,
-          } as SessionEntry & { sessionFile: string },
-          sessionId,
-        }),
-      ).toBe(mainMarker);
-    });
-  });
-
-  it("binds the resolved transcript to the durable owner target and ignores a cross-agent legacy file (#128755)", async () => {
-    // A reused subagent transcript can leave a cross-agent legacy JSONL path on
-    // the durable owner's store entry. resolveSessionFilePathCore accepts such
-    // absolute paths (src/config/sessions/paths.ts), so loading via the entry
-    // would pull the subagent's usage into the owner's group. A complete owner
-    // sessionTarget is authoritative: it validates owner identity and returns
-    // the owner's canonical SQLite marker, never consulting the cross-agent
-    // legacy file even when it exists on disk.
-    const root = await makeSessionCostRoot("owner-target-rejects-cross-agent-legacy");
-    const storePath = path.join(root, "agents", "main", "sessions", "sessions.json");
-    const sessionId = "owner-target-session";
-    const opusTranscript = path.join(root, "agents", "opus", "sessions", `${sessionId}.jsonl`);
-    const sessionTarget = {
-      agentId: "main",
-      sessionId,
-      sessionKey: "agent:main:owner-target",
-      storePath,
-    };
-
-    await withStateDir(root, async () => {
-      await fs.mkdir(path.dirname(opusTranscript), { recursive: true });
-      await fs.writeFile(
-        opusTranscript,
-        transcriptText(sessionId, {
-          type: "message",
-          timestamp: "2026-08-26T00:00:00.000Z",
-          message: {
-            role: "assistant",
-            usage: { input: 7, output: 7, totalTokens: 14, cost: { total: 0.07 } },
+          sessionEntry: { sessionId, updatedAt: 1, sessionFile: marker } as SessionEntry & {
+            sessionFile: string;
           },
         }),
-        "utf-8",
-      );
-      // The owner's durable row carries the subagent's legacy transcript path.
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: sessionTarget.sessionKey, storePath },
-        { sessionId, sessionFile: opusTranscript, updatedAt: 1 },
-      );
-
-      const resolved = resolveExistingUsageSessionFile({
-        agentId: "main",
-        sessionId,
-        sessionTarget,
-      });
-      // The canonical owner marker wins; the cross-agent opus file is never used.
-      expect(resolved).toContain("sqlite:main:");
-      expect(resolved).not.toContain("opus");
+      ).toBe(agentId === "main" ? marker : undefined);
     });
   });
 
@@ -1128,23 +1048,18 @@ describe("session cost usage", () => {
 
     await withStateDir(root, async () => {
       const session = { sessionId: "sess-batch-range", sessionFile };
-      await loadSessionCostSummariesFromCache({ sessions: [session], agentId: "main" });
+      await refreshSessionCostUsageForTest(sessionFile);
       const rangeEndMs = Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1;
-      await waitForFast(
-        async () => {
-          const ranged = await loadSessionCostSummariesFromCache({
-            sessions: [session],
-            agentId: "main",
-            startMs: Date.UTC(2026, 1, 5),
-            endMs: rangeEndMs,
-            requestRefresh: false,
-          });
-          expect(ranged.cacheStatus.status).toBe("fresh");
-          expect(ranged.summaries[0]?.totalTokens).toBe(20);
-          expect(ranged.summaries[0]?.modelUsage?.map((entry) => entry.model)).toEqual(["gpt-5.5"]);
-        },
-        { interval: 10, timeout: 2_000 },
-      );
+      const ranged = await loadSessionCostSummariesFromCache({
+        sessions: [session],
+        agentId: "main",
+        startMs: Date.UTC(2026, 1, 5),
+        endMs: rangeEndMs,
+        requestRefresh: false,
+      });
+      expect(ranged.cacheStatus.status).toBe("fresh");
+      expect(ranged.summaries[0]?.totalTokens).toBe(20);
+      expect(ranged.summaries[0]?.modelUsage?.map((entry) => entry.model)).toEqual(["gpt-5.5"]);
 
       const cachedEntry = readSessionCostUsageRollupRows("main").find(
         (row) => row.key === sessionFile,

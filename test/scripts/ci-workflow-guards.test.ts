@@ -993,10 +993,7 @@ function runGit(cwd: string, args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 }
 
-function runPushDiffBaseFixture(options: {
-  commitCount: 1 | 2 | 3;
-  eventBaseSha: string | "parent";
-}) {
+function runPushDiffBaseFixture(options: { commitCount: 1 | 2 | 3; eventBaseSha: string }) {
   const root = tempDirs.make("openclaw-ci-diff-base-");
   runGit(root, ["init", "-q", "-b", "main"]);
   runGit(root, ["config", "commit.gpgsign", "false"]);
@@ -4114,9 +4111,9 @@ NODE
     }
     expect(rubySetups.length).toBeGreaterThan(0);
     for (const { file, step } of rubySetups) {
-      const bundlerCache = String(step.with?.["bundler-cache"] ?? "false");
-      expect(["false", "true"], `${file}: ${step.name}`).toContain(bundlerCache);
-      if (bundlerCache === "true") {
+      const bundlerCache = step.with?.["bundler-cache"] ?? false;
+      expect([false, true, "false", "true"], `${file}: ${step.name}`).toContain(bundlerCache);
+      if (bundlerCache === true || bundlerCache === "true") {
         expect(String(step.if), `${file}: ${step.name}`).toContain("cache_write_allowed == 'true'");
       }
     }
@@ -4497,11 +4494,11 @@ server.listen(0, "127.0.0.1", () => {
           }),
         );
         writeFileSync(path.join(workspace, "pnpm-workspace.yaml"), "packages:\n  - packages/*\n");
-        const writeConsumerManifest = (version: string) =>
+        const writeConsumerManifest = (dependencyVersion: string) =>
           writeFileSync(
             path.join(consumer, "package.json"),
             JSON.stringify({
-              dependencies: { "cache-proof-dep": version },
+              dependencies: { "cache-proof-dep": dependencyVersion },
               name: "cache-proof-consumer",
               private: true,
             }),
@@ -7237,7 +7234,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         Object.entries(manifest.outputs)
           .filter(([key, value]) => key.startsWith("run_") && value === "true")
           .map(([key]) => key)
-          .sort(),
+          .toSorted(),
       ).toEqual([
         "run_checks_fast_core",
         "run_format_check",

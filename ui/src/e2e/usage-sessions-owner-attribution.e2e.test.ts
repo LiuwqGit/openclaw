@@ -1,10 +1,3 @@
-// Real-behavior dashboard proof for #128755: a real token-free loopback Gateway
-// serves an isolated on-disk session store where `main` owns the durable named
-// row `agent:main:telegram:dm` and an `opus` subagent transcript reuses the same
-// sessionId (discovery-only). A real Chromium browser opens the Sessions usage
-// dashboard against that Gateway and the Telegram DM card must be attributed to
-// `main`, never to the reused `opus` subagent. A redacted screenshot is captured
-// when OPENCLAW_CAPTURE_UI_PROOF=1 so the UI-visible outcome is demonstrable.
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
@@ -45,7 +38,7 @@ async function capture(page: Page, name: string) {
 }
 
 suite.define(() => {
-  it("attributes the Telegram DM session card to its store owner when a subagent reuses its sessionId (#128755)", async () => {
+  it("attributes the Telegram DM session card to its store owner when another agent has the same sessionId", async () => {
     const port = await getFreePort();
     const state = await createOpenClawTestState({
       label: "usage-sessions-owner-attribution",
@@ -107,7 +100,7 @@ suite.define(() => {
         sessionKey: PROOF_STORE_KEY,
         storePath: mainStorePath,
       });
-      // opus subagent reuses the parent sessionId (discovery-only, no store row).
+      // Independent agent transcripts retain their own usage even when ids match.
       await seedLinearSessionTranscript({
         agentId: "opus",
         contents: ["subagent turn"],
@@ -150,12 +143,12 @@ suite.define(() => {
           await expect
             .poll(async () => (await meta.textContent()) ?? "")
             .not.toContain("agent:opus");
-          // No duplicate/shadow row attributed to opus.
+          const otherRow = page.locator(`.session-bar-row[title="agent:opus:${PROOF_SESSION_ID}"]`);
+          await expect.poll(() => otherRow.count()).toBe(1);
           await expect
-            .poll(() =>
-              page.locator(`.session-bar-row[title="agent:opus:${PROOF_SESSION_ID}"]`).count(),
-            )
-            .toBe(0);
+            .poll(() => otherRow.locator(".session-bar-meta").textContent())
+            .toContain("agent:opus");
+          await expect.poll(() => page.locator(".session-bar-row").count()).toBe(2);
 
           await capture(page, "01-telegram-dm-owner-attribution-main.png");
           expect(pageErrors).toEqual([]);
