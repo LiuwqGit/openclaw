@@ -76,22 +76,22 @@ describeComposerUndoRedo("chat composer native undo/redo", () => {
     await textarea.type(TYPED_TEXT);
     expect(await textarea.inputValue()).toBe(TYPED_TEXT);
 
-    await page!.keyboard.press("Control+a");
+    await page!.keyboard.press("ControlOrMeta+a");
     await page!.keyboard.press("Backspace");
     expect(await textarea.inputValue()).toBe("");
 
-    await page!.keyboard.press("Control+z");
+    await page!.keyboard.press("ControlOrMeta+z");
     expect(await textarea.inputValue()).toBe(TYPED_TEXT);
 
     // Redo must re-apply the deletion, exactly like a native textarea.
-    await page!.keyboard.press("Control+Shift+z");
+    await page!.keyboard.press("ControlOrMeta+Shift+z");
     expect(await textarea.inputValue()).toBe("");
   });
 
   it("does not re-apply the textarea value after native input", async () => {
     const textarea = page!.locator(COMPOSER_TEXTAREA);
     await textarea.click();
-    await page!.keyboard.press("Control+a");
+    await page!.keyboard.press("ControlOrMeta+a");
     await page!.keyboard.press("Backspace");
     await page!.waitForTimeout(100);
 
@@ -107,10 +107,10 @@ describeComposerUndoRedo("chat composer native undo/redo", () => {
 
     // Native undo/redo must likewise complete without any value write-back.
     const beforeUndo = await valueWriteCount();
-    await page!.keyboard.press("Control+a");
+    await page!.keyboard.press("ControlOrMeta+a");
     await page!.keyboard.press("Backspace");
-    await page!.keyboard.press("Control+z");
-    await page!.keyboard.press("Control+Shift+z");
+    await page!.keyboard.press("ControlOrMeta+z");
+    await page!.keyboard.press("ControlOrMeta+Shift+z");
     await page!.waitForTimeout(100);
     expect(await textarea.inputValue()).toBe("");
     expect((await valueWriteCount()) - beforeUndo).toBe(0);

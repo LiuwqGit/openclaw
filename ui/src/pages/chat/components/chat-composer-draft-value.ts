@@ -10,6 +10,7 @@
 // native undo, and uncommitted local input all survive rerenders untouched.
 import { noChange, type PropertyPart } from "lit";
 import { Directive, PartType, directive, type PartInfo } from "lit/directive.js";
+import { setCommittedValue } from "lit/directive-helpers.js";
 
 class ComposerDraftValueDirective extends Directive {
   private committed: string | undefined;
@@ -35,6 +36,9 @@ class ComposerDraftValueDirective extends Directive {
     if (!changed || element.value === value) {
       return noChange;
     }
+    // `noChange` deliberately leaves Lit's outer property cache stale while the
+    // DOM advances natively. Reset it before a real host write so repeated values commit.
+    setCommittedValue(part);
     return value;
   }
 }

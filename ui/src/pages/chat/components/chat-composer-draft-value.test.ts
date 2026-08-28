@@ -81,4 +81,24 @@ describe("composerDraftValue", () => {
     expect(textarea.valueWriteSpy).toHaveBeenCalledTimes(1);
     container.remove();
   });
+
+  it("replaces local input when the host returns to Lit's last committed value", () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    renderDraft(container, "");
+    const textarea = instrument(container.querySelector("textarea")!);
+
+    renderDraft(container, "history recall");
+    expect(textarea.valueWriteSpy).toHaveBeenCalledTimes(1);
+    textarea.valueWriteSpy.mockClear();
+
+    nativeValueDescriptor.set.call(textarea, "local edit");
+    renderDraft(container, "local edit");
+    expect(textarea.valueWriteSpy).not.toHaveBeenCalled();
+
+    renderDraft(container, "history recall");
+    expect(textarea.value).toBe("history recall");
+    expect(textarea.valueWriteSpy).toHaveBeenCalledTimes(1);
+    container.remove();
+  });
 });
