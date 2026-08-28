@@ -7,7 +7,7 @@ import { resolveCronRunErrorReason } from "../run-error-reason.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { computeNextRunAtMs } from "../schedule.js";
 import type { CronJob, CronRunStatus } from "../types.js";
-import { maybeAutoDisableCronJobAfterRunFailure } from "./auto-disable.js";
+import { autoDisableCronJob, maybeAutoDisableCronJobAfterRunFailure } from "./auto-disable.js";
 import {
   finalizeCronFailureNotifications,
   maybeEmitFailureAlert,
@@ -253,8 +253,23 @@ export function applyJobResult(
             );
           }
         } else {
-          job.enabled = false;
-          job.state.nextRunAtMs = undefined;
+          // Terminal disable: route through the canonical auto-disable owner so
+          // the durable reason state and post-persist recovery notification are
+          // recorded (#131490); fall back to a plain disable for owners that
+          // autoDisableCronJob declines (e.g. system-owned payloads).
+          if (
+            !autoDisableCronJob({
+              state,
+              job,
+              reason: "consecutive-failures",
+              atMs: result.endedAt,
+              consecutiveErrors: retryDecision.consecutiveSkipped,
+              deferredNotifications: opts?.deferredNotifications,
+            })
+          ) {
+            job.enabled = false;
+            job.state.nextRunAtMs = undefined;
+          }
           state.deps.log.warn(
             {
               jobId: job.id,
@@ -305,8 +320,25 @@ export function applyJobResult(
           // Note: deleteAfterRun:true only triggers on ok (see shouldDelete above),
           // so exhausted-retry jobs are disabled but intentionally kept in the store
           // to preserve the error state for inspection.
-          job.enabled = false;
-          job.state.nextRunAtMs = undefined;
+          // Route through the canonical auto-disable owner so the durable reason
+          // state and post-persist recovery notification are recorded (#131490);
+          // fall back to a plain disable for owners that autoDisableCronJob
+          // declines (e.g. system-owned payloads).
+          if (
+            autoDisableCronJob({
+              state,
+              job,
+              reason: "consecutive-failures",
+              atMs: result.endedAt,
+              consecutiveErrors: retryDecision.consecutiveErrors,
+              deferredNotifications: opts?.deferredNotifications,
+            })
+          ) {
+            autoDisableNotificationOwnsFailure = true;
+          } else {
+            job.enabled = false;
+            job.state.nextRunAtMs = undefined;
+          }
           state.deps.log.warn(
             {
               jobId: job.id,

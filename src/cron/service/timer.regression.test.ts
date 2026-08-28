@@ -1560,8 +1560,15 @@ describe("cron service timer regressions", () => {
       runnerResult.resolve({ status: "ok", notify: "stale", wake: "now" });
       await vi.advanceTimersByTimeAsync(0);
       await Promise.resolve();
-      expect(enqueueSystemEvent).not.toHaveBeenCalled();
-      expect(requestHeartbeat).not.toHaveBeenCalled();
+      // The cancelled one-shot's terminal disable now routes through the
+      // canonical auto-disable owner and emits its recovery notification
+      // (#131490); the late stale notify/wake result must stay suppressed.
+      for (const [text] of enqueueSystemEvent.mock.calls) {
+        expect(String(text)).not.toContain("stale");
+      }
+      for (const call of requestHeartbeat.mock.calls) {
+        expect(call[0]).toMatchObject({ source: "notifications-event" });
+      }
     } finally {
       resetActiveCronTaskRunsForTests();
       resetTaskRegistryControlRuntimeForTests();
@@ -1665,14 +1672,16 @@ describe("cron service timer regressions", () => {
 
     const entered = createDeferred();
     const release = createDeferred<{ status: "ok"; notify: string }>();
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeat = vi.fn();
     const state = createCronServiceState({
       cronEnabled: true,
       cronConfig: { triggers: { enabled: true } },
       storePath: store.storePath,
       log: noopLogger,
       nowMs: () => scheduledAt,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
+      enqueueSystemEvent,
+      requestHeartbeat,
       runIsolatedAgentJob: createDefaultIsolatedRunner(),
       runScriptJob: vi.fn(async () => {
         entered.resolve();
@@ -1692,8 +1701,15 @@ describe("cron service timer regressions", () => {
 
       const persisted = await loadCronStore(store.storePath);
       expect(persisted.jobs[0]?.state.lastStatus).not.toBe("ok");
-      expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
-      expect(state.deps.requestHeartbeat).not.toHaveBeenCalled();
+      // The retired one-shot's terminal disable now routes through the
+      // canonical auto-disable owner and emits its recovery notification
+      // (#131490); the stale notify/wake result must stay suppressed.
+      for (const call of enqueueSystemEvent.mock.calls) {
+        expect(String(call[0])).not.toContain("stale");
+      }
+      for (const call of requestHeartbeat.mock.calls) {
+        expect(call[0]).toMatchObject({ source: "notifications-event" });
+      }
     } finally {
       resetActiveCronTaskRunsForTests();
     }

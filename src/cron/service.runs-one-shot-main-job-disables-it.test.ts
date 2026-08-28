@@ -619,10 +619,25 @@ describe("CronService", () => {
       await cron.run(job.id, "force");
 
       expect(runHeartbeatOnce).toHaveBeenCalledOnce();
-      expect(requestHeartbeat).not.toHaveBeenCalled();
+      // The past-due one-shot terminal error now routes through the canonical
+      // auto-disable owner, whose recovery notification requests one heartbeat
+      // wake (#131490); nothing else may request a heartbeat.
+      await vi.waitFor(() => expect(requestHeartbeat).toHaveBeenCalledTimes(1));
+      expect(requestHeartbeat).toHaveBeenCalledWith(
+        expect.objectContaining({ source: "notifications-event" }),
+      );
       const sessionKeys = getPostedSystemEventSessionKeys(enqueueSystemEvent);
-      expect(sessionKeys).toHaveLength(1);
-      expectNoQueuedEvents(sessionKeys);
+      // The failed run's queued payload event must be removed from the queue;
+      // the auto-disable recovery notification (#131490) is queued for the
+      // next heartbeat drain and is not part of this test's cleanup contract.
+      const payloadCall = enqueueSystemEvent.mock.calls.find(([text]) => text === "hello");
+      expect(payloadCall).toBeDefined();
+      expect(
+        peekSystemEventEntries(resolveHarnessSessionKey(payloadCall?.[1])).map(
+          (event) => event.text,
+        ),
+      ).not.toContain("hello");
+      expect(sessionKeys.length).toBeGreaterThanOrEqual(1);
       const updated = (await cron.list({ includeDisabled: true })).find(
         (candidate) => candidate.id === job.id,
       );
@@ -809,7 +824,7 @@ describe("CronService", () => {
       summary: "last output",
       error: "boom",
     }));
-    const { store, cron, enqueueSystemEvent, requestHeartbeat, events } =
+    const { store, cron, enqueueSystemEvent, events } =
       await createIsolatedAnnounceHarness(runIsolatedAgentJob);
     await runIsolatedAnnounceJobAndWait({
       cron,
@@ -818,8 +833,20 @@ describe("CronService", () => {
       status: "error",
     });
 
-    expect(enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(requestHeartbeat).not.toHaveBeenCalled();
+    // The failed run must not surface as a fallback summary, but the terminal
+    // disable now routes through the canonical auto-disable owner and emits
+    // its recovery notification to the owning session (#131490).
+    await vi.waitFor(() => {
+      expect(
+        enqueueSystemEvent.mock.calls.some(
+          ([text]) => typeof text === "string" && text.includes("auto-disabled"),
+        ),
+      ).toBe(true);
+    });
+    for (const [text] of enqueueSystemEvent.mock.calls) {
+      expect(text).not.toBe("last output");
+    }
+
     await stopCronAndCleanup(cron, store);
   });
 
@@ -866,6 +893,101 @@ describe("CronService", () => {
     expect(updated?.enabled).toBe(false);
     expect(updated?.state.consecutiveErrors).toBe(1);
     expect(updated?.state.nextRunAtMs).toBeUndefined();
+    expect(updated?.state.autoDisabled).toEqual({
+      reason: "consecutive-failures",
+      atMs: expect.any(Number),
+      consecutiveErrors: 1,
+    });
+
+    await stopCronAndCleanup(cron, store);
+  });
+
+  it("records the canonical auto-disable state and notifies the owner when a terminal one-shot error disables the job (#131490)", async () => {
+    const runIsolatedAgentJob = vi.fn(async () => ({
+      status: "error" as const,
+      error: 'Session "agent:main:cron:job-1" changed while starting work. Retry.',
+      executionStarted: true,
+    }));
+    const { store, cron, enqueueSystemEvent, requestHeartbeat, events } =
+      await createIsolatedAnnounceHarness(runIsolatedAgentJob);
+    const job = await runIsolatedAnnounceJobAndWait({
+      cron,
+      events,
+      name: "terminal one-shot error auto-disable",
+      status: "error",
+    });
+
+    const updated = (await cron.list({ includeDisabled: true })).find(
+      (entry) => entry.id === job.id,
+    );
+    expect(updated?.enabled).toBe(false);
+    expect(updated?.state.autoDisabled).toEqual({
+      reason: "consecutive-failures",
+      atMs: expect.any(Number),
+      consecutiveErrors: 1,
+    });
+    expect(updated?.state.nextRunAtMs).toBeUndefined();
+
+    await vi.waitFor(() => {
+      expect(
+        enqueueSystemEvent.mock.calls.some(
+          ([text]) =>
+            typeof text === "string" &&
+            text.includes("auto-disabled") &&
+            text.includes(`openclaw automations enable ${job.id}`),
+        ),
+      ).toBe(true);
+    });
+    expect(requestHeartbeat).toHaveBeenCalled();
+
+    await stopCronAndCleanup(cron, store);
+  });
+
+  it("records the canonical auto-disable state and notifies the owner when disabled-heartbeat retries are exhausted (#131490)", async () => {
+    resetSystemEventsForTest();
+    const atMs = Date.parse("2025-12-13T00:00:02.000Z");
+    let now = atMs;
+    const runHeartbeatOnce = vi.fn(async () => ({
+      status: "skipped" as const,
+      reason: "disabled",
+    }));
+    const { store, cron, enqueueSystemEvent, requestHeartbeat } = await createCronHarness({
+      runHeartbeatOnce,
+      nowMs: () => now,
+      useRemovableSystemEventQueue: true,
+      withEvents: false,
+    });
+    const job = await addMainOneShotHelloJob(cron, {
+      atMs,
+      name: "one-shot disabled heartbeat retries exhausted",
+    });
+
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      await cron.run(job.id, "due");
+      const jobs = await cron.list({ includeDisabled: true });
+      now = jobs.find((entry) => entry.id === job.id)?.state.nextRunAtMs ?? now;
+    }
+
+    const updated = (await cron.list({ includeDisabled: true })).find(
+      (entry) => entry.id === job.id,
+    );
+    expect(updated?.enabled).toBe(false);
+    expect(updated?.state.consecutiveSkipped).toBe(4);
+    expect(updated?.state.autoDisabled).toEqual({
+      reason: "consecutive-failures",
+      atMs: expect.any(Number),
+      consecutiveErrors: 4,
+    });
+    expect(updated?.state.nextRunAtMs).toBeUndefined();
+
+    await vi.waitFor(() => {
+      expect(
+        enqueueSystemEvent.mock.calls.some(
+          ([text]) => typeof text === "string" && text.includes("auto-disabled"),
+        ),
+      ).toBe(true);
+    });
+    expect(requestHeartbeat).toHaveBeenCalled();
 
     await stopCronAndCleanup(cron, store);
   });
@@ -877,7 +999,7 @@ describe("CronService", () => {
       error: "Channel is required when multiple channels are configured: telegram, discord",
       errorKind: "delivery-target" as const,
     }));
-    const { store, cron, enqueueSystemEvent, requestHeartbeat, events } =
+    const { store, cron, enqueueSystemEvent, events } =
       await createIsolatedAnnounceHarness(runIsolatedAgentJob);
     await runIsolatedAnnounceJobAndWait({
       cron,
@@ -886,8 +1008,20 @@ describe("CronService", () => {
       status: "error",
     });
 
-    expect(enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(requestHeartbeat).not.toHaveBeenCalled();
+    // The failed run must not surface as a fallback summary, but the terminal
+    // disable now routes through the canonical auto-disable owner and emits
+    // its recovery notification to the owning session (#131490).
+    await vi.waitFor(() => {
+      expect(
+        enqueueSystemEvent.mock.calls.some(
+          ([text]) => typeof text === "string" && text.includes("auto-disabled"),
+        ),
+      ).toBe(true);
+    });
+    for (const [text] of enqueueSystemEvent.mock.calls) {
+      expect(text).not.toBe("last output");
+    }
+
     await stopCronAndCleanup(cron, store);
   });
 

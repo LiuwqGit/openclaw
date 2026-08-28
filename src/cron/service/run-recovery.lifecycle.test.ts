@@ -81,19 +81,23 @@ describe.each([
       });
       const onEvent = vi.fn();
       const sendCronFailureAlert = vi.fn(async () => undefined);
-      const freshState = () =>
-        createCronServiceState({
+      const enqueueSystemEventMocks: Array<ReturnType<typeof vi.fn>> = [];
+      const freshState = () => {
+        const enqueueSystemEvent = vi.fn();
+        enqueueSystemEventMocks.push(enqueueSystemEvent);
+        return createCronServiceState({
           storePath,
           cronEnabled: true,
           log: logger,
           nowMs: Date.now,
-          enqueueSystemEvent: vi.fn(),
+          enqueueSystemEvent,
           requestHeartbeat: vi.fn(),
           runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
           runCommandJob,
           onEvent,
           sendCronFailureAlert,
         });
+      };
       const first = freshState();
       // An earlier repair can commit before its interrupted-task notification.
       // That orphan shares this start millisecond, but not this run's receipt.
@@ -200,7 +204,17 @@ describe.each([
           expect(await settledStartup).toBeUndefined();
         }
         if (mode === "manual" && status === "error") {
-          await vi.waitFor(() => expect(sendCronFailureAlert).toHaveBeenCalledOnce());
+          // The terminal one-shot disable now routes through the canonical
+          // auto-disable owner: its recovery notification replaces the failure
+          // alert (#131490), matching the recurring auto-disable behavior.
+          await vi.waitFor(() => {
+            expect(
+              enqueueSystemEventMocks.some((mock) =>
+                mock.mock.calls.some(([text]) => String(text).includes("auto-disabled")),
+              ),
+            ).toBe(true);
+          });
+          expect(sendCronFailureAlert).not.toHaveBeenCalled();
         }
         const finished = onEvent.mock.calls.filter(([event]) => event.action === "finished");
         if (mode === "manual-removed") {
