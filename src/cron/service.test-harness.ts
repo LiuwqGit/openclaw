@@ -263,6 +263,7 @@ export function createMockCronStateForJobs(params: {
   return {
     store: { version: 1, jobs: params.jobs },
     durableNextRunAtMsByJobId: new Map<string, number | undefined>(),
+    mutationRuntimeBaseline: null,
     running: false,
     activeTimerTicks: 0,
     stopped: false,

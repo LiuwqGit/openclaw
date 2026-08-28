@@ -1,5 +1,6 @@
 /** Converts cron jobs between public store shape and normalized SQLite rows. */
 import type { DatabaseSync } from "node:sqlite";
+import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sha256Hex } from "../../infra/crypto-digest.js";
@@ -20,7 +21,7 @@ import { deliveryFromJson, deliveryToJson } from "./delivery-codec.js";
 import { normalizeNumber, tryParseJsonObject } from "./scalar-codec.js";
 import type { CronJobInsert, CronJobRow } from "./schema.js";
 import { getCronStoreKysely } from "./schema.js";
-import type { LoadedCronStore } from "./types.js";
+import type { CronRuntimeBaseline, LoadedCronStore } from "./types.js";
 
 function stripJobRuntimeFields(job: CronStoreFile["jobs"][number]): Record<string, unknown> {
   const {
@@ -294,9 +295,120 @@ export function deleteStaleCronJobFamilyRows(
   return staleRows.length;
 }
 
+/**
+ * Preserves foreign-owned runtime columns when a full config write carries an
+ * older snapshot for a row a separate gateway updated (#131401).
+ *
+ * A scheduler gateway sharing this SQLite store may commit newer runtime state
+ * after this process loaded its snapshot — including between the CRUD-time
+ * reload and the write transaction. When the persisted row holds strictly
+ * newer runtime than the load-time baseline (or, without a baseline, than the
+ * in-memory job), keep the row's runtime columns so the write cannot move
+ * nextRunAtMs backwards. Config-identical rows keep foreign runtime
+ * unconditionally; an edited row keeps it when the CRUD edit left its
+ * scheduling identity intact (a cosmetic edit does not own runtime state),
+ * while scheduling-affecting edits recompute runtime and keep local values.
+ * The ordinary single-gateway path is unchanged: its rows and snapshot share
+ * one source, so no row is ever strictly newer.
+ */
+function preserveNewerRuntimeColumns(params: {
+  values: CronJobInsert;
+  existingRow: CronJobRow;
+  job: CronStoredJob;
+  runtimeBaseline?: CronRuntimeBaseline;
+}): CronJobInsert {
+  const existingJobJson = tryParseJsonObject(params.existingRow.job_json);
+  const nextJobJson = tryParseJsonObject(params.values.job_json);
+  if (!existingJobJson || !nextJobJson) {
+    return params.values;
+  }
+  const existingRuntimeUpdatedAtMs =
+    normalizeNumber(params.existingRow.runtime_updated_at_ms) ??
+    normalizeNumber(params.existingRow.updated_at);
+  const baseline = params.runtimeBaseline;
+  // An explicit runtime-state patch owns the row regardless of foreign timestamps.
+  if (baseline?.localRuntimeOwner) {
+    return params.values;
+  }
+  const foreignRuntimeState = tryParseJsonObject(params.existingRow.state_json);
+  // The runtime timestamp is a caller value, not a revision: same-millisecond
+  // or skewed-clock foreign commits must be detected by state content too.
+  const foreignRuntimeCommitted = baseline
+    ? (existingRuntimeUpdatedAtMs !== undefined &&
+        existingRuntimeUpdatedAtMs > (baseline.runtimeUpdatedAtMs ?? existingRuntimeUpdatedAtMs)) ||
+      (foreignRuntimeState !== undefined && !isDeepStrictEqual(foreignRuntimeState, baseline.state))
+    : existingRuntimeUpdatedAtMs !== undefined &&
+      existingRuntimeUpdatedAtMs > params.job.updatedAtMs;
+  if (!foreignRuntimeCommitted) {
+    return params.values;
+  }
+  const configIdentical = isDeepStrictEqual(existingJobJson, nextJobJson);
+  // A cosmetic CRUD edit changes config JSON without owning runtime state:
+  // when the scheduling identity is intact — both versus the reload baseline
+  // and versus the row currently persisted, so a foreign schedule change does
+  // not pair its runtime with a stale config — the scheduler's newer runtime
+  // still wins. Scheduling-affecting edits recompute runtime locally and keep
+  // local values. An edit that retired runtime fields (e.g. replacing a
+  // trigger definition) still merges: the merge below drops every baseline
+  // key the local edit retired, so retired state cannot revive, while scheduler
+  // runtime committed between the reload and the write survives.
+  const schedulingIdentityUnchanged =
+    baseline?.scheduleIdentity !== undefined &&
+    baseline.scheduleIdentity === params.values.schedule_identity &&
+    params.existingRow.schedule_identity === params.values.schedule_identity;
+  if (foreignRuntimeState !== undefined && (configIdentical || schedulingIdentityUnchanged)) {
+    // Merge by ownership: the foreign runtime survives as the base, minus
+    // fields the local edit retired, minus definition-owned trigger state
+    // when the trigger/script definition was replaced.
+    const merged = { ...foreignRuntimeState };
+    for (const key of Object.keys(baseline?.state ?? {})) {
+      if (!Object.hasOwn(params.job.state, key)) {
+        delete merged[key];
+      }
+    }
+    const triggerDefinitionChanged =
+      baseline !== undefined &&
+      (baseline.triggerScript !== (params.job.trigger?.script ?? null) ||
+        baseline.payloadScript !==
+          (params.job.payload.kind === "script" ? params.job.payload.script : null));
+    if (triggerDefinitionChanged) {
+      for (const field of [
+        "triggerState",
+        "triggerEvalCount",
+        "lastTriggerEvalAtMs",
+        "lastTriggerFireAtMs",
+      ]) {
+        delete merged[field];
+      }
+    }
+    // Hydrate the kept runtime back into the in-memory job so callers observe
+    // the persisted row instead of the stale snapshot values.
+    // SAFETY: the merged runtime starts from a previously validated CronJobState.
+    params.job.state = merged as CronJobState;
+    const mergedStateJson = serializeCronJobState(params.job.state);
+    if (existingRuntimeUpdatedAtMs !== undefined) {
+      params.job.updatedAtMs = existingRuntimeUpdatedAtMs;
+    }
+    return {
+      ...params.values,
+      state_json: mergedStateJson,
+      runtime_updated_at_ms: existingRuntimeUpdatedAtMs,
+      schedule_identity: params.existingRow.schedule_identity,
+    };
+  }
+  return params.values;
+}
+
 /** Replaces all persisted cron rows and returns the canonical jobs that were written. */
 type CronRowReplaceOptions = {
   preserveRuntimeState?: boolean;
+  /**
+   * Load-time runtime snapshot per job (see #131401). Rows whose persisted
+   * runtime is newer than their baseline keep that runtime during the write;
+   * rows the baseline saw but the write-time rows lost were deleted by a peer
+   * and are neither resurrected in SQLite nor kept in the caller's snapshot.
+   */
+  runtimeBaseline?: ReadonlyMap<string, CronRuntimeBaseline> | null;
 };
 
 type CronRowReplaceResult = {
@@ -311,16 +423,32 @@ export function replaceCronRows(
   store: CronStoreFile,
   opts?: CronRowReplaceOptions,
 ): CronRowReplaceResult {
-  const existingRows = executeSqliteQuerySync(
-    db,
-    getCronStoreKysely(db)
-      .selectFrom("cron_jobs")
-      .select(["job_id", "job_json"])
-      .where("store_key", "=", storeKey),
-  ).rows;
+  const existingRows = loadCronRows(db, storeKey);
+  const existingRowsByJobId = new Map(existingRows.map((row) => [row.job_id, row] as const));
+  const runtimeBaseline = opts?.runtimeBaseline ?? null;
   const normalizedJobs: CronStoredJob[] = [];
+  const peerDeletedJobIds = new Set<string>();
   for (const [index, job] of store.jobs.entries()) {
-    normalizedJobs.push(upsertCronJobRow(db, storeKey, job, index, opts));
+    if (runtimeBaseline?.has(job.id) && !existingRowsByJobId.has(job.id)) {
+      // A row the mutation-time reload saw but the write-time rows no longer
+      // hold was deleted by another gateway inside the reload-to-write
+      // window; upserting the stale snapshot would resurrect it (#131401).
+      // Rows the baseline never saw are local additions and insert normally.
+      peerDeletedJobIds.add(job.id);
+      continue;
+    }
+    normalizedJobs.push(
+      upsertCronJobRow(db, storeKey, job, index, {
+        preserveRuntimeState: opts?.preserveRuntimeState,
+        preserveNewerRuntimeFrom: existingRowsByJobId.get(job.id),
+        runtimeBaseline: runtimeBaseline?.get(job.id),
+      }),
+    );
+  }
+  if (peerDeletedJobIds.size > 0) {
+    // Hydrate the caller's in-memory snapshot so the service stops serving a
+    // job another gateway already deleted, mirroring the runtime hydration.
+    store.jobs = store.jobs.filter((job) => !peerDeletedJobIds.has(job.id));
   }
   const nextJobIds = new Set(normalizedJobs.map((job) => job.id));
   const existingJobIds = new Set<string>();
@@ -338,6 +466,13 @@ export function replaceCronRows(
     if (nextJobIds.has(row.job_id)) {
       continue;
     }
+    if (opts?.runtimeBaseline && !opts.runtimeBaseline.has(row.job_id)) {
+      // A row the mutation-time reload never saw was inserted by another
+      // gateway after the snapshot; a scheduler-disabled CRUD must not delete
+      // it along with its own full-snapshot rewrite (#131401). Rows the
+      // baseline did see are intentional deletions of this CRUD.
+      continue;
+    }
     // Reconcile removed jobs only; deleting the partition first rewrites every
     // unrelated row and defeats SQLite's row-owned cron storage boundary.
     executeSqliteQuerySync(
@@ -351,19 +486,36 @@ export function replaceCronRows(
   return { existingJobIds, jobs: normalizedJobs, legacyAuthorityJobIds };
 }
 
-/** Upserts one persisted cron row without rewriting unrelated jobs in its store partition. */
+/**
+ * Upserts one persisted cron row without rewriting unrelated jobs in its store
+ * partition. When `preserveNewerRuntimeFrom` carries the row currently in
+ * SQLite and that row holds strictly newer foreign runtime (see #131401), the
+ * newer runtime columns survive the write.
+ */
 export function upsertCronJobRow(
   db: DatabaseSync,
   storeKey: string,
   job: CronStoredJob,
   sortOrder: number,
-  opts?: CronRowReplaceOptions,
+  opts?: {
+    preserveRuntimeState?: boolean;
+    preserveNewerRuntimeFrom?: CronJobRow;
+    runtimeBaseline?: CronRuntimeBaseline;
+  },
 ): CronStoredJob {
   const normalized = normalizeCronJobForSqlite(job);
   if (!normalized) {
     throw new Error(`Cannot persist invalid cron job ${job.id}`);
   }
-  const values = bindCronJobRow(storeKey, normalized, sortOrder);
+  const bound = bindCronJobRow(storeKey, normalized, sortOrder);
+  const values = opts?.preserveNewerRuntimeFrom
+    ? preserveNewerRuntimeColumns({
+        values: bound,
+        existingRow: opts.preserveNewerRuntimeFrom,
+        job,
+        runtimeBaseline: opts.runtimeBaseline,
+      })
+    : bound;
   const {
     state_json: _stateJson,
     runtime_updated_at_ms: _runtimeUpdatedAtMs,

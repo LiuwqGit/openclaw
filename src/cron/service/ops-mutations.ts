@@ -58,9 +58,11 @@ import type {
 import { emit } from "./state.js";
 import {
   ensureLoaded,
+  ensureLoadedForMutation,
   persist,
   persistOrRestore,
   pruneCronJobScratchAfterCommit,
+  restoreCronStoreSnapshotForRollback,
   runPostPersistCronNotifications,
   snapshotStoreForRollback,
   type CronRollbackSnapshot,
@@ -233,6 +235,14 @@ async function persistUpdatedJob(params: {
       ? cronRunReceiptOwnerMutationHooks({ state, jobId: nextJob.id })
       : undefined,
   });
+  if (!state.store?.jobs.some((job) => job.id === nextJob.id)) {
+    // Another gateway deleted the edited job between the mutation-time
+    // reload and the write, and the durable write skipped the vanished row.
+    // Memory is already hydrated to that reality; surface the failure
+    // instead of reporting an update that did not land (#131401).
+    armTimer(state);
+    throw new Error(`cron job ${nextJob.id} was deleted before the update could be persisted`);
+  }
   if (!cronSchedulingInputsEqual(previousJob, nextJob)) {
     // Mark only committed edits; a failed SQLite write cannot retire the run's
     // schedule ownership, and idempotent re-saves must not create a new claim.
@@ -312,7 +322,7 @@ export async function add(
         `cron declarationKey namespace "${systemOwnedDeclarationNamespace}" is system-owned; jobs cannot be created with it`,
       );
     }
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoadedForMutation(state);
     const agentId = resolveEffectiveJobAgentId(input, resolveCurrentDefaultAgentId(state));
     if (state.deps.isAgentAvailable?.(agentId) === false) {
       throw new Error(`cron job agent is unavailable: ${agentId}`);
@@ -465,7 +475,7 @@ export async function removeStaleJobFamily(
   family: { declarationKey: string; name: string; ownerPluginTag: string },
 ): Promise<number> {
   return await locked(state, async () => {
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoadedForMutation(state);
     return removeStaleCronJobFamilyRows(state.deps.storePath, family);
   });
 }
@@ -484,7 +494,9 @@ async function updateLoadedJob(params: {
   if (patch.payload && isSystemOwnedCronPayloadKind(patch.payload.kind)) {
     throw new Error("system-owned payloads cannot be patched by cron clients");
   }
-  await ensureLoaded(state, { skipRecompute: true });
+  // An explicit state patch owns this row's runtime; foreign runtime
+  // preservation must not silently replace caller-requested fields (#131401).
+  await ensureLoadedForMutation(state, { runtimeOwnerId: patch.state ? id : undefined });
   const job = findJobOrThrow(state, id);
   // Existing monitors are config-driven: any patch (disable, reschedule,
   // repurpose) would silently diverge from its owner until the next reconcile,
@@ -580,7 +592,7 @@ export async function remove(
   const result = await locked(state, async () => {
     warnIfDisabled(state, "remove");
     const previousStore = state.store;
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoadedForMutation(state);
     if (!state.store) {
       return { ok: false, removed: false } as const;
     }
@@ -609,6 +621,7 @@ export async function remove(
     await persistOrRestore(state, snapshot, {
       postPersistNotifications,
       suppressScheduledJobId: id,
+      locallyRemovedJobIds: new Set([id]),
     });
     const activeMarker = noteActiveCronJobRemoval(id);
     const agentId = resolveEffectiveJobAgentId(removedJob, resolveCurrentDefaultAgentId(state));
@@ -674,10 +687,11 @@ export async function removeAgentJobsTransactional<T>(
   state: CronServiceState,
   agentId: string,
   commit: () => Promise<T>,
+  opts?: { commitGuard?: () => void },
 ): Promise<T> {
   return await locked(state, async () => {
     warnIfDisabled(state, "remove agent jobs");
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoadedForMutation(state);
     const id = normalizeOptionalAgentId(agentId);
     if (!id || !state.store) {
       return await commit();
@@ -689,6 +703,7 @@ export async function removeAgentJobsTransactional<T>(
     if (removedJobs.length === 0) {
       return await commit();
     }
+    opts?.commitGuard?.();
     const snapshot = snapshotStoreForRollback(state);
     state.store.jobs = state.store.jobs.filter(
       (job) => resolveEffectiveJobAgentId(job, defaultAgentId) !== id,
@@ -696,7 +711,8 @@ export async function removeAgentJobsTransactional<T>(
     const postPersistNotifications: DeferredCronNotifications = [];
     recomputeNextRunsForMaintenance(state, { deferredNotifications: postPersistNotifications });
     // Cron is durable first, but notifications stay speculative until the roster commits.
-    await persistOrRestore(state, snapshot);
+    const locallyRemovedJobIds = new Set(removedJobs.map((job) => job.id));
+    await persistOrRestore(state, snapshot, { locallyRemovedJobIds });
     let result: T;
     try {
       result = await commit();
@@ -717,8 +733,7 @@ export async function removeAgentJobsTransactional<T>(
         }
         throw error;
       }
-      state.store = snapshot.store;
-      state.durableNextRunAtMsByJobId = snapshot.durableNextRunAtMsByJobId;
+      restoreCronStoreSnapshotForRollback(state, snapshot, { locallyRemovedJobIds });
       try {
         if (!(await persist(state))) {
           throw new Error("cron: rollback store write did not complete", { cause: error });

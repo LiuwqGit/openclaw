@@ -35,6 +35,7 @@ import {
 import type { CronStoreTransactionHooks } from "./store/transaction-hooks.types.js";
 import type {
   CronQuarantinedJob,
+  CronRuntimeBaseline,
   LoadedCronStore,
   QuarantinedCronConfigJob,
 } from "./store/types.js";
@@ -42,6 +43,7 @@ import type { CronStoreFile } from "./types.js";
 export type {
   CronConfigJobRuntimeEntry,
   CronQuarantinedJob,
+  CronRuntimeBaseline,
   LoadedCronStore,
   QuarantinedCronConfigJob,
 } from "./store/types.js";
@@ -268,6 +270,11 @@ type SaveCronJobsStoreOptions = SaveCronStoreOptions & {
   };
   preserveRuntimeState?: boolean;
   deleteQuarantineEntries?: readonly (QuarantinedCronConfigJob | CronQuarantinedJob)[];
+  /**
+   * Load-time runtime snapshot per job (see #131401). Rows whose persisted
+   * runtime is newer than their baseline keep that runtime during the write.
+   */
+  runtimeBaseline?: ReadonlyMap<string, CronRuntimeBaseline>;
 };
 
 type CronStoreReplacementOptions = Pick<
@@ -284,8 +291,12 @@ function replaceCronStoreRows(
   storeKey: string,
   store: CronStoreFile,
   preserveRuntimeState: boolean,
+  runtimeBaseline?: ReadonlyMap<string, CronRuntimeBaseline> | null,
 ): void {
-  const replaced = replaceCronRows(db, storeKey, store, { preserveRuntimeState });
+  const replaced = replaceCronRows(db, storeKey, store, {
+    preserveRuntimeState,
+    runtimeBaseline,
+  });
   replaceCronRuntimeAuthorityRows({
     db,
     storeKey,
@@ -339,7 +350,13 @@ export async function saveCronJobsStore(
       opts?.transactionHooks?.afterWrite?.(database.db);
       return;
     }
-    replaceCronStoreRows(database.db, storeKey, store, opts?.preserveRuntimeState === true);
+    replaceCronStoreRows(
+      database.db,
+      storeKey,
+      store,
+      opts?.preserveRuntimeState === true,
+      opts?.runtimeBaseline,
+    );
     opts?.transactionHooks?.afterWrite?.(database.db);
   });
   // Timeout outcomes may commit before their runner settles. Only after this
