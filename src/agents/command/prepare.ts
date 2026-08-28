@@ -357,6 +357,7 @@ export async function prepareAgentCommandExecution(
       cfg,
       agentId: sessionAgentId,
       workspaceDir,
+      cwd: resolvedCwd,
       sessionKey: sessionKey ?? undefined,
       sessionEntry: sessionEntryRaw ?? undefined,
     });

@@ -21,6 +21,8 @@ export async function resolveAcpAgentWorkspaceProvisioningForTurn(params: {
   agentId: string;
   /** Workspace directory being provisioned for this turn, when already known. */
   workspaceDir?: string;
+  /** Effective cwd explicitly selected for this invocation, when already known. */
+  cwd?: string;
   /** Session key for this invocation, when already known. */
   sessionKey?: string;
   /** Live session entry carrying ACP meta, when already at hand. */
@@ -30,6 +32,12 @@ export async function resolveAcpAgentWorkspaceProvisioningForTurn(params: {
     return "standard";
   }
   const invocation = params.workspaceDir ? { workspaceDir: params.workspaceDir } : undefined;
+  if (params.cwd) {
+    return resolveAgentWorkspaceProvisioning(params.cfg, params.agentId, {
+      ...invocation,
+      cwd: params.cwd,
+    });
+  }
   // A live ACP session carries this invocation's effective cwd.
   const metaCwd = resolveAcpSessionCwd(params.sessionEntry?.acp);
   if (metaCwd) {

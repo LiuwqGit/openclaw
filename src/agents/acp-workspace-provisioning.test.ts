@@ -149,6 +149,31 @@ describe("resolveAcpAgentWorkspaceProvisioningForTurn", () => {
     ).resolves.toBe("standard");
   });
 
+  it.each([
+    {
+      cwd: "/projects/command",
+      sessionCwd: "/shared-ws/codex",
+      expected: "runtime-managed-implicit",
+    },
+    {
+      cwd: "/shared-ws/codex",
+      sessionCwd: "/projects/session",
+      expected: "standard",
+    },
+  ] as const)(
+    "gives the invocation cwd precedence over session metadata ($expected)",
+    async ({ cwd, sessionCwd, expected }) => {
+      await expect(
+        resolveAcpAgentWorkspaceProvisioningForTurn({
+          cfg: baseCfg,
+          agentId: "codex",
+          cwd,
+          sessionEntry: { acp: sessionAcpMeta(sessionCwd) },
+        }),
+      ).resolves.toBe(expected);
+    },
+  );
+
   it("keeps standard provisioning without an invocation cwd and no runtime default", async () => {
     await expect(
       resolveAcpAgentWorkspaceProvisioningForTurn({ cfg: baseCfg, agentId: "codex" }),
