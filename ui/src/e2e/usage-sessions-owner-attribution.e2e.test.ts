@@ -55,12 +55,9 @@ suite.define(() => {
     });
 
     const { startGatewayServer } = await import("../../../src/gateway/server.js");
-    const { writeSessionStore } = await import("../../../src/gateway/test-helpers.server.js");
-    const { seedLinearSessionTranscript, sessionStoreEntry } =
-      await import("../../../src/gateway/test/server-sessions.test-helpers.js");
+    const { persistSessionTranscriptTurn, upsertSessionEntryCore } =
+      await import("../../../src/config/sessions/session-accessor.js");
 
-    const mainStorePath = path.join(state.sessionsDir("main"), "sessions.json");
-    const opusStorePath = path.join(state.sessionsDir("opus"), "sessions.json");
     let gateway: Awaited<ReturnType<typeof startGatewayServer>> | null = null;
 
     try {
@@ -85,29 +82,30 @@ suite.define(() => {
         },
       });
 
-      // main owns the durable named row and its transcript.
-      await writeSessionStore({
-        agentId: "main",
-        storePath: mainStorePath,
-        entries: {
-          [PROOF_STORE_KEY]: sessionStoreEntry(PROOF_SESSION_ID, { label: PROOF_LABEL }),
-        },
-      });
-      await seedLinearSessionTranscript({
-        agentId: "main",
-        contents: ["owner turn"],
-        sessionId: PROOF_SESSION_ID,
-        sessionKey: PROOF_STORE_KEY,
-        storePath: mainStorePath,
-      });
-      // Independent agent transcripts retain their own usage even when ids match.
-      await seedLinearSessionTranscript({
-        agentId: "opus",
-        contents: ["subagent turn"],
-        sessionId: PROOF_SESSION_ID,
-        sessionKey: `agent:opus:${PROOF_SESSION_ID}`,
-        storePath: opusStorePath,
-      });
+      for (const agentId of ["main", "opus"]) {
+        const scope = {
+          agentId,
+          sessionId: PROOF_SESSION_ID,
+          sessionKey: agentId === "main" ? PROOF_STORE_KEY : `agent:opus:${PROOF_SESSION_ID}`,
+          storePath: path.join(state.sessionsDir(agentId), "sessions.json"),
+        };
+        const now = Date.now();
+        if (agentId === "main") {
+          await upsertSessionEntryCore(scope, {
+            sessionId: PROOF_SESSION_ID,
+            label: PROOF_LABEL,
+            updatedAt: now,
+          });
+        }
+        // Both transcripts must fall inside the dashboard's current date window.
+        await persistSessionTranscriptTurn(scope, {
+          cwd: state.workspaceDir,
+          updateMode: "none",
+          messages: [
+            { message: { role: "user", content: `${agentId} turn`, timestamp: now }, now },
+          ],
+        });
+      }
 
       gateway = await startGatewayServer(port, {
         auth: { mode: "none" },
