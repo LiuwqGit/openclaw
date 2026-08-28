@@ -21,6 +21,7 @@ import {
   renderComposerDictationStatus,
 } from "./chat-composer-controls.ts";
 import { focusComposerFromChrome, paneDomId } from "./chat-composer-dom.ts";
+import { composerDraftValue } from "./chat-composer-draft-value.ts";
 import type { GoalComposerController } from "./chat-composer-goal-mode.ts";
 import { renderChatGoal } from "./chat-composer-goal.ts";
 import { renderChatComposerPlusMenu } from "./chat-composer-plus-menu.ts";
@@ -408,7 +409,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
               <div class="agent-chat__composer-combobox">
                 <textarea
                   ${ref(state.textareaRef ?? undefined)}
-                  .value=${dictationPreviewDraft}
+                  .value=${composerDraftValue(dictationPreviewDraft)}
                   dir=${draftDirection}
                   ?disabled=${!canCompose}
                   ?readonly=${dictation?.locksComposer === true || goalComposer.pending}
