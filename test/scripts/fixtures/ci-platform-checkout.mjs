@@ -27,20 +27,48 @@ function record(pid, role, attempt = 0) {
 }
 
 function records() {
+  // Keep producer observations and shutdown reports in the same order.
   return fs
     .readdirSync(recordsDir)
     .filter((file) => file.endsWith(".json"))
+    .toSorted()
     .map((file) => JSON.parse(fs.readFileSync(path.join(recordsDir, file), "utf8")));
 }
 
-function boundary(name) {
+function liveRecords() {
   const owned = records();
+  if (process.platform === "win32") {
+    return owned.filter((entry) => isPidAlive(entry.pid));
+  }
+  // PID existence includes macOS zombies; observe active writers in one POSIX snapshot.
+  const result = spawnSync("/bin/ps", ["-axo", "pid=,stat="], {
+    encoding: "utf8",
+    timeout: 1_000,
+  });
+  if (result.error || result.status !== 0) {
+    throw new Error(`Fixture process census failed (${result.error?.code ?? result.status})`);
+  }
+  const alive = new Set();
+  for (const line of result.stdout.trim().split("\n")) {
+    const [pid, state] = line.trim().split(/\s+/u);
+    if (!Number.isInteger(Number(pid)) || !state) {
+      throw new Error("Fixture process census returned an invalid row");
+    }
+    if (!state.startsWith("Z")) {
+      alive.add(Number(pid));
+    }
+  }
+  return owned.filter((entry) => alive.has(entry.pid));
+}
+
+function boundary(name) {
+  const alive = liveRecords();
   fs.appendFileSync(
     eventsFile,
     `${JSON.stringify({
       name,
-      alive: owned.filter((entry) => entry.attempt > 0 && isPidAlive(entry.pid)),
-      sentinelAlive: owned.some((entry) => entry.role === "sentinel" && isPidAlive(entry.pid)),
+      alive: alive.filter((entry) => entry.attempt > 0),
+      sentinelAlive: alive.some((entry) => entry.role === "sentinel"),
     })}\n`,
   );
 }
@@ -105,6 +133,11 @@ async function command() {
     process.on("SIGTERM", () => {});
     record(process.pid, mode, attempt);
     if (mode === "child") {
+      // Startup faults belong to the caller, not every consumer of this shared fixture.
+      const startDelay = path.join(root, `tree-start-delay-${attempt}.json`);
+      if (fs.existsSync(startDelay)) {
+        await delay(JSON.parse(fs.readFileSync(startDelay, "utf8")));
+      }
       launch("grandchild", attempt);
     } else {
       publish(`ready-${attempt}.json`, attempt);
@@ -126,6 +159,10 @@ async function command() {
   const operation = args.shift();
   if (operation === "init") {
     boundary("init");
+    const config = path.join(root, "fixture-config.json");
+    if (fs.existsSync(config)) {
+      await delay(JSON.parse(fs.readFileSync(config, "utf8")).initDelayMs);
+    }
     fs.mkdirSync(insideWorkspace(args[0]), { recursive: true });
     if (linux && cwd === workspace) {
       if (fs.readdirSync(workspace).length !== 0) {
@@ -141,6 +178,26 @@ async function command() {
     record(process.pid, "parent", attempt);
     launch("child", attempt);
     await until(() => fs.existsSync(path.join(root, `ready-${attempt}.json`)), "tree readiness");
+    if (scenario.startsWith("cancel-")) {
+      const owned = liveRecords();
+      const alive = owned.filter((entry) => entry.attempt === attempt);
+      if (
+        !["parent", "child", "grandchild"].every((role) =>
+          alive.some((entry) => entry.role === role),
+        )
+      ) {
+        throw new Error("Cancellation tree is no longer alive");
+      }
+      const owner = owned.find((entry) => entry.role === "shell");
+      // Both shells exec their replacements. Validate the current Python parent,
+      // never an orphan's new parent or the Git group, before sending cancellation.
+      if (!owner || owner.pid <= 1 || process.ppid !== owner.pid) {
+        throw new Error("Cancellation owner is no longer the registered workflow parent");
+      }
+      const signal = scenario.slice("cancel-".length);
+      fs.writeSync(1, `cancellation: ${JSON.stringify({ signal, owner: owner.pid, alive })}\n`);
+      process.kill(owner.pid, signal);
+    }
     if (scenario === "early-leader-exit") {
       process.exit(0);
     }
@@ -161,6 +218,12 @@ async function command() {
     }
     if (scenario === "git-exit-124") {
       process.exit(124);
+    }
+    // Expire the two-second fetch budget only after the full tree is ready.
+    // Immutable ticks avoid replacing a clock file held open by Windows readers.
+    // Cancellation scenarios signal from the ready fetch without advancing this clock.
+    if (!scenario.startsWith("cancel-")) {
+      publish(`fetch-tick-${attempt}.json`, attempt);
     }
     return;
   } else if (operation === "checkout") {
@@ -255,11 +318,11 @@ async function supervise() {
         }
       }
       try {
-        await until(() => records().every((entry) => !isPidAlive(entry.pid)), "fixture cleanup");
+        await until(() => liveRecords().length === 0, "fixture cleanup");
       } catch (err) {
         report.error ??= String(err);
       }
-      report.cleanupRemaining = records().filter((entry) => isPidAlive(entry.pid));
+      report.cleanupRemaining = liveRecords();
       report.ownedProcesses = records();
       report.boundaries = fs
         .readFileSync(eventsFile, "utf8")
@@ -365,11 +428,6 @@ async function supervise() {
       record(shell.pid, "shell");
     }
     const exited = once(shell, "exit");
-    if (scenario.startsWith("cancel-")) {
-      await until(() => fs.existsSync(path.join(root, "ready-1.json")), "cancellation readiness");
-      // exec replaces Bash on POSIX: this is the owner, not the Git group.
-      shell.kill(scenario.slice("cancel-".length));
-    }
     const [code] = await exited;
     report.code = code;
     boundary("exit");
