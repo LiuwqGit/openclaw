@@ -36,9 +36,11 @@ type ToolUseTracker = {
   pendingByIndex: Map<number, PendingToolUse>;
   nameById: Map<string, string>;
   startedIds: Set<string>;
-  /** Args emitted on the first start for each tool call id, so a later richer
-   * copy can upgrade a start that fired before args were available. */
-  emittedArgsById: Map<string, Record<string, unknown>>;
+  /** Tool call ids whose start fired with empty args. Only a small marker is
+   * kept (never the args payload); it is cleared once a richer copy repairs
+   * the start or the tool result is delivered, so long CLI runs do not retain
+   * per-call argument objects. */
+  emptyStartIds: Set<string>;
   resultDeliveredIds: Set<string>;
 };
 
@@ -47,7 +49,7 @@ export function createToolUseTracker(): ToolUseTracker {
     pendingByIndex: new Map(),
     nameById: new Map(),
     startedIds: new Set(),
-    emittedArgsById: new Map(),
+    emptyStartIds: new Set(),
     resultDeliveredIds: new Set(),
   };
 }
@@ -67,18 +69,20 @@ function emitToolStartOnce(
   // the assistant-record snapshot — updates the live draft's args through a
   // non-start metadata update, so the draft can repair a name-only tool row
   // without re-firing the tool-start lifecycle (diagnostics and tracking stay
-  // one-per-call). A prior non-empty emit keeps the original dedup behavior.
-  const priorArgs = tracker.emittedArgsById.get(toolCallId);
-  if (priorArgs !== undefined) {
-    if (Object.keys(priorArgs).length === 0 && Object.keys(args).length > 0) {
-      tracker.emittedArgsById.set(toolCallId, args);
+  // one-per-call). The empty-start marker is cleared after the repair, and a
+  // prior non-empty emit keeps the original dedup behavior (no marker).
+  if (tracker.startedIds.has(toolCallId)) {
+    if (tracker.emptyStartIds.has(toolCallId) && Object.keys(args).length > 0) {
+      tracker.emptyStartIds.delete(toolCallId);
       onToolUseUpdate?.({ toolCallId, name, args });
     }
     return;
   }
   tracker.startedIds.add(toolCallId);
   tracker.nameById.set(toolCallId, name);
-  tracker.emittedArgsById.set(toolCallId, args);
+  if (Object.keys(args).length === 0) {
+    tracker.emptyStartIds.add(toolCallId);
+  }
   onToolUseStart?.({ toolCallId, name, kind, args });
 }
 
@@ -94,6 +98,9 @@ function emitToolResultOnce(
     return;
   }
   tracker.resultDeliveredIds.add(toolCallId);
+  // A delivered result can never be enriched afterwards; drop the marker so
+  // tracker state stays bounded by in-flight tool calls.
+  tracker.emptyStartIds.delete(toolCallId);
   onToolResult?.({
     toolCallId,
     name: tracker.nameById.get(toolCallId) ?? "",

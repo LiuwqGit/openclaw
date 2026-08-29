@@ -741,4 +741,97 @@ describe("createCliJsonlStreamingParser events", () => {
     ]);
     expect(updates).toEqual([]);
   });
+
+  it("clears the empty-start marker after the enriching update", () => {
+    const starts: CliToolUseStartDelta[] = [];
+    const updates: CliToolUseUpdateDelta[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: () => undefined,
+      onToolUseStart: (delta) => starts.push(delta),
+      onToolUseUpdate: (delta) => updates.push(delta),
+    });
+
+    parser.push(
+      joinJsonlFrames(
+        claudeBlockStart({ type: "tool_use", id: "toolu_marker", name: "Bash", input: {} }, 0),
+        claudeBlockStop(0),
+        claudeAssistantSnapshot("msg-1", [
+          { type: "tool_use", id: "toolu_marker", name: "Bash", input: { command: "echo hi" } },
+        ]),
+        // A later, even richer copy must not re-fire the update: the marker
+        // was cleared by the first enrichment, so no per-call args stay pinned
+        // in tracker state for the rest of the run.
+        claudeAssistantSnapshot("msg-2", [
+          {
+            type: "tool_use",
+            id: "toolu_marker",
+            name: "Bash",
+            input: { command: "echo hi", timeout: 30 },
+          },
+        ]),
+        "",
+      ),
+    );
+    parser.finish();
+
+    expect(starts).toEqual([
+      { toolCallId: "toolu_marker", name: "Bash", kind: "tool_use", args: {} },
+    ]);
+    expect(updates).toEqual([
+      { toolCallId: "toolu_marker", name: "Bash", args: { command: "echo hi" } },
+    ]);
+  });
+
+  it("drops the empty-start marker once the tool result is delivered", () => {
+    const starts: CliToolUseStartDelta[] = [];
+    const updates: CliToolUseUpdateDelta[] = [];
+    const results: Array<{ toolCallId: string; name: string }> = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: () => undefined,
+      onToolUseStart: (delta) => starts.push(delta),
+      onToolUseUpdate: (delta) => updates.push(delta),
+      onToolResult: (delta) => results.push(delta),
+    });
+
+    parser.push(
+      joinJsonlFrames(
+        claudeBlockStart({ type: "tool_use", id: "toolu_done", name: "Bash", input: {} }, 0),
+        claudeBlockStop(0),
+        JSON.stringify({
+          type: "user",
+          message: {
+            role: "user",
+            content: [{ type: "tool_result", tool_use_id: "toolu_done", content: "ok" }],
+          },
+        }),
+        // A late snapshot after the result cannot re-open enrichment; the
+        // marker was cleared when the result was delivered.
+        claudeAssistantSnapshot("msg-1", [
+          { type: "tool_use", id: "toolu_done", name: "Bash", input: { command: "echo hi" } },
+        ]),
+        "",
+      ),
+    );
+    parser.finish();
+
+    expect(starts).toEqual([
+      { toolCallId: "toolu_done", name: "Bash", kind: "tool_use", args: {} },
+    ]);
+    expect(results.map((entry) => entry.toolCallId)).toEqual(["toolu_done"]);
+    expect(updates).toEqual([]);
+  });
 });
