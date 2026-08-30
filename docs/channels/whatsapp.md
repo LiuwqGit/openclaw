@@ -123,7 +123,7 @@ A separate WhatsApp number is recommended (setup and metadata are optimized for 
   </Accordion>
 
   <Accordion title="Personal-number fallback">
-    Onboarding supports personal-number mode and writes a self-chat-friendly baseline: `dmPolicy: "allowlist"`, `allowFrom` including your own number, `selfChatMode: true`. Runtime self-chat protections key off the linked self number plus `allowFrom`.
+    Onboarding supports personal-number mode and writes a self-chat-friendly baseline: `dmPolicy: "allowlist"`, `allowFrom` including your own number, `selfChatMode: true`. See [Personal-number and self-chat behavior](/channels/whatsapp#personal-number-and-self-chat-behavior) for admission and safeguard rules.
   </Accordion>
 </AccordionGroup>
 
@@ -274,7 +274,7 @@ Scope the opt-in to one account under `channels.whatsapp.accounts.<id>.pluginHoo
 
     - pairings persist in the channel allow-store and merge with configured `allowFrom`
     - scheduled automation and heartbeat recipient fallback use explicit delivery targets or configured `allowFrom`; DM pairing approvals are not implicit cron/heartbeat recipients
-    - if no allowlist is configured, the linked self number is allowed by default
+    - same-number self-DMs are allowed unless `selfChatMode: false` or `dmPolicy: "disabled"`; see [Self-chat behavior](/channels/whatsapp#personal-number-and-self-chat-behavior)
     - OpenClaw never auto-pairs outbound `fromMe` DMs (messages you send yourself from the linked device)
 
   </Tab>
@@ -343,15 +343,16 @@ Direct chats match E.164 numbers; groups match WhatsApp group JIDs. Group allowl
 
 ## Personal-number and self-chat behavior
 
-`channels.whatsapp.selfChatMode` (boolean; channel or per-account under `channels.whatsapp.accounts.<id>.selfChatMode`) controls whether messages you send from the linked number to yourself are admitted as agent input.
+`channels.whatsapp.selfChatMode` controls same-number DM admission and self-chat safeguards. Set it at the channel level or override it per account with `channels.whatsapp.accounts.<id>.selfChatMode`.
 
-- **Allowed values:** `true`, `false`, or unset. Default is **unset**: OpenClaw infers self-chat from whether the linked self number is present in `allowFrom` (onboarding writes a self-chat-friendly baseline that includes your own number, so the inferred default is usually on for personal-number setups).
-- **When enabled (`true`, or unset with the self number in `allowFrom`):** a DM you send from the linked number to yourself is admitted as a normal direct-message user turn — the agent reads it as input and may reply. Self access is **direct-only**: the self number is added to the DM `allowFrom` list for admission, not to group allowlists.
-- **When disabled (`false`):** self-originated DMs are not admitted as agent input even if your number is in `allowFrom`; set `selfChatMode: false` to use a personal-number account purely as an outbound/observing channel without a self-chat loop.
+- **`true` or unset:** DMs from the linked number to itself are admitted as agent input, even when that number is absent from `allowFrom`. `dmPolicy: "disabled"` still blocks all DMs.
+- **`false`:** self-originated DMs are ignored, even when your number is in `allowFrom`. Other inbound DMs and group messages still follow their access policies; this setting does not make the account outbound-only.
 
-Independent of `selfChatMode`, the following self-chat safeguards activate whenever the linked self number is also present in `allowFrom`: skip read receipts for self-chat turns, ignore mention-JID auto-trigger behavior that would ping yourself, and default replies to `[{identity.name}]` (or `[openclaw]`) when the channel/account `responsePrefix` is unset. These guards prevent the agent from replying to itself in a tight loop; the default reply prefix also makes self-authored replies visually distinct from inbound user messages.
+The implicit self-number allowance applies only to DMs, not group allowlists.
 
-If you send a probe to your own number as a liveness check for a personal-number account, expect it to be treated as agent input unless you explicitly set `selfChatMode: false`. For a dedicated OpenClaw number used only to probe a personal number, keep `selfChatMode` unset on the OpenClaw account instead.
+Self-chat safeguards are enabled by `true` and disabled by `false`. When the setting is unset, OpenClaw enables them if the linked self number appears in the configured `allowFrom`. These safeguards skip read receipts, suppress native self-mention triggers, and supply an identity reply prefix when no response prefix is configured.
+
+A liveness probe sent to your own number can therefore become agent input with `selfChatMode` unset or `true`. Set `selfChatMode: false` if you want to exclude those self-originated DMs.
 
 ## Message normalization and context
 
@@ -396,7 +397,7 @@ If you send a probe to your own number as a liveness check for a personal-number
     { channels: { whatsapp: { sendReadReceipts: false } } }
     ```
 
-    Per-account override: `channels.whatsapp.accounts.<id>.sendReadReceipts`. Self-chat turns skip read receipts even when globally enabled.
+    Per-account override: `channels.whatsapp.accounts.<id>.sendReadReceipts`. Self-chat safeguards skip read receipts even when globally enabled (see [Self-chat behavior](/channels/whatsapp#personal-number-and-self-chat-behavior)).
 
   </Accordion>
 </AccordionGroup>

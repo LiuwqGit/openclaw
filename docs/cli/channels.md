@@ -174,22 +174,21 @@ openclaw channels logout --channel whatsapp
 
 ## Per-account recovery (non-destructive)
 
-When a single account needs to reconnect but should keep its pairing and credentials, use the per-account lifecycle Gateway RPCs instead of re-authenticating. `channels.start` and `channels.stop` are `operator.admin` methods that stop or start one resolved account without touching auth state; calling `channels.stop` then `channels.start` reproduces the force-close-and-re-register sequence the WhatsApp watchdog already runs internally. They are Gateway RPCs, not `openclaw channels` subcommands, so invoke them with `openclaw gateway call`:
+When one account needs to reconnect while keeping its pairing and credentials, call the `channels.stop` and `channels.start` Gateway RPCs. Both require `operator.admin`. Invoke them through `openclaw gateway call`:
 
 ```bash
-# stop the listener for one WhatsApp account without clearing its pairing
+# Stop one WhatsApp account without clearing its pairing.
 openclaw gateway call channels.stop --params '{"channel":"whatsapp","accountId":"<accountId>"}'
-# start it again on a fresh listener (omit accountId to resolve the default account)
-openclaw gateway call channels.start --params '{"channel":"whatsapp"}'
+# Start the same account again.
+openclaw gateway call channels.start --params '{"channel":"whatsapp","accountId":"<accountId>"}'
+openclaw channels status --channel whatsapp --probe
 ```
 
-- `channels.stop` returns `{ channel, accountId, stopped }`; `channels.start` returns `{ channel, accountId, started }` where `started: false` means the runtime reports the account is still stopped after the call.
-- This is deliberately narrower than the two heavier alternatives: `openclaw channels logout` + `channels login` re-pairs via QR and clears credentials, and `openclaw gateway restart` cycles every account on the host.
-- An external monitor that probes a chat and confirms the probe arrives inbound can therefore recover a single zombie account without disturbing the rest of the host. See [Restart recovery](/gateway/restart-recovery) for the related crash-loop-breaker SOP, which also uses `channels.start` as the manual override when channel autostart is suppressed.
+Use the same `accountId` in both calls. Omit it from both to select the default account.
 
-<Note>
-The per-account `channels.start` / `channels.stop` RPCs ship on `main` but are not in a published stable release tag yet. Operators on `v2026.7.1-2` cannot call them until the next release ships; until then, the documented `channels logout` / `channels login` and `gateway restart` paths remain the only released recovery options.
-</Note>
+`channels.stop` returns `{ channel, accountId, stopped }`; `channels.start` returns `{ channel, accountId, started }`. These booleans reflect the account's runtime snapshot after the operation: `started` is true only when `running` is true, and `stopped` is true when `running` is not true. A `started: false` response does not by itself establish that the account is stopped, and `started: true` does not establish that the provider connection is healthy. Check channel status and logs after recovery.
+
+Unlike this recovery path, `openclaw channels logout` clears the account's credentials and requires login again; `openclaw gateway restart` restarts the whole Gateway. See [Restart recovery](/gateway/restart-recovery) for the crash-loop breaker and its manual `channels.start` override.
 
 ## Troubleshooting
 
