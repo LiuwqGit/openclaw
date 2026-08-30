@@ -313,6 +313,15 @@ type SessionEntryCore = SessionRestartRecoveryState &
      * missing its transcript (#131770). Absent means no recorded disposition.
      */
     transcriptMaterialized?: boolean;
+    /**
+     * Deferred transcript archival for replaced isolated heartbeat generations
+     * whose run was still admitted when the rollover replaced them (#131770).
+     * The next rollover reclaims these session ids once the session lane goes
+     * quiet, so a transcript that materializes after a competing rollover is
+     * still archived instead of being orphaned. Absent means nothing is
+     * pending.
+     */
+    pendingTranscriptArchiveSessionIds?: string[];
     /** Legacy heartbeat task timestamps consumed and cleared only by doctor migration. */
     heartbeatTaskState?: Record<string, number>;
     /** Plugin-owned session state, grouped by plugin id then extension namespace. */

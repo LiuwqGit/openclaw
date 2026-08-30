@@ -32,7 +32,6 @@ import {
   loadExactSessionEntry,
   type SessionEntryLifecycleRemoval,
 } from "../config/sessions/session-accessor.js";
-import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   hasActiveCronJobs,
@@ -51,11 +50,16 @@ import {
 import { CommandLane } from "../process/lanes.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { isSessionWorkAdmissionActive } from "../sessions/session-lifecycle-admission.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { getAgentEventLifecycleGeneration } from "./agent-events.js";
 import { formatErrorMessage } from "./errors.js";
 import { isWithinActiveHours } from "./heartbeat-active-hours.js";
 import { emitHeartbeatEvent } from "./heartbeat-events.js";
+import {
+  archiveIsolatedRolloverTranscripts,
+  resolveIsolatedRolloverTranscriptReclamation,
+} from "./heartbeat-isolated-rollover.js";
 import {
   heartbeatLog,
   resolveHeartbeatForWake,
@@ -112,10 +116,6 @@ export type HeartbeatDeps = OutboundSendDeps &
 
 const loadHeartbeatRunnerRuntime = createLazyRuntimeModule(
   () => import("./heartbeat-runner.runtime.js"),
-);
-
-const loadSessionArchiveRuntime = createLazyRuntimeModule(
-  () => import("../gateway/session-archive.runtime.js"),
 );
 
 function hasActiveRunForAgent(agentId: string, listSessionKeys: () => readonly string[]): boolean {
@@ -553,15 +553,12 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
           },
         ]
       : [];
-    // Every isolated wake rolls a fresh session ID under this stable key. The
-    // replaced row is captured inside the lifecycle mutation, under the storage
-    // writer lane, so the archive always targets the exact generation this
-    // mutation replaced. Reading it before the awaited mutation instead would
-    // let an overlapping immediate/manual wake both snapshot the same stale
-    // predecessor: the later rollover would replace the first wake's session
-    // while archiving only the old ID, leaving that wake's transcript orphaned
-    // (#131770).
-    let replacedIsolatedEntry: SessionEntry | undefined;
+    // The replaced row is captured inside the lifecycle mutation (writer lane)
+    // so the archive targets the exact generation this rollover replaced, and
+    // reclamation is fenced against live runs — deferred generations ride the
+    // committed row until the session lane goes quiet (#131770; see
+    // heartbeat-isolated-rollover.ts).
+    let rolloverArchiveSessionIds: string[] = [];
     const lifecycleResult = await applySessionEntryLifecycleMutation({
       activeSessionKey: isolatedSessionKey,
       storePath: isolatedStorePath,
@@ -570,7 +567,13 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
         {
           sessionKey: isolatedSessionKey,
           buildEntry: ({ currentEntry, store }) => {
-            replacedIsolatedEntry = currentEntry;
+            const reclamation = resolveIsolatedRolloverTranscriptReclamation({
+              currentEntry,
+              sessionLaneActive: isSessionWorkAdmissionActive(isolatedStorePath, [
+                isolatedSessionKey,
+              ]),
+            });
+            rolloverArchiveSessionIds = reclamation.archiveSessionIds;
             const cronSession = resolveCronSession({
               cfg,
               sessionKey: isolatedSessionKey,
@@ -582,6 +585,12 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
             const nextEntry = {
               ...cronSession.sessionEntry,
               heartbeatIsolatedBaseSessionKey: isolatedBaseSessionKey,
+              ...(reclamation.pendingTranscriptArchiveSessionIds
+                ? {
+                    pendingTranscriptArchiveSessionIds:
+                      reclamation.pendingTranscriptArchiveSessionIds,
+                  }
+                : {}),
             };
             runSessionEntry = nextEntry;
             return nextEntry;
@@ -596,34 +605,15 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
         sessionKey: staleIsolatedSessionKey,
       });
     }
-    // The rollover upsert replaced the row in place, so lifecycle artifact
-    // cleanup never saw the previous session as removed. Archive the exact
-    // replaced generation's file-backed transcript explicitly so no
-    // unreferenced .jsonl is left behind (#131770). `replacedIsolatedEntry` is
-    // only assigned when the mutation committed, so a conflict that aborts the
-    // rollover never archives anything.
-    if (replacedIsolatedEntry?.sessionId) {
-      try {
-        const { archiveSessionTranscripts } = await loadSessionArchiveRuntime();
-        archiveSessionTranscripts({
-          sessionId: replacedIsolatedEntry.sessionId,
-          storePath: isolatedStorePath,
-          agentId,
-          reason: "deleted",
-          onArchiveError: (error, sourcePath) => {
-            log.warn(
-              `heartbeat: failed to archive previous isolated session transcript ${sourcePath} for session ${replacedIsolatedEntry?.sessionId}`,
-              { error: String(error), sessionKey: isolatedSessionKey },
-            );
-          },
-        });
-      } catch (err) {
-        log.warn("heartbeat: failed to archive previous isolated session transcript", {
-          err: formatErrorMessage(err),
-          sessionKey: isolatedSessionKey,
-        });
-      }
-    }
+    // Archive the terminal generations selected inside the mutation so no
+    // unreferenced .jsonl is left behind (#131770). The list is only populated
+    // when the mutation committed, so a conflict never archives anything.
+    await archiveIsolatedRolloverTranscripts({
+      agentId,
+      cfg,
+      sessionIds: rolloverArchiveSessionIds,
+      sessionKey: isolatedSessionKey,
+    });
     runSessionKey = isolatedSessionKey;
     outboundPolicySessionKey = isolatedBaseSessionKey;
 

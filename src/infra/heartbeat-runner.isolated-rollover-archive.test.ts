@@ -6,6 +6,10 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { formatSessionArchiveTimestamp } from "../config/sessions/artifacts.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
+import {
+  beginSessionWorkAdmission,
+  isSessionWorkAdmissionActive,
+} from "../sessions/session-lifecycle-admission.js";
 import { heartbeatLog } from "./heartbeat-runner-config.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
@@ -39,6 +43,9 @@ const lifecycleMutationGate = vi.hoisted(() => ({
   release: null as (() => void) | null,
 }));
 
+/** Session work admission leases held by tests; released after each test. */
+const releaseLeases: Array<() => void> = [];
+
 vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/sessions/session-accessor.js")>();
   return {
@@ -66,6 +73,13 @@ afterEach(() => {
   lifecycleMutationGate.entered = false;
   lifecycleMutationGate.held = false;
   lifecycleMutationGate.release = null;
+  for (const release of releaseLeases.splice(0)) {
+    try {
+      release();
+    } catch {
+      // A lease may already be released when its run finished.
+    }
+  }
 });
 
 function makeIsolatedLastTargetConfig(tmpDir: string, storePath: string): OpenClawConfig {
@@ -344,6 +358,145 @@ describe("runHeartbeatOnce - isolated heartbeat transcript rollover", () => {
       // archives the original predecessor, and wake A — whose rollover
       // replaced wake B's committed row — archives that exact generation.
       const remaining = await fs.readdir(sessionsDir);
+      expect(remaining).not.toContain("previous-wake.jsonl");
+      expect(remaining.some((name) => name.startsWith("previous-wake.jsonl."))).toBe(true);
+      expect(remaining).not.toContain(`${bSessionId}.jsonl`);
+      expect(remaining.some((name) => name.startsWith(`${bSessionId}.jsonl.`))).toBe(true);
+    });
+  });
+
+  it("reclaims a transcript that materializes after a competing rollover deferred it", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = makeIsolatedLastTargetConfig(tmpDir, storePath);
+      const baseSessionKey = resolveMainSessionKey(cfg);
+      const isolatedSessionKey = `${baseSessionKey}:heartbeat`;
+      const nowMs = Date.now();
+      await seedHeartbeatScratchForTest({
+        content: "Check whether the user needs a status update.",
+      });
+      await seedSessionStore(storePath, baseSessionKey, {
+        sessionId: "base-session",
+        updatedAt: nowMs - 2_000,
+        lastChannel: "whatsapp",
+        lastProvider: "whatsapp",
+        lastTo: "+15551234567",
+      });
+      await seedSessionStore(storePath, isolatedSessionKey, {
+        sessionId: "previous-wake",
+        updatedAt: nowMs - 1_000,
+        heartbeatIsolatedBaseSessionKey: baseSessionKey,
+      });
+      const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env);
+      await fs.mkdir(sessionsDir, { recursive: true });
+      await fs.writeFile(
+        path.join(sessionsDir, "previous-wake.jsonl"),
+        `{"type":"message","sessionKey":"${isolatedSessionKey}"}\n`,
+      );
+
+      // Hold the first wake's rollover before it reaches the storage writer lane.
+      lifecycleMutationGate.shouldHold = (params) => params.activeSessionKey === isolatedSessionKey;
+      const runA = runHeartbeatOnce({
+        cfg,
+        deps: {
+          getReplyFromConfig: replySpy,
+          getQueueSize: () => 0,
+          nowMs: () => nowMs,
+        },
+      });
+      await vi.waitFor(() => expect(lifecycleMutationGate.entered).toBe(true), { timeout: 10_000 });
+
+      // Wake B rolls over the seeded row and starts its reply turn. The reply
+      // spy stands in for the real turn: it holds a real session work admission
+      // on the isolated session lane for the duration of the "run".
+      const releaseBRun = (() => {
+        let release!: () => void;
+        const gate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        return { gate, release };
+      })();
+      replySpy.mockImplementationOnce(async () => {
+        const lease = await beginSessionWorkAdmission({
+          scope: storePath,
+          identities: [isolatedSessionKey],
+          assertAllowed: () => {},
+        });
+        releaseLeases.push(lease.release);
+        await releaseBRun.gate;
+        lease.release();
+        return { text: "All good." };
+      });
+      const runB = runHeartbeatOnce({
+        cfg,
+        deps: {
+          getReplyFromConfig: replySpy,
+          getQueueSize: () => 0,
+          nowMs: () => nowMs,
+        },
+      });
+      const bSessionId = await vi.waitFor(
+        () => {
+          const sessionId = readSessionStoreForTest<{ sessionId?: string }>(storePath)[
+            isolatedSessionKey
+          ]?.sessionId;
+          expect(sessionId).toBeTruthy();
+          expect(sessionId).not.toBe("previous-wake");
+          return sessionId as string;
+        },
+        { timeout: 10_000 },
+      );
+      await vi.waitFor(
+        () => expect(isSessionWorkAdmissionActive(storePath, [isolatedSessionKey])).toBe(true),
+        { timeout: 10_000 },
+      );
+
+      // Wake A's rollover finally lands while wake B's run is still admitted.
+      // It must defer reclamation of wake B's generation onto the committed row
+      // instead of racing B's still-absent transcript.
+      lifecycleMutationGate.release?.();
+      const resultA = await runA;
+      expect(resultA.status).toBe("ran");
+      const storeAfterA = readSessionStoreForTest<{
+        sessionId?: string;
+        pendingTranscriptArchiveSessionIds?: string[];
+      }>(storePath);
+      expect(storeAfterA[isolatedSessionKey]?.sessionId).toBeTruthy();
+      expect(storeAfterA[isolatedSessionKey]?.sessionId).not.toBe(bSessionId);
+      expect(storeAfterA[isolatedSessionKey]?.pendingTranscriptArchiveSessionIds).toEqual([
+        bSessionId,
+      ]);
+
+      // Wake B's transcript materializes only now — after the competing
+      // rollover already replaced its row.
+      await fs.writeFile(
+        path.join(sessionsDir, `${bSessionId}.jsonl`),
+        `{"type":"message","sessionKey":"${isolatedSessionKey}"}\n`,
+      );
+      // The deferred generation is not reclaimed while its run is admitted.
+      let remaining = await fs.readdir(sessionsDir);
+      expect(remaining).toContain(`${bSessionId}.jsonl`);
+
+      // Wake B's run ends; a fresh wake reclaims the deferred generation.
+      releaseBRun.release();
+      const resultB = await runB;
+      expect(resultB.status).toBe("ran");
+      const runC = await runHeartbeatOnce({
+        cfg,
+        deps: {
+          getReplyFromConfig: replySpy,
+          getQueueSize: () => 0,
+          nowMs: () => nowMs,
+        },
+      });
+      expect(runC.status).toBe("ran");
+
+      const store = readSessionStoreForTest<{
+        sessionId?: string;
+        pendingTranscriptArchiveSessionIds?: string[];
+      }>(storePath);
+      expect(store[isolatedSessionKey]?.sessionId).toBeTruthy();
+      expect(store[isolatedSessionKey]?.pendingTranscriptArchiveSessionIds).toBeUndefined();
+      remaining = await fs.readdir(sessionsDir);
       expect(remaining).not.toContain("previous-wake.jsonl");
       expect(remaining.some((name) => name.startsWith("previous-wake.jsonl."))).toBe(true);
       expect(remaining).not.toContain(`${bSessionId}.jsonl`);
