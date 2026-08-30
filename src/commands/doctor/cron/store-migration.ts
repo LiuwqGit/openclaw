@@ -44,6 +44,7 @@ type CronStoreIssueKey =
   | "nonStringId"
   | "legacyScheduleString"
   | "legacyScheduleCron"
+  | "legacyScheduleKind"
   | "legacyPayloadKind"
   | "legacyPayloadCodexModel"
   | "legacyImageInspectionToolName"
@@ -437,6 +438,29 @@ export function normalizeStoredCronJobs(
     if (schedule && typeof schedule === "object" && !Array.isArray(schedule)) {
       const sched = schedule as Record<string, unknown>;
       const kind = normalizeOptionalLowercaseString(sched.kind) ?? "";
+      // The public input path canonicalizes recognized schedule kinds (case and
+      // whitespace variants) before validation, so the migration must apply the
+      // same canonicalization here. Otherwise rows the standard validator
+      // accepts are quarantined as invalid-schedule during migration.
+      const recognizedScheduleKind =
+        kind === "at" ||
+        kind === "every" ||
+        kind === "cron" ||
+        kind === "on-exit" ||
+        kind === "stream";
+      if (recognizedScheduleKind && sched.kind !== kind) {
+        sched.kind = kind;
+        mutated = true;
+        trackIssue("legacyScheduleKind");
+      }
+      if (kind === "stream") {
+        const streamMode = normalizeOptionalLowercaseString(sched.mode);
+        if ((streamMode === "line" || streamMode === "match") && sched.mode !== streamMode) {
+          sched.mode = streamMode;
+          mutated = true;
+          trackIssue("legacyScheduleKind");
+        }
+      }
       if (!kind && ("at" in sched || "atMs" in sched)) {
         sched.kind = "at";
         mutated = true;
