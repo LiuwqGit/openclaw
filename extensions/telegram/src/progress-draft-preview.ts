@@ -41,21 +41,29 @@ function escapeTelegramProgressHtml(text: string): string {
     .replaceAll('"', "&quot;");
 }
 
-function clipTelegramProgressDetail(detail: string, label: string, maxLineChars: number): string {
+function clipTelegramProgressDetail(
+  detail: string,
+  label: string,
+  maxLineChars: number,
+  reservedChars = 0,
+): string {
   // Mirror the shared compact renderer: the label prefix shares the line
   // budget, and the canonical compaction keeps the detail's useful prefix and
   // suffix around a middle ellipsis instead of blindly cutting the tail.
+  // `reservedChars` is what the rest of the composed line (the status tail)
+  // already consumes, so the label + detail + status line stays within one
+  // line budget like the shared renderer's whole-line cap.
+  const lineBudget = maxLineChars - reservedChars;
   const prefix = `${label}: `;
-  const compacted = clipTelegramProgressText(`${prefix}${detail}`, maxLineChars);
+  const compacted = clipTelegramProgressText(`${prefix}${detail}`, lineBudget);
   if (compacted.startsWith(prefix)) {
     return compacted.slice(prefix.length);
   }
   // The canonical compactor keeps the label only while the remaining detail
   // budget still reaches its eight-character minimum. For a valid budget
   // shorter than that, reserve the label and its rendered separator before
-  // clipping the fallback detail, so the composed label + detail line stays
-  // within one line budget like the shared renderer's whole-line cap.
-  const detailBudget = maxLineChars - Array.from(`${label} `).length;
+  // clipping the fallback detail.
+  const detailBudget = lineBudget - Array.from(`${label} `).length;
   return detailBudget >= 1 ? clipTelegramProgressText(detail, detailBudget) : "";
 }
 
@@ -66,6 +74,41 @@ function clipTelegramProgressLabel(label: string, maxLineChars: number): string 
   return Array.from(label).length > maxLineChars
     ? clipTelegramProgressText(label, maxLineChars)
     : label;
+}
+
+type TelegramProgressLineParts = {
+  label: string;
+  detail: string | undefined;
+  status: string | undefined;
+};
+
+function resolveTelegramProgressLineParts(
+  line: Exclude<ChannelProgressDraftCompositorLine, string>,
+  maxLineChars: number,
+): TelegramProgressLineParts {
+  const label = clipTelegramProgressLabel(
+    [line.icon, line.label].filter(Boolean).join(" "),
+    maxLineChars,
+  );
+  const labelLength = Array.from(label).length;
+  // The shared renderer bounds the whole composed line, status tail included,
+  // so reserve the label and status halves before the detail sees a budget.
+  const rawStatus =
+    line.status && line.status !== "completed" && line.status !== line.detail
+      ? line.status
+      : undefined;
+  // Reserve the joining separator before allocating status characters; when
+  // the label already fills the whole-line budget there is no room left for
+  // the status tail, so omit it instead of overflowing the visible line.
+  const statusBudget = maxLineChars - labelLength - 1;
+  const status =
+    rawStatus && statusBudget >= 1 ? clipTelegramProgressText(rawStatus, statusBudget) : undefined;
+  const statusLength = status ? Array.from(status).length + 1 : 0;
+  const rawDetail = line.detail && line.detail !== line.label ? line.detail : undefined;
+  const detail = rawDetail
+    ? clipTelegramProgressDetail(rawDetail, label, maxLineChars, statusLength)
+    : undefined;
+  return { label, detail, status };
 }
 
 function renderTelegramProgressStringLine(text: string, maxLineChars: number): string {
@@ -98,27 +141,25 @@ function renderTelegramProgressLine(
   if (!line.icon && (!line.label || line.label === "Commentary")) {
     return renderTelegramProgressText(line.text, maxLineChars);
   }
-  const label = clipTelegramProgressLabel(
-    [line.icon, line.label].filter(Boolean).join(" "),
-    maxLineChars,
-  );
+  const { label, detail, status } = resolveTelegramProgressLineParts(line, maxLineChars);
+  const labelLength = Array.from(label).length;
+  const statusLength = status ? Array.from(status).length + 1 : 0;
   const parts = [`<b>${escapeTelegramProgressHtml(label)}</b>`];
-  const detail = line.detail && line.detail !== line.label ? line.detail : undefined;
   if (detail) {
-    const clippedDetail = clipTelegramProgressDetail(detail, label, maxLineChars);
-    if (clippedDetail) {
-      parts.push(`<code>${escapeTelegramProgressHtml(clippedDetail)}</code>`);
-    }
+    parts.push(`<code>${escapeTelegramProgressHtml(detail)}</code>`);
   } else {
     const text = line.text.trim();
     if (text && text !== label) {
-      parts.push(
-        `<code>${escapeTelegramProgressHtml(clipTelegramProgressText(text, maxLineChars))}</code>`,
-      );
+      const textBudget = maxLineChars - labelLength - 1 - statusLength;
+      if (textBudget >= 1) {
+        parts.push(
+          `<code>${escapeTelegramProgressHtml(clipTelegramProgressText(text, textBudget))}</code>`,
+        );
+      }
     }
   }
-  if (line.status && line.status !== "completed" && line.status !== line.detail) {
-    parts.push(`<i>${escapeTelegramProgressHtml(line.status)}</i>`);
+  if (status) {
+    parts.push(`<i>${escapeTelegramProgressHtml(status)}</i>`);
   }
   return parts.join(" ");
 }
@@ -172,25 +213,23 @@ function progressLineToRichText(
   if (!line.icon && (!line.label || line.label === "Commentary")) {
     return progressTextToRichText(line.text, maxLineChars);
   }
-  const label = clipTelegramProgressLabel(
-    [line.icon, line.label].filter(Boolean).join(" "),
-    maxLineChars,
-  );
+  const { label, detail, status } = resolveTelegramProgressLineParts(line, maxLineChars);
+  const labelLength = Array.from(label).length;
+  const statusLength = status ? Array.from(status).length + 1 : 0;
   const parts: RichText[] = [boldRichText(label)];
-  const detail = line.detail && line.detail !== line.label ? line.detail : undefined;
   if (detail) {
-    const clippedDetail = clipTelegramProgressDetail(detail, label, maxLineChars);
-    if (clippedDetail) {
-      parts.push(codeRichText(clippedDetail));
-    }
+    parts.push(codeRichText(detail));
   } else {
     const text = line.text.trim();
     if (text && text !== label) {
-      parts.push(codeRichText(clipTelegramProgressText(text, maxLineChars)));
+      const textBudget = maxLineChars - labelLength - 1 - statusLength;
+      if (textBudget >= 1) {
+        parts.push(codeRichText(clipTelegramProgressText(text, textBudget)));
+      }
     }
   }
-  if (line.status && line.status !== "completed" && line.status !== line.detail) {
-    parts.push(italicRichText(line.status));
+  if (status) {
+    parts.push(italicRichText(status));
   }
   return joinRichText(parts, " ");
 }

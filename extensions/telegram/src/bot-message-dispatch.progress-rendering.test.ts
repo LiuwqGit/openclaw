@@ -191,6 +191,45 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
     expect(toolLine).toContain("…");
   });
 
+  it("caps arbitrary structured item statuses within the configured budget", async () => {
+    vi.useFakeTimers();
+    try {
+      const draftStream = createSequencedDraftStream(2001);
+      createTelegramDraftStream.mockReturnValue(draftStream);
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+        // Named item events may carry an independent arbitrary status string;
+        // the rendered line must stay inside the configured whole-line budget.
+        await replyOptions?.onItemEvent?.({
+          kind: "deploy-check",
+          itemId: "item-1",
+          title: "Deploy check",
+          status: `retrying endpoint ${"x".repeat(200)} after timeout`,
+        });
+        await vi.advanceTimersByTimeAsync(5_000);
+        return { queuedFinal: false };
+      });
+
+      await dispatchWithContext({
+        context: createContext(),
+        streamMode: "progress",
+        telegramCfg: {
+          streaming: { mode: "progress", progress: { label: false, maxLineChars: 40 } },
+        },
+      });
+
+      const preview = draftStream.updatePreview.mock.calls.at(-1)?.[0];
+      const statusLine = (preview?.text ?? "")
+        .split("<br>")
+        .find((part) => part.includes("Deploy check"));
+      const plain = (statusLine ?? "").replace(/<[^>]+>/gu, "");
+      expect(Array.from(plain).length).toBeLessThanOrEqual(40);
+      expect(plain).toContain("Deploy check");
+      expect(plain).toContain("…");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("renders the headline immediately when the preamble arrives after tool progress", async () => {
     const draftStream = createSequencedDraftStream(2001);
     createTelegramDraftStream.mockReturnValue(draftStream);

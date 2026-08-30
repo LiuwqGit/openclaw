@@ -118,6 +118,85 @@ describe("renderTelegramProgressDraftPreview", () => {
     expect(JSON.stringify(preview.richMessage)).not.toContain("video");
   });
 
+  it("keeps the status tail inside the composed line budget", () => {
+    const path = `path/to/${"nested/".repeat(20)}file.ts`;
+    const line = buildChannelProgressDraftLine(
+      {
+        event: "tool",
+        toolCallId: "call-1",
+        name: "Bash",
+        phase: "start",
+        args: { command: `cat ${path}` },
+      },
+      { commandText: "raw" },
+    );
+    if (!line) {
+      throw new Error("expected a progress line for Bash");
+    }
+    const statusLine = { ...line, status: "running" };
+
+    const rendered = renderTelegramProgressDraftPreview(
+      "Working",
+      [statusLine],
+      false,
+      true,
+      16,
+    ).text;
+    const toolLine = (rendered.split("<br>")[1] ?? "").replace(/<[^>]+>/gu, "");
+
+    // label (8) + " " + status (7) already reaches 16, so the composed line
+    // stays at budget instead of appending an unbounded detail.
+    expect(Array.from(toolLine).length).toBeLessThanOrEqual(16);
+    expect(toolLine).toContain("running");
+  });
+
+  it("omits the status when the label fills the configured budget", () => {
+    const structured = (status: string) => ({
+      kind: "item" as const,
+      label: "Deploy check",
+      text: "Deploy check",
+      status,
+      prefix: false,
+    });
+
+    // Label (12) exactly fills the budget: no room for the joining separator
+    // plus status, so the status is omitted instead of overflowing the line.
+    const atBudget = renderTelegramProgressDraftPreview(
+      "Working",
+      [structured("running")],
+      false,
+      true,
+      12,
+    ).text;
+    const atBudgetLine = (atBudget.split("<br>")[1] ?? "").replace(/<[^>]+>/gu, "");
+    expect(atBudgetLine).toBe("Deploy check");
+
+    // One code point below the budget leaves only the separator: the status
+    // still does not fit and stays omitted.
+    const oneBelow = renderTelegramProgressDraftPreview(
+      "Working",
+      [structured("running")],
+      false,
+      true,
+      13,
+    ).text;
+    const oneBelowLine = (oneBelow.split("<br>")[1] ?? "").replace(/<[^>]+>/gu, "");
+    expect(oneBelowLine).toBe("Deploy check");
+
+    // Two code points below the budget fit the separator plus one clipped
+    // status character without exceeding the line budget.
+    const withRoom = renderTelegramProgressDraftPreview(
+      "Working",
+      [structured("running")],
+      false,
+      true,
+      15,
+    ).text;
+    const withRoomLine = (withRoom.split("<br>")[1] ?? "").replace(/<[^>]+>/gu, "");
+    expect(Array.from(withRoomLine).length).toBeLessThanOrEqual(15);
+    expect(withRoomLine).toContain("…");
+  });
+
   it("keeps the label and fallback detail within one line budget", () => {
     const path = `path/to/${"nested/".repeat(20)}file.ts`;
     const line = buildChannelProgressDraftLine(
