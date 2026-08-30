@@ -747,6 +747,37 @@ function isSlashRoutingSessionKey(sessionKey: string): boolean {
   return /^[^:]+:slash:[^:]+(?:$|:)/.test(scoped);
 }
 
+/**
+ * Missing transcripts are expected only when the lifecycle owner recorded the
+ * disposition or the row is structurally transient (#131770): isolated cron
+ * persistence stamps `transcriptMaterialized: false` when it commits a row
+ * without a materialized transcript file, and every isolated heartbeat wake
+ * rolls a fresh session ID under a stable store key, so the canonical
+ * isolated row never holds durable user history. Retained rows without an
+ * owner-recorded disposition keep their warning so unexpected transcript
+ * loss stays diagnosable.
+ */
+function isExpectedTransientTranscriptSession(sessionKey: string, entry: SessionEntry): boolean {
+  if (entry.transcriptMaterialized === false) {
+    return true;
+  }
+  const isolatedBaseSessionKey = entry.heartbeatIsolatedBaseSessionKey;
+  if (typeof isolatedBaseSessionKey !== "string" || !isolatedBaseSessionKey.trim()) {
+    return false;
+  }
+  // Ownership, not activity, decides: the marker identifies a synthetic
+  // isolated session (#131770), and the rollover path stamps
+  // `lastInteractionAt` on every fresh row, so activity timestamps cannot
+  // separate machine churn from user history here. Only rows in the canonical
+  // isolated-key relationship qualify: the stable `<base>:heartbeat` key (or
+  // the agent-qualified sibling of the literal `global` base).
+  const base = isolatedBaseSessionKey.trim();
+  return (
+    sessionKey === `${base}:heartbeat` ||
+    (base === "global" && sessionKey.endsWith(":global:heartbeat"))
+  );
+}
+
 function shouldRequireOAuthDir(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
   if (env.OPENCLAW_OAUTH_DIR?.trim()) {
     return true;
@@ -1355,6 +1386,18 @@ export async function noteStateIntegrity(
     let sqliteNewKeyIndex = 0;
     const recent: Array<{ entry: SessionEntry; order: number; sessionKey: string }> = [];
     const addRecent = (sessionKey: string, entry: SessionEntry, order: number) => {
+      // Only sessions whose transcripts are expected to persist belong in the
+      // recent window. Exclude owner-recorded transcript disposals, canonical
+      // isolated heartbeat churn rows, and slash-routing rows before the
+      // five-entry cap so a burst of newer background rows cannot push an
+      // older real session out of the window and hide its missing transcript
+      // (#131770).
+      if (
+        isSlashRoutingSessionKey(sessionKey) ||
+        isExpectedTransientTranscriptSession(sessionKey, entry)
+      ) {
+        return;
+      }
       recent.push({ entry, order, sessionKey });
       recent.sort((left, right) => {
         const leftUpdated = typeof left.entry.updatedAt === "number" ? left.entry.updatedAt : 0;
@@ -1409,9 +1452,11 @@ export async function noteStateIntegrity(
       countLabel,
     });
     if (mergedEntryCount > 0) {
-      const recentTranscriptCandidates = recent
-        .map(({ entry, sessionKey }) => [sessionKey, entry] as const)
-        .filter(([key]) => !isSlashRoutingSessionKey(key));
+      // Slash-routing and transient churn rows are already excluded while the
+      // recent window is collected, before its five-entry cap applies.
+      const recentTranscriptCandidates = recent.map(
+        ({ entry, sessionKey }) => [sessionKey, entry] as const,
+      );
       const missing = recentTranscriptCandidates.filter(([key, entry]) => {
         if (sqliteSessionKeys.has(key)) {
           return false;
