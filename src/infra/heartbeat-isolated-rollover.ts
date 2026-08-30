@@ -2,6 +2,7 @@
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getSessionWorkAdmissionRelease } from "../sessions/session-lifecycle-admission.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { formatErrorMessage } from "./errors.js";
 import { heartbeatLog } from "./heartbeat-runner-config.js";
@@ -21,15 +22,15 @@ const loadSessionArchiveRuntime = createLazyRuntimeModule(
  * rollover committed, so a one-shot archive at that point would miss the file
  * and leave it orphaned. While the session lane is admitted, the replaced
  * generation — plus anything it deferred — is carried on the committed row as
- * `pendingTranscriptArchiveSessionIds` and reclaimed by the next rollover once
- * the lane goes quiet.
+ * `pendingTranscriptArchiveSessionIds` and reclaimed once the lane's
+ * admissions release (see {@link reclaimIsolatedRolloverTranscripts}).
  */
 export function resolveIsolatedRolloverTranscriptReclamation(params: {
   currentEntry?: SessionEntry;
   sessionLaneActive: boolean;
 }): {
   archiveSessionIds: string[];
-  pendingTranscriptArchiveSessionIds?: string[];
+  deferredSessionIds: string[];
 } {
   const deferredFromReplaced = (
     params.currentEntry?.pendingTranscriptArchiveSessionIds ?? []
@@ -38,7 +39,7 @@ export function resolveIsolatedRolloverTranscriptReclamation(params: {
   if (params.sessionLaneActive) {
     return {
       archiveSessionIds: [],
-      pendingTranscriptArchiveSessionIds: [
+      deferredSessionIds: [
         ...deferredFromReplaced,
         ...(replacedSessionId ? [replacedSessionId] : []),
       ],
@@ -46,6 +47,7 @@ export function resolveIsolatedRolloverTranscriptReclamation(params: {
   }
   return {
     archiveSessionIds: [...deferredFromReplaced, ...(replacedSessionId ? [replacedSessionId] : [])],
+    deferredSessionIds: [],
   };
 }
 
@@ -55,7 +57,7 @@ export function resolveIsolatedRolloverTranscriptReclamation(params: {
  * committed (#131770). Individual rename failures are surfaced through the
  * heartbeat log so they are never silently dropped from observability.
  */
-export async function archiveIsolatedRolloverTranscripts(params: {
+async function archiveIsolatedRolloverTranscripts(params: {
   agentId: string;
   cfg: OpenClawConfig;
   sessionIds: readonly string[];
@@ -89,4 +91,45 @@ export async function archiveIsolatedRolloverTranscripts(params: {
       sessionKey: params.sessionKey,
     });
   }
+}
+
+/**
+ * Reclaims both halves of one rollover's reclamation decision (#131770): the
+ * already-terminal generations are archived immediately, and generations whose
+ * run is still admitted are archived as soon as every admission on the
+ * isolated session lane releases — so a transcript that materializes after the
+ * competing rollover is reclaimed even when no further heartbeat wake runs.
+ * The deferred ids also stay on the committed row, so a process restart before
+ * the release still reclaims them on the next rollover.
+ */
+export async function reclaimIsolatedRolloverTranscripts(params: {
+  agentId: string;
+  archiveSessionIds: readonly string[];
+  cfg: OpenClawConfig;
+  deferredSessionIds: readonly string[];
+  sessionKey: string;
+  storePath: string;
+}): Promise<void> {
+  await archiveIsolatedRolloverTranscripts({
+    agentId: params.agentId,
+    cfg: params.cfg,
+    sessionIds: params.archiveSessionIds,
+    sessionKey: params.sessionKey,
+  });
+  if (params.deferredSessionIds.length === 0) {
+    return;
+  }
+  const admissionRelease =
+    getSessionWorkAdmissionRelease({
+      scope: params.storePath,
+      identities: [params.sessionKey],
+    }) ?? Promise.resolve();
+  void admissionRelease.then(() =>
+    archiveIsolatedRolloverTranscripts({
+      agentId: params.agentId,
+      cfg: params.cfg,
+      sessionIds: params.deferredSessionIds,
+      sessionKey: params.sessionKey,
+    }),
+  );
 }

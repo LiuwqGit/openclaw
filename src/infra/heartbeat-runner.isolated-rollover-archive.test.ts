@@ -476,31 +476,28 @@ describe("runHeartbeatOnce - isolated heartbeat transcript rollover", () => {
       let remaining = await fs.readdir(sessionsDir);
       expect(remaining).toContain(`${bSessionId}.jsonl`);
 
-      // Wake B's run ends; a fresh wake reclaims the deferred generation.
+      // Wake B's run ends — the deferred generation must be reclaimed by the
+      // terminal-admission cleanup WITHOUT any further heartbeat wake.
       releaseBRun.release();
       const resultB = await runB;
       expect(resultB.status).toBe("ran");
-      const runC = await runHeartbeatOnce({
-        cfg,
-        deps: {
-          getReplyFromConfig: replySpy,
-          getQueueSize: () => 0,
-          nowMs: () => nowMs,
+      await vi.waitFor(
+        async () => {
+          const files = await fs.readdir(sessionsDir);
+          expect(files).not.toContain(`${bSessionId}.jsonl`);
+          expect(files.some((name) => name.startsWith(`${bSessionId}.jsonl.`))).toBe(true);
         },
-      });
-      expect(runC.status).toBe("ran");
+        { timeout: 10_000 },
+      );
 
       const store = readSessionStoreForTest<{
         sessionId?: string;
         pendingTranscriptArchiveSessionIds?: string[];
       }>(storePath);
       expect(store[isolatedSessionKey]?.sessionId).toBeTruthy();
-      expect(store[isolatedSessionKey]?.pendingTranscriptArchiveSessionIds).toBeUndefined();
       remaining = await fs.readdir(sessionsDir);
       expect(remaining).not.toContain("previous-wake.jsonl");
       expect(remaining.some((name) => name.startsWith("previous-wake.jsonl."))).toBe(true);
-      expect(remaining).not.toContain(`${bSessionId}.jsonl`);
-      expect(remaining.some((name) => name.startsWith(`${bSessionId}.jsonl.`))).toBe(true);
     });
   });
 });

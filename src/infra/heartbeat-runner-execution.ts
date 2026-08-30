@@ -57,7 +57,7 @@ import { formatErrorMessage } from "./errors.js";
 import { isWithinActiveHours } from "./heartbeat-active-hours.js";
 import { emitHeartbeatEvent } from "./heartbeat-events.js";
 import {
-  archiveIsolatedRolloverTranscripts,
+  reclaimIsolatedRolloverTranscripts,
   resolveIsolatedRolloverTranscriptReclamation,
 } from "./heartbeat-isolated-rollover.js";
 import {
@@ -556,9 +556,10 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
     // The replaced row is captured inside the lifecycle mutation (writer lane)
     // so the archive targets the exact generation this rollover replaced, and
     // reclamation is fenced against live runs — deferred generations ride the
-    // committed row until the session lane goes quiet (#131770; see
+    // committed row until their admission releases (#131770; see
     // heartbeat-isolated-rollover.ts).
     let rolloverArchiveSessionIds: string[] = [];
+    let rolloverDeferredSessionIds: string[] = [];
     const lifecycleResult = await applySessionEntryLifecycleMutation({
       activeSessionKey: isolatedSessionKey,
       storePath: isolatedStorePath,
@@ -574,6 +575,7 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
               ]),
             });
             rolloverArchiveSessionIds = reclamation.archiveSessionIds;
+            rolloverDeferredSessionIds = reclamation.deferredSessionIds;
             const cronSession = resolveCronSession({
               cfg,
               sessionKey: isolatedSessionKey,
@@ -585,11 +587,8 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
             const nextEntry = {
               ...cronSession.sessionEntry,
               heartbeatIsolatedBaseSessionKey: isolatedBaseSessionKey,
-              ...(reclamation.pendingTranscriptArchiveSessionIds
-                ? {
-                    pendingTranscriptArchiveSessionIds:
-                      reclamation.pendingTranscriptArchiveSessionIds,
-                  }
+              ...(rolloverDeferredSessionIds.length > 0
+                ? { pendingTranscriptArchiveSessionIds: rolloverDeferredSessionIds }
                 : {}),
             };
             runSessionEntry = nextEntry;
@@ -605,14 +604,17 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
         sessionKey: staleIsolatedSessionKey,
       });
     }
-    // Archive the terminal generations selected inside the mutation so no
-    // unreferenced .jsonl is left behind (#131770). The list is only populated
-    // when the mutation committed, so a conflict never archives anything.
-    await archiveIsolatedRolloverTranscripts({
+    // Reclaim the generations selected inside the mutation: terminal ones
+    // immediately, deferred ones when their admission releases. The lists are
+    // only populated when the mutation committed, so a conflict that aborts
+    // the rollover never archives anything (#131770).
+    await reclaimIsolatedRolloverTranscripts({
       agentId,
+      archiveSessionIds: rolloverArchiveSessionIds,
       cfg,
-      sessionIds: rolloverArchiveSessionIds,
+      deferredSessionIds: rolloverDeferredSessionIds,
       sessionKey: isolatedSessionKey,
+      storePath: isolatedStorePath,
     });
     runSessionKey = isolatedSessionKey;
     outboundPolicySessionKey = isolatedBaseSessionKey;
