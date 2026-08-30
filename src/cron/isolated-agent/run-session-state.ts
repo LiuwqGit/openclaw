@@ -134,6 +134,9 @@ function toNonResumableCronSessionEntry(entry: SessionEntry): SessionEntry {
   delete next.cliSessionIds;
   delete next.cliSessionBindings;
   delete next.claudeCliSessionId;
+  // Record the disposition so doctor treats the missing transcript as an
+  // owner-attested fact instead of unexpected loss (#131770).
+  next.transcriptMaterialized = false;
   return next as SessionEntry;
 }
 

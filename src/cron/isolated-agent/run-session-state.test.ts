@@ -473,6 +473,9 @@ describe("createPersistCronSessionEntry", () => {
     expect(cronSession.store["agent:main:cron:shell-only"]?.sessionId).toBe("run-session-id");
     expect(cronSession.store["agent:main:cron:shell-only"]?.sessionFile).toBeUndefined();
     expect(cronSession.store["agent:main:cron:shell-only"]?.lifecycleRevision).toBe("run-revision");
+    // The owner records the missing transcript so doctor can treat it as an
+    // attested disposal instead of unexpected loss (#131770).
+    expect(cronSession.store["agent:main:cron:shell-only"]?.transcriptMaterialized).toBe(false);
     expect(cronSession.sessionEntry.sessionId).toBe("run-session-id");
     expect(persistSessionEntry).toHaveBeenCalledWith({
       storePath: "/tmp/sessions.json",
@@ -484,6 +487,7 @@ describe("createPersistCronSessionEntry", () => {
         status: "running",
         updatedAt: 1000,
         systemSent: true,
+        transcriptMaterialized: false,
       },
       update: expect.any(Function),
     });

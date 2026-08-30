@@ -305,6 +305,14 @@ type SessionEntryCore = SessionRestartRecoveryState &
      * a real user/session-scoped key that merely happens to end with `:heartbeat`.
      */
     heartbeatIsolatedBaseSessionKey?: string;
+    /**
+     * Owner-recorded transcript disposition. Explicit `false` means the
+     * lifecycle owner persisted this row without a materialized transcript
+     * file (e.g. an isolated cron run whose transcript never materialized or
+     * was removed on completion), so state integrity must not flag the row as
+     * missing its transcript (#131770). Absent means no recorded disposition.
+     */
+    transcriptMaterialized?: boolean;
     /** Legacy heartbeat task timestamps consumed and cleared only by doctor migration. */
     heartbeatTaskState?: Record<string, number>;
     /** Plugin-owned session state, grouped by plugin id then extension namespace. */
