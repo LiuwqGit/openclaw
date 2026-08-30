@@ -25,10 +25,47 @@ vi.mock("./outbound/deliver.js", () => ({
   deliverOutboundPayloadsInternal,
 }));
 
+/**
+ * Test-controlled gate around the rollover lifecycle mutation: the first
+ * matching call is held before it reaches the storage writer lane, so a second
+ * overlapping wake can run its own rollover first. This reproduces the
+ * interleaving where both wakes observe the same predecessor generation
+ * (#131770).
+ */
+const lifecycleMutationGate = vi.hoisted(() => ({
+  shouldHold: null as ((params: { activeSessionKey?: string }) => boolean) | null,
+  entered: false,
+  held: false,
+  release: null as (() => void) | null,
+}));
+
+vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/sessions/session-accessor.js")>();
+  return {
+    ...actual,
+    applySessionEntryLifecycleMutation: async (
+      params: Parameters<typeof actual.applySessionEntryLifecycleMutation>[0],
+    ) => {
+      if (lifecycleMutationGate.shouldHold?.(params) && !lifecycleMutationGate.held) {
+        lifecycleMutationGate.held = true;
+        lifecycleMutationGate.entered = true;
+        await new Promise<void>((resolve) => {
+          lifecycleMutationGate.release = resolve;
+        });
+      }
+      return await actual.applySessionEntryLifecycleMutation(params);
+    },
+  };
+});
+
 installHeartbeatRunnerTestRuntime();
 
 afterEach(() => {
   deliverOutboundPayloadsInternal.mockClear();
+  lifecycleMutationGate.shouldHold = null;
+  lifecycleMutationGate.entered = false;
+  lifecycleMutationGate.held = false;
+  lifecycleMutationGate.release = null;
 });
 
 function makeIsolatedLastTargetConfig(tmpDir: string, storePath: string): OpenClawConfig {
@@ -220,6 +257,97 @@ describe("runHeartbeatOnce - isolated heartbeat transcript rollover", () => {
       expect(store[isolatedSessionKey]?.createdAt).toBe(createdAt);
       expect(store[isolatedSessionKey]?.createdVia).toBe("cron");
       expect(store[isolatedSessionKey]?.sandbox).toBe("required");
+    });
+  });
+
+  it("archives the exact replaced generation when overlapping wakes interleave", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = makeIsolatedLastTargetConfig(tmpDir, storePath);
+      const baseSessionKey = resolveMainSessionKey(cfg);
+      const isolatedSessionKey = `${baseSessionKey}:heartbeat`;
+      const nowMs = Date.now();
+      await seedHeartbeatScratchForTest({
+        content: "Check whether the user needs a status update.",
+      });
+      await seedSessionStore(storePath, baseSessionKey, {
+        sessionId: "base-session",
+        updatedAt: nowMs - 2_000,
+        lastChannel: "whatsapp",
+        lastProvider: "whatsapp",
+        lastTo: "+15551234567",
+      });
+      await seedSessionStore(storePath, isolatedSessionKey, {
+        sessionId: "previous-wake",
+        updatedAt: nowMs - 1_000,
+        heartbeatIsolatedBaseSessionKey: baseSessionKey,
+      });
+      const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env);
+      await fs.mkdir(sessionsDir, { recursive: true });
+      await fs.writeFile(
+        path.join(sessionsDir, "previous-wake.jsonl"),
+        `{"type":"message","sessionKey":"${isolatedSessionKey}"}\n`,
+      );
+      replySpy.mockResolvedValue({ text: "All good." });
+
+      // Hold the first wake's rollover before it reaches the storage writer
+      // lane, so the second wake runs its own rollover against the row the
+      // first wake still believes it will replace.
+      lifecycleMutationGate.shouldHold = (params) => params.activeSessionKey === isolatedSessionKey;
+      const runA = runHeartbeatOnce({
+        cfg,
+        deps: {
+          getReplyFromConfig: replySpy,
+          getQueueSize: () => 0,
+          nowMs: () => nowMs,
+        },
+      });
+      await vi.waitFor(() => expect(lifecycleMutationGate.entered).toBe(true), { timeout: 10_000 });
+
+      const runB = runHeartbeatOnce({
+        cfg,
+        deps: {
+          getReplyFromConfig: replySpy,
+          getQueueSize: () => 0,
+          nowMs: () => nowMs,
+        },
+      });
+      // Wake B's rollover commits while wake A is still held. Its wake
+      // transcript materializes on disk before wake A's rollover lands.
+      const bSessionId = await vi.waitFor(
+        () => {
+          const sessionId = readSessionStoreForTest<{ sessionId?: string }>(storePath)[
+            isolatedSessionKey
+          ]?.sessionId;
+          expect(sessionId).toBeTruthy();
+          expect(sessionId).not.toBe("previous-wake");
+          return sessionId as string;
+        },
+        { timeout: 10_000 },
+      );
+      await fs.writeFile(
+        path.join(sessionsDir, `${bSessionId}.jsonl`),
+        `{"type":"message","sessionKey":"${isolatedSessionKey}"}\n`,
+      );
+
+      lifecycleMutationGate.release?.();
+      const [resultA, resultB] = await Promise.all([runA, runB]);
+      expect(resultA.status).toBe("ran");
+      expect(resultB.status).toBe("ran");
+
+      const store = readSessionStoreForTest<{ sessionId?: string }>(storePath);
+      const finalSessionId = store[isolatedSessionKey]?.sessionId;
+      expect(finalSessionId).toBeTruthy();
+      expect(finalSessionId).not.toBe("previous-wake");
+      expect(finalSessionId).not.toBe(bSessionId);
+
+      // Both replaced generations must be archived, not orphaned: wake B
+      // archives the original predecessor, and wake A — whose rollover
+      // replaced wake B's committed row — archives that exact generation.
+      const remaining = await fs.readdir(sessionsDir);
+      expect(remaining).not.toContain("previous-wake.jsonl");
+      expect(remaining.some((name) => name.startsWith("previous-wake.jsonl."))).toBe(true);
+      expect(remaining).not.toContain(`${bSessionId}.jsonl`);
+      expect(remaining.some((name) => name.startsWith(`${bSessionId}.jsonl.`))).toBe(true);
     });
   });
 });

@@ -140,6 +140,22 @@ function toNonResumableCronSessionEntry(entry: SessionEntry): SessionEntry {
   return next as SessionEntry;
 }
 
+/**
+ * Clears a superseded unmaterialized-transcript disposition once the run's
+ * transcript exists (#131770). Without this, a row stamped
+ * `transcriptMaterialized: false` by an earlier run whose transcript never
+ * materialized would keep suppressing doctor's missing-transcript warning
+ * after that row's transcript is later lost again.
+ */
+function toMaterializedCronSessionEntry(entry: SessionEntry): SessionEntry {
+  if (entry.transcriptMaterialized === undefined) {
+    return entry;
+  }
+  const next: SessionEntry = { ...entry };
+  delete next.transcriptMaterialized;
+  return next;
+}
+
 /** Creates the persistence callback that stores cron session metadata after a run. */
 export function createPersistCronSessionEntry(params: {
   cronSession: MutableCronSession;
@@ -151,16 +167,21 @@ export function createPersistCronSessionEntry(params: {
   return async () => {
     const resetBoundaryPending = params.cronSession.resetBoundaryPending !== undefined;
     const liveEntry = params.cronSession.sessionEntry;
-    const persistedEntry =
-      isCronSessionKey(params.agentSessionKey) &&
-      liveEntry.sessionId &&
-      !cronTranscriptExists({
-        entry: liveEntry,
-        sessionKey: params.agentSessionKey,
-        storePath: params.cronSession.storePath,
-      })
-        ? toNonResumableCronSessionEntry(liveEntry)
-        : liveEntry;
+    // The disposition is evaluated per persistence attempt: a cron run whose
+    // transcript materialized clears any stale `transcriptMaterialized: false`
+    // stamp an earlier run left on the row, while a run without a transcript
+    // records the owner-attested disposal (#131770).
+    const cronRowCandidate =
+      isCronSessionKey(params.agentSessionKey) && Boolean(liveEntry.sessionId);
+    const persistedEntry = !cronRowCandidate
+      ? liveEntry
+      : cronTranscriptExists({
+            entry: liveEntry,
+            sessionKey: params.agentSessionKey,
+            storePath: params.cronSession.storePath,
+          })
+        ? toMaterializedCronSessionEntry(liveEntry)
+        : toNonResumableCronSessionEntry(liveEntry);
     let committedEntry = persistedEntry;
     let mergedLiveEntry = liveEntry;
     const persistPromise = params.persistSessionEntry({

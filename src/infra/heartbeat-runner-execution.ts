@@ -32,6 +32,7 @@ import {
   loadExactSessionEntry,
   type SessionEntryLifecycleRemoval,
 } from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   hasActiveCronJobs,
@@ -552,14 +553,15 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
           },
         ]
       : [];
-    // Every isolated wake rolls a fresh session ID under this stable key. Capture
-    // the replaced session before the rollover so its transcript can be archived
-    // afterwards; otherwise each run leaves an unreferenced .jsonl that doctor
-    // reports as an orphan (#131770).
-    const currentIsolatedEntry = loadExactSessionEntry({
-      storePath: isolatedStorePath,
-      sessionKey: isolatedSessionKey,
-    })?.entry;
+    // Every isolated wake rolls a fresh session ID under this stable key. The
+    // replaced row is captured inside the lifecycle mutation, under the storage
+    // writer lane, so the archive always targets the exact generation this
+    // mutation replaced. Reading it before the awaited mutation instead would
+    // let an overlapping immediate/manual wake both snapshot the same stale
+    // predecessor: the later rollover would replace the first wake's session
+    // while archiving only the old ID, leaving that wake's transcript orphaned
+    // (#131770).
+    let replacedIsolatedEntry: SessionEntry | undefined;
     const lifecycleResult = await applySessionEntryLifecycleMutation({
       activeSessionKey: isolatedSessionKey,
       storePath: isolatedStorePath,
@@ -567,7 +569,8 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
       upserts: [
         {
           sessionKey: isolatedSessionKey,
-          buildEntry: ({ store }) => {
+          buildEntry: ({ currentEntry, store }) => {
+            replacedIsolatedEntry = currentEntry;
             const cronSession = resolveCronSession({
               cfg,
               sessionKey: isolatedSessionKey,
@@ -594,19 +597,22 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
       });
     }
     // The rollover upsert replaced the row in place, so lifecycle artifact
-    // cleanup never saw the previous session as removed. Archive its file-backed
-    // transcript explicitly so no unreferenced .jsonl is left behind (#131770).
-    if (currentIsolatedEntry?.sessionId) {
+    // cleanup never saw the previous session as removed. Archive the exact
+    // replaced generation's file-backed transcript explicitly so no
+    // unreferenced .jsonl is left behind (#131770). `replacedIsolatedEntry` is
+    // only assigned when the mutation committed, so a conflict that aborts the
+    // rollover never archives anything.
+    if (replacedIsolatedEntry?.sessionId) {
       try {
         const { archiveSessionTranscripts } = await loadSessionArchiveRuntime();
         archiveSessionTranscripts({
-          sessionId: currentIsolatedEntry.sessionId,
+          sessionId: replacedIsolatedEntry.sessionId,
           storePath: isolatedStorePath,
           agentId,
           reason: "deleted",
           onArchiveError: (error, sourcePath) => {
             log.warn(
-              `heartbeat: failed to archive previous isolated session transcript ${sourcePath} for session ${currentIsolatedEntry.sessionId}`,
+              `heartbeat: failed to archive previous isolated session transcript ${sourcePath} for session ${replacedIsolatedEntry?.sessionId}`,
               { error: String(error), sessionKey: isolatedSessionKey },
             );
           },

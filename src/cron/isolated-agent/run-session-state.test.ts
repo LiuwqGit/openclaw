@@ -528,6 +528,51 @@ describe("createPersistCronSessionEntry", () => {
     });
   });
 
+  it("clears a stale unmaterialized-transcript disposition once the transcript materializes", async () => {
+    // Transition regression (#131770): a previous run stamped the row with
+    // `transcriptMaterialized: false` when its transcript never materialized.
+    // Once a later run's transcript exists, the superseded disposition must be
+    // cleared, or doctor would keep suppressing missing-transcript warnings for
+    // a transcript that is later lost again.
+    const dir = makeTempDir(cronSessionTempDirs, "openclaw-cron-session-materialized-");
+    const storePath = path.join(dir, "sessions.json");
+    await appendTranscriptMessage(
+      {
+        agentId: "main",
+        sessionId: "run-session-id",
+        sessionKey: "agent:main:cron:materialized",
+        storePath,
+      },
+      { message: { role: "user", content: "cron prompt" } },
+    );
+    const cronSession = makeCronSession(
+      makeSessionEntry({
+        label: "Cron: materialized",
+        transcriptMaterialized: false,
+        sessionStartedAt: 900,
+        lastInteractionAt: 950,
+      }),
+      storePath,
+    );
+
+    const persist = createPersistCronSessionEntry({
+      cronSession,
+      agentSessionKey: "agent:main:cron:materialized",
+      persistSessionEntry: vi.fn(async () => {}),
+    });
+
+    await persist();
+
+    expect(cronSession.store["agent:main:cron:materialized"]).toEqual({
+      sessionId: "run-session-id",
+      label: "Cron: materialized",
+      updatedAt: 1000,
+      systemSent: true,
+      sessionStartedAt: 900,
+      lastInteractionAt: 950,
+    });
+  });
+
   it("persists explicit session-bound cron state under the requested session key", async () => {
     const cronSession = makeCronSession();
     const persistSessionEntry = vi.fn(async () => {});
