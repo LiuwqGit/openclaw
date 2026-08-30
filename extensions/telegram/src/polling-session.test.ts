@@ -317,11 +317,13 @@ function makeIsolatedBot(params?: {
   handleUpdate?: (update: { update_id?: number }) => Promise<unknown>;
   init?: AsyncVoidFn;
   stop?: AsyncVoidFn;
+  answerCallbackQuery?: (callbackQueryId: string) => Promise<unknown>;
 }) {
   return {
     api: {
       deleteWebhook: vi.fn(params?.deleteWebhook ?? (async () => true)),
       config: { use: vi.fn() },
+      ...(params?.answerCallbackQuery ? { answerCallbackQuery: params.answerCallbackQuery } : {}),
     },
     init: vi.fn(params?.init ?? (async () => undefined)),
     botInfo: {
@@ -845,6 +847,7 @@ function startIsolatedIngressSession(params: {
   spooledUpdateHandlerTimeoutMs?: number;
   spooledUpdateHandlerAbortGraceMs?: number;
   stallThresholdMs?: number;
+  answerCallbackQuery?: (callbackQueryId: string) => Promise<unknown>;
 }) {
   const idleWorker = createIdleIngressWorker();
   const createWorker = params.createWorker ?? idleWorker.createWorker;
@@ -852,6 +855,7 @@ function startIsolatedIngressSession(params: {
     handleUpdate: params.handleUpdate,
     init: params.init,
     stop: params.stop,
+    ...(params.answerCallbackQuery ? { answerCallbackQuery: params.answerCallbackQuery } : {}),
   });
   createTelegramBotMock.mockReturnValueOnce(bot);
   const session = createPollingSession({
@@ -1523,6 +1527,84 @@ describe("TelegramPollingSession", () => {
           expectDefined(worker.ackSpooledUpdate.mock.invocationCallOrder[0], "worker ack order"),
         );
       } finally {
+        abort.abort();
+        await runPromise;
+      }
+    });
+  });
+
+  it("answers a callback query at admission while its chat lane is busy", async () => {
+    await withTempSpool(async (tempDir) => {
+      const abort = new AbortController();
+      const answerCallbackQuery = vi.fn(async () => undefined);
+      let releaseBusyTurn: (() => void) | undefined;
+      const busyTurnGate = new Promise<void>((resolve) => {
+        releaseBusyTurn = resolve;
+      });
+      const handleUpdate = vi.fn(async (update: { update_id?: number }) => {
+        if (update.update_id === 50) {
+          await busyTurnGate;
+        }
+      });
+      const worker = createListeningIngressWorker();
+      const { runPromise } = startIsolatedIngressSession({
+        abort,
+        spoolDir: tempDir,
+        handleUpdate,
+        createWorker: worker.createWorker,
+        drainIntervalMs: 60_000,
+        getCommittedUpdateId: () => 49,
+        persistUpdateId: vi.fn(async () => undefined),
+        answerCallbackQuery,
+      });
+      const busyTurnUpdate = directUpdate(50, 1234, "busy turn");
+      const callbackPressUpdate = {
+        update_id: 51,
+        callback_query: {
+          id: "callback-51",
+          data: "cmd:option_a",
+          chat_instance: "telegram-private-chat-1234",
+          from: { id: 111, is_bot: false, first_name: "Ada" },
+          message: {
+            chat: { id: 1234, type: "private" as const },
+            date: 1_736_380_800,
+            message_id: 10,
+          },
+        },
+      };
+      try {
+        await waitForTelegramTestState(() => expect(worker.hasListener()).toBe(true));
+        worker.emit({
+          type: "update",
+          requestId: "busy-turn",
+          update: busyTurnUpdate,
+          queued: 1,
+        });
+        await waitForTelegramTestState(() => expect(handleUpdate).toHaveBeenCalledTimes(1));
+
+        worker.emit({
+          type: "update",
+          requestId: "button-press",
+          update: callbackPressUpdate,
+          queued: 1,
+        });
+        await waitForTelegramTestState(() =>
+          expect(worker.ackSpooledUpdate).toHaveBeenCalledWith("button-press", {
+            ok: true,
+            updateId: 51,
+          }),
+        );
+
+        // The press is acknowledged at admission, while the chat lane is still busy.
+        expect(answerCallbackQuery).toHaveBeenCalledTimes(1);
+        expect(answerCallbackQuery).toHaveBeenCalledWith("callback-51");
+        expect(handleUpdate).toHaveBeenCalledTimes(1);
+
+        releaseBusyTurn?.();
+        await waitForTelegramTestState(() => expect(handleUpdate).toHaveBeenCalledTimes(2));
+        expect(handleUpdate).toHaveBeenLastCalledWith(callbackPressUpdate);
+      } finally {
+        releaseBusyTurn?.();
         abort.abort();
         await runPromise;
       }

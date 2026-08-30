@@ -88,6 +88,8 @@ const { resolveTelegramFetch } = await import("./fetch.js");
 const { defaultTelegramNativeCommandDeps } = await import("./bot-native-command-deps.runtime.js");
 const messageDispatchDedupe = await import("./message-dispatch-dedupe.js");
 const { createTelegramBotCore: createTelegramBotBase } = await import("./bot-core.js");
+const { recordTelegramCallbackQueryAdmissionAck } =
+  await import("./callback-query-answer-state.js");
 const { getTelegramSequentialConstraints } = await import("./sequential-key.js");
 const {
   createTelegramSpooledReplayDeferredParticipant,
@@ -816,6 +818,92 @@ describe("createTelegramBot", () => {
 
     expect(replySpy).toHaveBeenCalledTimes(1);
     expect(answerCallbackQuerySpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("reuses a recorded admission-time acknowledgement instead of answering again", async () => {
+    installPerKeySequentializer();
+    const bot = createTelegramBot({ token: "tok" });
+    const callbackHandler = requireValue(
+      getOnHandler("callback_query") as
+        | ((ctx: Record<string, unknown>) => Promise<void>)
+        | undefined,
+      "callback_query handler",
+    );
+    // The durable ingress spool answered this press at admission time; the
+    // registry entry is what survives from admission to the drain replay.
+    recordTelegramCallbackQueryAdmissionAck(bot, "cbq-admission-ack-1", Promise.resolve(true));
+    const callbackQueryPayload = {
+      id: "cbq-admission-ack-1",
+      data: "cmd:option_a",
+      from: { id: 9, first_name: "Ada", username: "ada_bot" },
+      message: {
+        chat: { id: 1234, type: "private" },
+        date: 1_736_380_800,
+        message_id: 52,
+      },
+    };
+    const callbackCtx = {
+      update: { update_id: 502, callback_query: callbackQueryPayload },
+      callbackQuery: callbackQueryPayload,
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    };
+
+    await runTelegramMiddlewareChain({
+      ctx: callbackCtx,
+      finalHandler: async (ctx) => {
+        await callbackHandler(ctx);
+      },
+    });
+
+    // No second bare answerCallbackQuery for the already-acknowledged press.
+    expect(answerCallbackQuerySpy).not.toHaveBeenCalled();
+    // The press itself still processes through the serialized callback path.
+    expect(replySpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-answers live when the admission-time acknowledgement failed", async () => {
+    installPerKeySequentializer();
+    const bot = createTelegramBot({ token: "tok" });
+    const callbackHandler = requireValue(
+      getOnHandler("callback_query") as
+        | ((ctx: Record<string, unknown>) => Promise<void>)
+        | undefined,
+      "callback_query handler",
+    );
+    recordTelegramCallbackQueryAdmissionAck(
+      bot,
+      "cbq-admission-ack-2",
+      Promise.reject(new Error("admission answer failed")),
+    );
+    const callbackQueryPayload = {
+      id: "cbq-admission-ack-2",
+      data: "cmd:option_a",
+      from: { id: 9, first_name: "Ada", username: "ada_bot" },
+      message: {
+        chat: { id: 1234, type: "private" },
+        date: 1_736_380_800,
+        message_id: 53,
+      },
+    };
+    const callbackCtx = {
+      update: { update_id: 503, callback_query: callbackQueryPayload },
+      callbackQuery: callbackQueryPayload,
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    };
+
+    await runTelegramMiddlewareChain({
+      ctx: callbackCtx,
+      finalHandler: async (ctx) => {
+        await callbackHandler(ctx);
+      },
+    });
+
+    // The failed admission acknowledgement falls back to a live answer.
+    expect(answerCallbackQuerySpy).toHaveBeenCalledTimes(1);
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-admission-ack-2");
+    expect(replySpy).toHaveBeenCalledTimes(1);
   });
 
   it("acknowledges question callbacks before their handler completes", async () => {

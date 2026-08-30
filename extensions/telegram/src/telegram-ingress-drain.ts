@@ -272,6 +272,8 @@ type CreateTelegramIngressMonitorParams = {
   onLog?: (message: string) => void;
   onError?: (error: unknown) => void;
   abortSignal?: AbortSignal;
+  /** Runs after each durable spool enqueue; the transport factory uses it for admission-time callback-query acknowledgement. */
+  onDurableAdmission?: (update: unknown, context: { isNew: boolean }) => void | Promise<void>;
 };
 
 /**
@@ -450,6 +452,7 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
       }
     },
     pollIntervalMs: params.pollIntervalMs ?? TELEGRAM_SPOOLED_DRAIN_POLL_INTERVAL_MS,
+    ...(params.onDurableAdmission ? { onDurableAdmission: params.onDurableAdmission } : {}),
     retention: {
       completedMaxEntries: 1_000,
       failedMaxEntries: 1_000,

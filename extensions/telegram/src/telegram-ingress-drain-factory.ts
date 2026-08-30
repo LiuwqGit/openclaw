@@ -5,6 +5,7 @@ import {
   runWithTelegramUpdateProcessingFrame,
   type TelegramMessageProcessingResult,
 } from "./bot-processing-outcome.js";
+import { acknowledgeTelegramAdmittedCallbackQuery } from "./callback-query-answer-state.js";
 import {
   createTelegramIngressMonitor,
   resolveTelegramAdoptionStallTimeoutMs,
@@ -14,6 +15,9 @@ import { openTelegramIngressQueue } from "./telegram-ingress-spool.js";
 
 type TelegramSpooledBot = {
   handleUpdate: (update: never) => Promise<void>;
+  api?: {
+    answerCallbackQuery: (callbackQueryId: string) => Promise<unknown>;
+  };
 };
 
 type CreateTelegramTransportIngressMonitorParams = {
@@ -27,6 +31,12 @@ type CreateTelegramTransportIngressMonitorParams = {
   onLog?: (message: string) => void;
   onError?: (error: unknown) => void;
   abortSignal?: AbortSignal;
+  /**
+   * Optional override for admission-time callback-query acknowledgement (tests).
+   * Default: bot.api.answerCallbackQuery, so both transports answer a press as
+   * soon as its update is durably spooled instead of when its chat lane drains.
+   */
+  answerCallbackQuery?: (callbackQueryId: string) => Promise<unknown>;
   /**
    * Optional override for full dispatch (tests). Default: bot.handleUpdate under
    * the drain lifecycle via bot-message spooled replay path.
@@ -49,6 +59,10 @@ export function createTelegramTransportIngressMonitor(
     configured: params.adoptionStallTimeoutMs,
     env: process.env,
   });
+  const botApi = params.bot.api;
+  const answerSpooledCallbackQuery =
+    params.answerCallbackQuery ??
+    (botApi ? (callbackQueryId: string) => botApi.answerCallbackQuery(callbackQueryId) : undefined);
   return createTelegramIngressMonitor({
     queue,
     cfg: params.cfg,
@@ -59,6 +73,16 @@ export function createTelegramTransportIngressMonitor(
     ...(params.onLog ? { onLog: params.onLog } : {}),
     ...(params.onError ? { onError: params.onError } : {}),
     ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
+    ...(answerSpooledCallbackQuery
+      ? {
+          onDurableAdmission: (update: unknown, context: { isNew: boolean }) =>
+            acknowledgeTelegramAdmittedCallbackQuery(params.bot, update, {
+              answer: answerSpooledCallbackQuery,
+              isNew: context.isNew,
+              ...(params.onLog ? { onLog: params.onLog } : {}),
+            }),
+        }
+      : {}),
     dispatch: async (update, lifecycle) => {
       if (params.dispatchUpdate) {
         return await params.dispatchUpdate(update, lifecycle);

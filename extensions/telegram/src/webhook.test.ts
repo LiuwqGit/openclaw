@@ -35,6 +35,7 @@ import {
 const telegramSpooledRetryDeadLetterMinAgeMs = 24 * 60 * 60 * 1000;
 
 const handleUpdateSpy = vi.hoisted(() => vi.fn((..._args: unknown[]): unknown => undefined));
+const answerCallbackQuerySpy = vi.hoisted(() => vi.fn(async () => undefined));
 const setWebhookSpy = vi.hoisted(() => vi.fn());
 const deleteWebhookSpy = vi.hoisted(() => vi.fn(async () => true));
 const initSpy = vi.hoisted(() => vi.fn(async () => undefined));
@@ -243,9 +244,15 @@ function resetTelegramWebhookMocks(): void {
     init: initSpy,
     botInfo: webhookBotInfo,
     handleUpdate: handleUpdateSpy,
-    api: { setWebhook: setWebhookSpy, deleteWebhook: deleteWebhookSpy },
+    api: {
+      setWebhook: setWebhookSpy,
+      deleteWebhook: deleteWebhookSpy,
+      answerCallbackQuery: answerCallbackQuerySpy,
+    },
     stop: stopSpy,
   }));
+  answerCallbackQuerySpy.mockReset();
+  answerCallbackQuerySpy.mockImplementation(async () => undefined);
 }
 
 type MockCallReader = { mock: { calls: unknown[][] } };
@@ -1109,6 +1116,67 @@ describe("startTelegramWebhook", () => {
 
         finishWork?.();
         await waitForWebhookState(() => expect(workFinished).toBe(true));
+      },
+    );
+  });
+
+  it("answers a callback query at admission while its chat lane is busy", async () => {
+    // Hold the callback's chat lane with a long-running turn, mirroring the
+    // regression in openclaw#133294: the press must still be acknowledged
+    // while the lane is blocked, not when it drains minutes later.
+    let releaseBusyTurn: (() => void) | undefined;
+    const busyTurnGate = new Promise<void>((resolve) => {
+      releaseBusyTurn = resolve;
+    });
+    handleUpdateSpy.mockImplementationOnce(async () => {
+      await busyTurnGate;
+    });
+    const busyMessage = {
+      update_id: 11,
+      message: {
+        message_id: 11,
+        date: 1_736_380_800,
+        from: { id: 111, is_bot: false, first_name: "Ada" },
+        chat: { id: 1234, type: "private", first_name: "Ada" },
+        message_thread_id: 42,
+        text: "busy turn",
+      },
+    };
+    const callbackUpdate = {
+      update_id: 12,
+      callback_query: createTelegramPrivateTopicCallback(12),
+    };
+
+    await withStartedWebhook(
+      {
+        secret: TELEGRAM_SECRET,
+        path: TELEGRAM_WEBHOOK_PATH,
+      },
+      async ({ port }) => {
+        const busyResponse = await postWebhookJson({
+          url: webhookUrl(port, TELEGRAM_WEBHOOK_PATH),
+          payload: JSON.stringify(busyMessage),
+          secret: TELEGRAM_SECRET,
+        });
+        expect(busyResponse.status).toBe(200);
+        await waitForWebhookState(() => expect(handleUpdateSpy).toHaveBeenCalledTimes(1));
+
+        const pressResponse = await postWebhookJson({
+          url: webhookUrl(port, TELEGRAM_WEBHOOK_PATH),
+          payload: JSON.stringify(callbackUpdate),
+          secret: TELEGRAM_SECRET,
+        });
+        expect(pressResponse.status).toBe(200);
+
+        // The acknowledgement is sent at admission, before the blocked lane drains.
+        await waitForWebhookState(() =>
+          expect(answerCallbackQuerySpy).toHaveBeenCalledWith("callback-12"),
+        );
+        expect(handleUpdateSpy).toHaveBeenCalledTimes(1);
+
+        releaseBusyTurn?.();
+        await waitForWebhookState(() => expect(handleUpdateSpy).toHaveBeenCalledTimes(2));
+        expect(handleUpdateSpy).toHaveBeenLastCalledWith(callbackUpdate);
       },
     );
   });

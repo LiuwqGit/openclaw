@@ -52,7 +52,10 @@ import type { TelegramUpdateKeyContext } from "./bot-updates.js";
 import { apiThrottler, Bot, sequentialize, type ApiClientOptions } from "./bot.runtime.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import { buildTelegramGroupPeerId } from "./bot/helpers.js";
-import { setTelegramCallbackQueryAnswerPromise } from "./callback-query-answer-state.js";
+import {
+  getTelegramCallbackQueryAdmissionAck,
+  setTelegramCallbackQueryAnswerPromise,
+} from "./callback-query-answer-state.js";
 import { TELEGRAM_CHAT_ACTION_INTERVAL_MS } from "./chat-action-timing.js";
 import {
   asTelegramClientFetch,
@@ -237,10 +240,16 @@ export function createTelegramBotCore(
   // agent turns for the same chat/topic. Telegram has a ~15s server-side timeout
   // for answerCallbackQuery; if an agent turn is already processing, sequentialize
   // delays the answer beyond that window and the user sees a stuck loading spinner.
+  // Updates admitted through the durable ingress spool were already answered at
+  // admission time (before lane blocking); reuse that acknowledgement so neither
+  // this middleware nor the callback router issues a second bare answer against
+  // an already-answered, possibly expired query.
   bot.use(async (ctx, next) => {
     const callback = ctx.callbackQuery;
     if (callback) {
-      const answerPromise = bot.api.answerCallbackQuery(callback.id);
+      const answerPromise =
+        getTelegramCallbackQueryAdmissionAck(bot, callback.id) ??
+        bot.api.answerCallbackQuery(callback.id);
       setTelegramCallbackQueryAnswerPromise(ctx, answerPromise);
       void answerPromise.catch(() => {});
     }
