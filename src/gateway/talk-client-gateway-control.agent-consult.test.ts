@@ -2,6 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import {
+  isGatewaySubordinateWorkAdmissionClosed,
+  resetGatewayWorkAdmission,
+  tryBeginGatewayRootWorkAdmission,
+} from "../process/gateway-work-admission.js";
+import {
   authorizeClientVoiceConfirmation,
   checkClientVoiceToolConfirmationPolicy,
   deactivateClientVoiceConfirmationSession,
@@ -100,6 +105,36 @@ describe("Talk client agent consult admission", () => {
   });
 
   afterEach(() => resetClientVoiceConfirmationStateForTest());
+
+  beforeEach(resetGatewayWorkAdmission);
+  afterEach(resetGatewayWorkAdmission);
+
+  it("runs consults outside the released initiating gateway request admission", async () => {
+    // Regression (issue #134081): the consult runner outlives the talk.client.create
+    // request that created it. A later voice turn must not see the released request
+    // root admission as a closed subordinate boundary.
+    let consultSawClosedContext: boolean | undefined;
+    mocks.consultRealtimeVoiceAgent.mockImplementationOnce(async (params: ConsultParams) => {
+      consultSawClosedContext = isGatewaySubordinateWorkAdmissionClosed();
+      params.onRunStarted?.({ runId: "run-talk", sessionId: "session-talk", timeoutMs: 1 });
+      await params.agentRuntime.runEmbeddedAgent(coreParams);
+      return { text: "done" };
+    });
+    const rootAdmission = tryBeginGatewayRootWorkAdmission();
+    expect(rootAdmission).not.toBeNull();
+    const runner = createRunner();
+    // Keep the deferred invocation in the request's async chain, then release the
+    // originating root like the completed talk.client.create handler does.
+    const invoke = deferred<void>();
+    const consult = rootAdmission!.run(async () =>
+      invoke.promise.then(() => runner.runPrompt({ prompt: "check" })),
+    );
+    rootAdmission!.release();
+    invoke.resolve();
+
+    await expect(consult).resolves.toEqual({ text: "done" });
+    expect(consultSawClosedContext).toBe(false);
+  });
 
   it("runs through a Talk-owned gateway admission and closes it after success", async () => {
     await expect(createRunner().runPrompt({ prompt: "check" })).resolves.toEqual({ text: "done" });

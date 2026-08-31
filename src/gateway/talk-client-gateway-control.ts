@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { normalizeTalkSection } from "../config/talk.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
+import { runOutsideGatewayRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { BoundedSerialQueue } from "../shared/bounded-serial-queue.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { consultRealtimeVoiceAgent } from "../talk/agent-consult-runtime.js";
@@ -252,85 +253,89 @@ export function createTalkClientAgentConsultRunner(params: {
 }) {
   const authority = params.authority ?? resolveTalkAgentConsultAuthority(undefined);
   let agentRuntime: ReturnType<typeof createPluginRuntime>["agent"] | undefined;
-  const runArgs = async (args: unknown, signal?: AbortSignal) => {
-    const parsedArgs = parseRealtimeVoiceAgentConsultArgs(args);
-    const voiceSessionId = params.getVoiceSessionId();
-    if (!voiceSessionId) {
-      throw new Error("Realtime browser voice session is not ready for agent consult");
-    }
-    // Relays own admission before their lazy record registration. Browser callbacks
-    // must validate the durable call before accepting a new run.
-    if (!params.registerRun) {
-      assertClientVoiceSessionOpen({
+  const runArgs = async (args: unknown, signal?: AbortSignal) =>
+    // The runner outlives the talk.client.create request that created it. Each consult
+    // must start outside the initiating gateway root admission; a released inherited
+    // root would make session work admission reject every later voice turn as draining.
+    await runOutsideGatewayRootWorkAdmission(async () => {
+      const parsedArgs = parseRealtimeVoiceAgentConsultArgs(args);
+      const voiceSessionId = params.getVoiceSessionId();
+      if (!voiceSessionId) {
+        throw new Error("Realtime browser voice session is not ready for agent consult");
+      }
+      // Relays own admission before their lazy record registration. Browser callbacks
+      // must validate the durable call before accepting a new run.
+      if (!params.registerRun) {
+        assertClientVoiceSessionOpen({
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          voiceSessionId,
+        });
+      }
+      const confirmationGrant = parsedArgs.confirmationId
+        ? authorizeClientVoiceConfirmation({
+            agentId: params.agentId,
+            voiceSessionId,
+            confirmationId: parsedArgs.confirmationId,
+          })
+        : undefined;
+      agentRuntime ??= createTalkClientAgentRuntime({
+        config: params.config,
+        agentId: params.agentId,
+        ...(params.ownerConnId ? { rawSourceRef: params.ownerConnId } : {}),
+      });
+      const talkConfig = normalizeTalkSection(params.config.talk);
+      return await consultRealtimeVoiceAgent({
+        cfg: params.config,
+        agentRuntime,
+        logger: params.context.logGateway,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
-        voiceSessionId,
-      });
-    }
-    const confirmationGrant = parsedArgs.confirmationId
-      ? authorizeClientVoiceConfirmation({
-          agentId: params.agentId,
-          voiceSessionId,
-          confirmationId: parsedArgs.confirmationId,
-        })
-      : undefined;
-    agentRuntime ??= createTalkClientAgentRuntime({
-      config: params.config,
-      agentId: params.agentId,
-      ...(params.ownerConnId ? { rawSourceRef: params.ownerConnId } : {}),
-    });
-    const talkConfig = normalizeTalkSection(params.config.talk);
-    return await consultRealtimeVoiceAgent({
-      cfg: params.config,
-      agentRuntime,
-      logger: params.context.logGateway,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      messageProvider: "webchat",
-      lane: "talk",
-      runIdPrefix: params.runIdPrefix ?? "talk-realtime-consult",
-      args: parsedArgs,
-      transcript: params.initialItems,
-      surface: params.surface ?? "a browser Talk session",
-      userLabel: "User",
-      questionSourceLabel: "user",
-      thinkLevel: talkConfig?.consultThinkingLevel,
-      fastMode: talkConfig?.consultFastMode,
-      ...authority,
-      abortSignal: signal,
-      onRunStarted: ({ runId, sessionId, timeoutMs }) => {
-        if (params.registerRun) {
-          params.registerRun({ runId });
-        } else {
-          registerClientVoiceConsultRun({
-            agentId: params.agentId,
-            sessionKey: params.sessionKey,
-            voiceSessionId,
+        messageProvider: "webchat",
+        lane: "talk",
+        runIdPrefix: params.runIdPrefix ?? "talk-realtime-consult",
+        args: parsedArgs,
+        transcript: params.initialItems,
+        surface: params.surface ?? "a browser Talk session",
+        userLabel: "User",
+        questionSourceLabel: "user",
+        thinkLevel: talkConfig?.consultThinkingLevel,
+        fastMode: talkConfig?.consultFastMode,
+        ...authority,
+        abortSignal: signal,
+        onRunStarted: ({ runId, sessionId, timeoutMs }) => {
+          if (params.registerRun) {
+            params.registerRun({ runId });
+          } else {
+            registerClientVoiceConsultRun({
+              agentId: params.agentId,
+              sessionKey: params.sessionKey,
+              voiceSessionId,
+              runId,
+              config: params.config,
+            });
+          }
+          if (confirmationGrant) {
+            bindAuthorizedClientVoiceConfirmation({ grant: confirmationGrant, runId });
+          }
+          if (!params.ownerConnId) {
+            return undefined;
+          }
+          const registration = registerChatAbortController({
+            chatAbortControllers: params.context.chatAbortControllers,
             runId,
-            config: params.config,
+            sessionId,
+            sessionKey: params.sessionKey,
+            agentId: params.agentId,
+            timeoutMs,
+            ownerConnId: params.ownerConnId,
+            controlUiVisible: false,
+            kind: "chat-send",
           });
-        }
-        if (confirmationGrant) {
-          bindAuthorizedClientVoiceConfirmation({ grant: confirmationGrant, runId });
-        }
-        if (!params.ownerConnId) {
-          return undefined;
-        }
-        const registration = registerChatAbortController({
-          chatAbortControllers: params.context.chatAbortControllers,
-          runId,
-          sessionId,
-          sessionKey: params.sessionKey,
-          agentId: params.agentId,
-          timeoutMs,
-          ownerConnId: params.ownerConnId,
-          controlUiVisible: false,
-          kind: "chat-send",
-        });
-        return { abortSignal: registration.controller.signal, cleanup: registration.cleanup };
-      },
+          return { abortSignal: registration.controller.signal, cleanup: registration.cleanup };
+        },
+      });
     });
-  };
   return {
     runArgs,
     runPrompt: async ({ prompt, signal }: { prompt: string; signal?: AbortSignal }) =>
