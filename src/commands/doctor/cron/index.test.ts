@@ -2501,4 +2501,127 @@ describe("legacy WhatsApp crontab health check", () => {
     expect(noteMock).not.toHaveBeenCalled();
   });
 });
+
+describe("maybeRepairLegacyCronStore quarantine recovery", () => {
+  it("recovers quarantined invalid-schedule rows whose schedule kinds now canonicalize (#133347)", async () => {
+    const storePath = await makeTempStorePath();
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.dirname(path.dirname(storePath)));
+    await writeCurrentCronStore(storePath, [
+      createCurrentCronJob({ id: "healthy-job", name: "Healthy job" }),
+      createCurrentCronJob({ id: "recreated-variant", name: "Recreated variant" }),
+    ]);
+    saveCronQuarantinedJobs({
+      storePath,
+      nowMs: Date.parse("2026-08-30T18:50:02.000Z"),
+      entries: [
+        {
+          sourceIndex: 0,
+          reason: "invalid-schedule",
+          job: createCurrentCronJob({
+            id: "variant-cron",
+            name: "Variant cron",
+            schedule: { kind: "Cron", expr: "0 9 * * *", tz: "UTC" },
+          }),
+          state: { nextRunAtMs: 123 },
+          updatedAtMs: 456,
+        },
+        {
+          sourceIndex: 1,
+          reason: "invalid-schedule",
+          job: createCurrentCronJob({
+            id: "recreated-variant",
+            schedule: { kind: " every ", everyMs: 60_000 },
+          }),
+        },
+        {
+          sourceIndex: 2,
+          reason: "invalid-schedule",
+          job: createCurrentCronJob({
+            id: "genuinely-bad",
+            schedule: { kind: "daily", at: "09:00" },
+          }),
+        },
+        {
+          sourceIndex: 3,
+          reason: "missing-payload",
+          job: createCurrentCronJob({ id: "other-reason" }),
+        },
+      ],
+    });
+
+    await maybeRepairLegacyCronStore({
+      cfg: createCronConfig(storePath),
+      options: { repair: true },
+      prompter: makePrompter(true),
+    });
+
+    const persisted = await readPersistedJobs(storePath);
+    expect(persisted.map((job) => job.id).toSorted((a, b) => a.localeCompare(b))).toEqual([
+      "healthy-job",
+      "recreated-variant",
+      "variant-cron",
+    ]);
+    const recovered = persisted.find((job) => job.id === "variant-cron");
+    if (!recovered) {
+      throw new Error("expected recovered cron job variant-cron");
+    }
+    expect((recovered.schedule as Record<string, unknown>).kind).toBe("cron");
+    expect(recovered.enabled).toBe(true);
+    expect(recovered.state).toMatchObject({ nextRunAtMs: 123 });
+    const quarantine = loadCronQuarantinedJobs(storePath);
+    expect(
+      quarantine
+        .map((entry) => (entry.job as { id?: string } | undefined)?.id)
+        .toSorted((a, b) => a.localeCompare(b)),
+    ).toEqual(["genuinely-bad", "other-reason", "recreated-variant"]);
+    expectNoteContaining("Recovered 1 quarantined automation", "Doctor changes");
+  });
+
+  it("recovers quarantined rows even when the active store is empty (#133347)", async () => {
+    const storePath = await makeTempStorePath();
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.dirname(path.dirname(storePath)));
+    await writeCurrentCronStore(storePath, []);
+    saveCronQuarantinedJobs({
+      storePath,
+      nowMs: Date.parse("2026-08-30T18:50:02.000Z"),
+      entries: [
+        {
+          sourceIndex: 0,
+          reason: "invalid-schedule",
+          job: createCurrentCronJob({
+            id: "variant-every",
+            schedule: { kind: " Every ", everyMs: 60_000 },
+          }),
+        },
+        {
+          sourceIndex: 1,
+          reason: "invalid-schedule",
+          job: createCurrentCronJob({
+            id: "genuinely-bad",
+            schedule: { kind: "daily", at: "09:00" },
+          }),
+        },
+      ],
+    });
+
+    await maybeRepairLegacyCronStore({
+      cfg: createCronConfig(storePath),
+      options: { repair: true },
+      prompter: makePrompter(true),
+    });
+
+    const persisted = await readPersistedJobs(storePath);
+    expect(persisted.map((job) => job.id)).toEqual(["variant-every"]);
+    const recovered = persisted[0];
+    if (!recovered) {
+      throw new Error("expected recovered cron job variant-every");
+    }
+    expect((recovered.schedule as Record<string, unknown>).kind).toBe("every");
+    const quarantine = loadCronQuarantinedJobs(storePath);
+    expect(quarantine.map((entry) => (entry.job as { id?: string } | undefined)?.id)).toEqual([
+      "genuinely-bad",
+    ]);
+    expectNoteContaining("Recovered 1 quarantined automation", "Doctor changes");
+  });
+});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

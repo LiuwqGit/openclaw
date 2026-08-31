@@ -15,6 +15,7 @@ import { normalizeCronCommandArgv, normalizeCronPayload } from "./normalize-payl
 import { snapshotOwnCronRecord } from "./own-record.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
 import { normalizeCronRuntimeAuthority } from "./runtime-authority.js";
+import { normalizeRecognizedCronScheduleKind } from "./schedule-kind.js";
 import { coerceFiniteScheduleNumber } from "./schedule-number.js";
 import {
   normalizeCronScheduledToolCallerOrigin,
@@ -45,15 +46,7 @@ const DEFAULT_OPTIONS: NormalizeOptions = {
 
 function coerceSchedule(schedule: UnknownRecord) {
   const next = snapshotOwnCronRecord(schedule);
-  const rawKind = normalizeLowercaseStringOrEmpty(next.kind);
-  const kind =
-    rawKind === "at" ||
-    rawKind === "every" ||
-    rawKind === "cron" ||
-    rawKind === "on-exit" ||
-    rawKind === "stream"
-      ? rawKind
-      : undefined;
+  const kind = normalizeRecognizedCronScheduleKind(next.kind);
   const exprRaw = normalizeOptionalString(next.expr) ?? "";
   const timezone = normalizeOptionalString(next.tz);
   const commandRaw = normalizeOptionalString(next.command) ?? "";

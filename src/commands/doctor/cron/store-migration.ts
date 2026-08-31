@@ -8,11 +8,14 @@ import {
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
 } from "../../../../packages/normalization-core/src/string-coerce.js";
+import { normalizeCronJobInput } from "../../../cron/normalize.js";
 import { parseAbsoluteTimeMs } from "../../../cron/parse.js";
 import { getInvalidPersistedCronJobReason } from "../../../cron/persisted-shape.js";
+import { normalizeRecognizedCronScheduleKind } from "../../../cron/schedule-kind.js";
 import { coerceFiniteScheduleNumber } from "../../../cron/schedule-number.js";
 import { inferCronJobName } from "../../../cron/service/normalize.js";
 import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "../../../cron/stagger.js";
+import type { CronQuarantinedJob, QuarantinedCronConfigJob } from "../../../cron/store/types.js";
 import {
   isBlockedLegacyCodexModelRef,
   type LegacyCodexModelIdentity,
@@ -437,18 +440,12 @@ export function normalizeStoredCronJobs(
     const schedule = raw.schedule;
     if (schedule && typeof schedule === "object" && !Array.isArray(schedule)) {
       const sched = schedule as Record<string, unknown>;
-      const kind = normalizeOptionalLowercaseString(sched.kind) ?? "";
+      const kind = normalizeRecognizedCronScheduleKind(sched.kind) ?? "";
       // The public input path canonicalizes recognized schedule kinds (case and
       // whitespace variants) before validation, so the migration must apply the
       // same canonicalization here. Otherwise rows the standard validator
-      // accepts are quarantined as invalid-schedule during migration.
-      const recognizedScheduleKind =
-        kind === "at" ||
-        kind === "every" ||
-        kind === "cron" ||
-        kind === "on-exit" ||
-        kind === "stream";
-      if (recognizedScheduleKind && sched.kind !== kind) {
+      // accepts are quarantined as invalid-schedule during migration (#133347).
+      if (kind && sched.kind !== kind) {
         sched.kind = kind;
         mutated = true;
         trackIssue("legacyScheduleKind");
@@ -678,4 +675,87 @@ export function normalizeStoredCronJobs(
     mutated,
     removedJobs,
   };
+}
+
+/** Quarantine entries that may rehydrate after schedule-kind canonicalization (#133347). */
+export function hasRecoverableQuarantinedCronScheduleJobs(
+  entries: ReadonlyArray<QuarantinedCronConfigJob | CronQuarantinedJob>,
+): boolean {
+  return entries.some((entry) => entry.reason === "invalid-schedule" && isRecord(entry.job));
+}
+
+export type QuarantinedCronJobRecovery = {
+  /** Normalized jobs ready to rejoin the active store, preserving id and enabled state. */
+  recoveredJobs: Array<Record<string, unknown>>;
+  /** Quarantine entries whose job recovered; safe to drop once the store write commits. */
+  recoveredEntries: Array<QuarantinedCronConfigJob | CronQuarantinedJob>;
+  /** Quarantine entries that must stay quarantined, including duplicate ids the operator already recreated. */
+  retainedEntries: Array<QuarantinedCronConfigJob | CronQuarantinedJob>;
+};
+
+function restoredCronJobId(job: Record<string, unknown>): string | undefined {
+  return normalizeOptionalStringifiedId(job.id) ?? normalizeOptionalStringifiedId(job.jobId);
+}
+
+/**
+ * Rehydrates quarantined invalid-schedule rows whose definitions now canonicalize
+ * and pass the strict persisted-shape validator (#133347).
+ *
+ * The 2026.8.1 migration quarantined valid legacy rows whose schedule kind was a
+ * recognized case or whitespace variant, so later doctor repairs must revalidate
+ * those rows instead of leaving enabled automations inactive. Only entries whose
+ * job survives the full stored-job normalization are recovered; genuinely
+ * malformed rows and ids already present in the active store stay quarantined.
+ */
+export function recoverQuarantinedCronScheduleJobs(
+  entries: ReadonlyArray<QuarantinedCronConfigJob | CronQuarantinedJob>,
+  activeJobIds: ReadonlySet<string>,
+): QuarantinedCronJobRecovery {
+  const recoveredJobs: Array<Record<string, unknown>> = [];
+  const recoveredEntries: Array<QuarantinedCronConfigJob | CronQuarantinedJob> = [];
+  const retainedEntries: Array<QuarantinedCronConfigJob | CronQuarantinedJob> = [];
+  const recoveredJobIds = new Set<string>();
+  for (const entry of entries) {
+    const job = entry.job;
+    if (entry.reason !== "invalid-schedule" || !isRecord(job)) {
+      retainedEntries.push(entry);
+      continue;
+    }
+    const candidate = structuredClone(job) as Record<string, unknown>;
+    const jobId = restoredCronJobId(candidate);
+    if (jobId && (activeJobIds.has(jobId) || recoveredJobIds.has(jobId))) {
+      // The operator already recreated this automation (or a duplicate entry
+      // recovered first); keep the quarantine record rather than double-adding.
+      retainedEntries.push(entry);
+      continue;
+    }
+    // Restore the runtime state and timestamp preserved at quarantine time so
+    // the recovered row keeps its last/next run bookkeeping.
+    if (isRecord(entry.state)) {
+      candidate.state = structuredClone(entry.state);
+    }
+    if (typeof entry.updatedAtMs === "number" && Number.isFinite(entry.updatedAtMs)) {
+      candidate.updatedAtMs = entry.updatedAtMs;
+    }
+    try {
+      if (normalizeCronJobInput(candidate) === null) {
+        retainedEntries.push(entry);
+        continue;
+      }
+    } catch {
+      retainedEntries.push(entry);
+      continue;
+    }
+    const normalized = normalizeStoredCronJobs([candidate]);
+    if (normalized.jobs.length === 1 && normalized.removedJobs.length === 0) {
+      recoveredJobs.push(candidate);
+      if (jobId) {
+        recoveredJobIds.add(jobId);
+      }
+      recoveredEntries.push(entry);
+    } else {
+      retainedEntries.push(entry);
+    }
+  }
+  return { recoveredJobs, recoveredEntries, retainedEntries };
 }

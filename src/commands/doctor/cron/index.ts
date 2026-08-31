@@ -384,8 +384,12 @@ export async function maybeRepairLegacyCronStore(params: {
     legacyQuarantine,
     legacyImportCount,
     invalidConfigRows,
+    persistedQuarantine,
     rawJobs,
   } = state;
+  const recoverableQuarantineCount = persistedQuarantine.filter(
+    (entry) => entry.reason === "invalid-schedule" && entry.job,
+  ).length;
   const sqliteStorePath = resolveOpenClawStateSqlitePath();
   try {
     const quarantine = loadCronQuarantinedJobs(storePath);
@@ -415,7 +419,8 @@ export async function maybeRepairLegacyCronStore(params: {
       !legacyStoreDetected &&
       !legacyRunLogDetected &&
       !legacyQuarantine &&
-      invalidConfigRows.length === 0
+      invalidConfigRows.length === 0 &&
+      recoverableQuarantineCount === 0
     ) {
       return;
     }
@@ -432,6 +437,11 @@ export async function maybeRepairLegacyCronStore(params: {
     if (invalidConfigRows.length > 0) {
       previewLines.push(
         `- ${pluralize(invalidConfigRows.length, "malformed cron row")} will be quarantined in SQLite`,
+      );
+    }
+    if (recoverableQuarantineCount > 0) {
+      previewLines.push(
+        `- ${pluralize(recoverableQuarantineCount, "quarantined automation")} will be recovered after its schedule kind normalizes`,
       );
     }
     note(
@@ -605,6 +615,11 @@ export async function maybeRepairLegacyCronStore(params: {
   if (invalidConfigRows.length > 0) {
     previewLines.push(
       `- ${pluralize(invalidConfigRows.length, "malformed cron row")} will be quarantined in SQLite`,
+    );
+  }
+  if (recoverableQuarantineCount > 0) {
+    previewLines.push(
+      `- ${pluralize(recoverableQuarantineCount, "quarantined automation")} will be recovered after its schedule kind normalizes`,
     );
   }
   if (notifyCount > 0) {

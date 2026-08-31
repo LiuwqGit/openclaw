@@ -78,3 +78,20 @@ export function saveCronQuarantinedJobs(params: {
 
   store.registerLegacyMany(records);
 }
+
+/** Deletes recovered quarantine records after their jobs rejoin the active store. */
+export function deleteCronQuarantinedJobs(params: {
+  storePath: string;
+  entries: readonly (QuarantinedCronConfigJob | CronQuarantinedJob)[];
+}): void {
+  if (params.entries.length === 0) {
+    return;
+  }
+  const store = createSqliteAuditRecordStore<CronQuarantinedJob>({
+    scope: cronQuarantineScope(params.storePath),
+    maxEntries: Number.MAX_SAFE_INTEGER,
+  });
+  for (const entry of params.entries) {
+    store.delete(cronQuarantineEntryKey(entry));
+  }
+}

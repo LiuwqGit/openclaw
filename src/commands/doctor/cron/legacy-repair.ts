@@ -1,15 +1,20 @@
 // Doctor cron storage repair mechanics for legacy stores, run logs, payloads, and Codex refs.
-import { normalizeOptionalString } from "../../../../packages/normalization-core/src/string-coerce.js";
+import {
+  normalizeOptionalString,
+  normalizeOptionalStringifiedId,
+} from "../../../../packages/normalization-core/src/string-coerce.js";
 import { tryResolveAmbientOwnerAgentId } from "../../../agents/agent-scope-config.js";
 import { formatCliCommand } from "../../../cli/command-format.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   loadCronJobsStoreWithConfigJobs,
   loadCronJobsStoreWithConfigJobsReadOnly,
+  loadCronQuarantinedJobs,
   resolveCronJobsStorePath,
   saveCronJobsStore,
   saveCronJobsStoreWithMetadata,
   saveCronQuarantinedJobs,
+  deleteCronQuarantinedJobs,
   type CronQuarantinedJob,
   type QuarantinedCronConfigJob,
 } from "../../../cron/store.js";
@@ -51,7 +56,9 @@ import {
 import {
   collectStoredCronCodexRuntimePolicyTargets,
   cronCodexRuntimePolicyTargetKey,
+  hasRecoverableQuarantinedCronScheduleJobs,
   normalizeStoredCronJobs,
+  recoverQuarantinedCronScheduleJobs,
   type CronCodexRuntimePolicyTarget,
 } from "./store-migration.js";
 
@@ -69,6 +76,8 @@ export type LegacyCronRepairState = {
   legacyMigrationAlreadyImported: boolean;
   legacyImportCount: number;
   invalidConfigRows: QuarantinedCronConfigJob[];
+  /** Quarantine rows already persisted in the SQLite state database. */
+  persistedQuarantine: CronQuarantinedJob[];
   projectedOwnersByJobId: ReadonlyMap<string, CronOwnerProjection>;
   rawJobs: Array<Record<string, unknown>>;
 };
@@ -121,12 +130,22 @@ export async function loadLegacyCronRepairState(params: {
   const legacyStoreDetected = await legacyCronStoreFilesExist(storePath);
   const legacyRunLogDetected = await legacyCronRunLogFilesExist(storePath);
   const legacyQuarantine = await loadLegacyCronQuarantineForMigration(storePath);
+  // Quarantined rows whose schedule kind was a recognized case or whitespace
+  // variant are recoverable, so repair must run even without legacy files (#133347).
+  let persistedQuarantine: CronQuarantinedJob[];
+  try {
+    persistedQuarantine = loadCronQuarantinedJobs(storePath);
+  } catch (err) {
+    rethrowSqliteSchemaVersionError(err);
+    persistedQuarantine = [];
+  }
   assertCronStateSchemaSupported(params.env);
   if (
     params.onlyIfLegacyDetected &&
     !legacyStoreDetected &&
     !legacyRunLogDetected &&
-    !legacyQuarantine
+    !legacyQuarantine &&
+    !hasRecoverableQuarantinedCronScheduleJobs(persistedQuarantine)
   ) {
     return null;
   }
@@ -180,6 +199,7 @@ export async function loadLegacyCronRepairState(params: {
     legacyMigrationAlreadyImported,
     legacyImportCount,
     invalidConfigRows,
+    persistedQuarantine,
     projectedOwnersByJobId,
     rawJobs,
   };
@@ -196,6 +216,31 @@ export async function applyLegacyCronStoreRepair(params: {
   const { state } = params;
   const changes: string[] = [];
   const warnings: string[] = [];
+  // Recover quarantined invalid-schedule rows whose schedule kind was a
+  // recognized case or whitespace variant, so enabled automations quarantined
+  // by the 2026.8.1 migration rejoin the active store (#133347).
+  const recoverableQuarantineEntries = [
+    ...state.persistedQuarantine,
+    ...(state.legacyQuarantine?.jobs ?? []),
+  ];
+  const persistedQuarantineEntrySet = new Set<QuarantinedCronConfigJob | CronQuarantinedJob>(
+    state.persistedQuarantine,
+  );
+  const quarantineRecovery =
+    recoverableQuarantineEntries.length > 0
+      ? recoverQuarantinedCronScheduleJobs(
+          recoverableQuarantineEntries,
+          new Set(
+            state.rawJobs
+              .map((job) => normalizeOptionalStringifiedId(job.id))
+              .filter((id): id is string => id !== undefined),
+          ),
+        )
+      : undefined;
+  const recoveredQuarantineJobs = quarantineRecovery?.recoveredJobs ?? [];
+  if (recoveredQuarantineJobs.length > 0) {
+    state.rawJobs.push(...recoveredQuarantineJobs);
+  }
   const runtimePolicyPlan =
     params.migrateCodexModelRefs === true
       ? planCronCodexRefRewriteAgainstPersistedConfig({
@@ -209,12 +254,13 @@ export async function applyLegacyCronStoreRepair(params: {
     (runtimePolicyPlan?.blockedTargets ?? []).map(cronCodexRuntimePolicyTargetKey),
   );
   const normalized =
-    params.normalized ??
-    normalizeStoredCronJobs(state.rawJobs, {
-      migrateCodexModelRefs: params.migrateCodexModelRefs,
-      shouldMigrateCodexRuntimePolicyTarget: (target) =>
-        !blockedRuntimePolicyTargets.has(cronCodexRuntimePolicyTargetKey(target)),
-    });
+    params.normalized && recoveredQuarantineJobs.length === 0
+      ? params.normalized
+      : normalizeStoredCronJobs(state.rawJobs, {
+          migrateCodexModelRefs: params.migrateCodexModelRefs,
+          shouldMigrateCodexRuntimePolicyTarget: (target) =>
+            !blockedRuntimePolicyTargets.has(cronCodexRuntimePolicyTargetKey(target)),
+        });
   warnings.push(
     ...normalized.unsupportedLegacyTriggerScriptJobs.map(
       (job) =>
@@ -236,7 +282,8 @@ export async function applyLegacyCronStoreRepair(params: {
     state.invalidConfigRows.length > 0 ||
     normalized.mutated ||
     notifyMigration.changed ||
-    dreamingMigration.changed;
+    dreamingMigration.changed ||
+    recoveredQuarantineJobs.length > 0;
   const changed =
     state.legacyStoreDetected ||
     state.legacyRunLogDetected ||
@@ -247,7 +294,11 @@ export async function applyLegacyCronStoreRepair(params: {
   }
 
   const quarantineEntries: (QuarantinedCronConfigJob | CronQuarantinedJob)[] = [
-    ...(state.legacyQuarantine?.jobs ?? []),
+    ...(quarantineRecovery?.retainedEntries.filter(
+      (entry) => !persistedQuarantineEntrySet.has(entry),
+    ) ??
+      state.legacyQuarantine?.jobs ??
+      []),
     ...state.invalidConfigRows,
     ...normalized.removedJobs.map((entry) => ({
       sourceIndex: entry.sourceIndex,
@@ -290,6 +341,32 @@ export async function applyLegacyCronStoreRepair(params: {
         ],
       };
     }
+  }
+
+  // Delete recovered quarantine rows only after the active store write commits;
+  // a crash before deletion is safe because the id dedup guard prevents a
+  // duplicate recovery on the next doctor run.
+  const recoveredPersistedQuarantineEntries =
+    quarantineRecovery?.recoveredEntries.filter((entry) =>
+      persistedQuarantineEntrySet.has(entry),
+    ) ?? [];
+  if (recoveredPersistedQuarantineEntries.length > 0) {
+    try {
+      deleteCronQuarantinedJobs({
+        storePath: state.storePath,
+        entries: recoveredPersistedQuarantineEntries,
+      });
+    } catch (err) {
+      rethrowSqliteSchemaVersionError(err);
+      warnings.push(
+        `Failed clearing recovered cron quarantine rows at ${shortenHomePath(state.storePath)}: ${errorMessage(err)}. Rerun ${formatCliCommand("openclaw doctor --fix")} to retry.`,
+      );
+    }
+  }
+  if (recoveredQuarantineJobs.length > 0) {
+    changes.push(
+      `Recovered ${pluralize(recoveredQuarantineJobs.length, "quarantined automation")} whose schedule kind normalized to a canonical form.`,
+    );
   }
 
   if (state.legacyQuarantine) {
