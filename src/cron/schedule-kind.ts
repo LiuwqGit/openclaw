@@ -2,7 +2,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 /** Schedule kinds a persisted cron row may carry. */
-export const CRON_SCHEDULE_KINDS = ["at", "every", "cron", "on-exit", "stream"] as const;
+const CRON_SCHEDULE_KINDS = ["at", "every", "cron", "on-exit", "stream"] as const;
 
 export type CronScheduleKind = (typeof CRON_SCHEDULE_KINDS)[number];
 
