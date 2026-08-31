@@ -128,5 +128,5 @@ if (!archived) {
   throw new Error("deferred transcript was not archived at admission release");
 }
 console.log(`=== PROVEN: deferred transcript archived at release: ${archived} ===`);
-await fs.rm(stateDir, { recursive: true, force: true });
+await fs.rm(stateDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 process.exit(0);

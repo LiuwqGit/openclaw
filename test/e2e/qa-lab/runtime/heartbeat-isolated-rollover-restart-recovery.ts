@@ -3,11 +3,16 @@
 // materializes the displaced transcript, and exits (simulated gateway stop
 // before the admission released); phase 2 runs in a fresh process and the
 // first real wake reclaims the persisted deferred generation from the row.
-// Run (two processes, simulating a restart):
+// Run without arguments to orchestrate both phases in fresh child processes:
+//   node --import ./scripts/tsx.mjs test/e2e/qa-lab/runtime/heartbeat-isolated-rollover-restart-recovery.ts
+// Or run the two processes manually (simulating a restart):
 //   node --import ./scripts/tsx.mjs test/e2e/qa-lab/runtime/heartbeat-isolated-rollover-restart-recovery.ts phase1 <stateDir>
 //   node --import ./scripts/tsx.mjs test/e2e/qa-lab/runtime/heartbeat-isolated-rollover-restart-recovery.ts phase2 <stateDir>
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const sleep = async (ms: number): Promise<void> => {
   await new Promise<void>((resolve) => {
@@ -17,8 +22,36 @@ const sleep = async (ms: number): Promise<void> => {
 
 const phase = process.argv[2];
 const stateDir = process.argv[3];
+
+if (phase === undefined && stateDir === undefined) {
+  // Orchestration mode: run both phases in fresh child processes so each
+  // phase still dies with its own admission and process state, exactly like
+  // the manual two-process invocation above.
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-hb-restart-"));
+  const scriptPath = fileURLToPath(import.meta.url);
+  const tsxLoader = path.resolve(path.dirname(scriptPath), "../../../..", "scripts/tsx.mjs");
+  const runPhase = (name: "phase1" | "phase2"): Promise<void> =>
+    new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, ["--import", tsxLoader, scriptPath, name, dir], {
+        stdio: "inherit",
+      });
+      child.on("error", reject);
+      child.on("exit", (code) => {
+        if (code === 0) {
+          resolve();
+        } else {
+          reject(new Error(`${name} exited with code ${String(code)}`));
+        }
+      });
+    });
+  await runPhase("phase1");
+  await runPhase("phase2");
+  await fs.rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  process.exit(0);
+}
+
 if ((phase !== "phase1" && phase !== "phase2") || !stateDir) {
-  throw new Error("usage: <script> phase1|phase2 <stateDir>");
+  throw new Error("usage: <script> [phase1|phase2 <stateDir>]");
 }
 process.env.OPENCLAW_STATE_DIR = stateDir;
 const sessionsDir = path.join(stateDir, "agents", "main", "sessions");

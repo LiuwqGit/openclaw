@@ -1,0 +1,29 @@
+title: Heartbeat isolated rollover restart recovery
+
+scenario:
+  id: heartbeat-isolated-rollover-restart-recovery
+  surface: runtime
+  coverage:
+    secondary:
+      - automation.heartbeat-scheduling
+      - session-memory.transcript-persistence
+  regressionRefs:
+    - openclaw/openclaw#131770
+  objective: Prove a deferred isolated-rollover reclamation survives a simulated gateway stop and is reclaimed by the first real wake after restart.
+  successCriteria:
+    - Phase one commits the deferral through the real rollover path and exits before the admission releases, with the deferred generation persisted on the committed row.
+    - The displaced transcript materializes on disk before the simulated stop.
+    - A fresh process restart reads the persisted deferred row unchanged.
+    - The first real wake after restart reclaims the persisted deferred generation and archives its transcript.
+  docsRefs:
+    - docs/gateway/heartbeat.md
+  codeRefs:
+    - src/infra/heartbeat-isolated-rollover.ts
+    - src/infra/heartbeat-runner-execution.ts
+    - src/cron/isolated-agent/run-session-state.ts
+    - test/e2e/qa-lab/runtime/heartbeat-isolated-rollover-restart-recovery.ts
+  execution:
+    kind: script
+    path: test/e2e/qa-lab/runtime/heartbeat-isolated-rollover-restart-recovery.ts
+    timeoutMs: 180000
+    summary: Runs the two-process restart proof in one invocation — phase one persists the deferred generation and exits with the admission unreleased, then phase two restarts in a fresh process and proves the first real wake reclaims and archives the persisted transcript.

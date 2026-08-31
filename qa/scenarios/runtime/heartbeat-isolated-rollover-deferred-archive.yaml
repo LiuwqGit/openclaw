@@ -1,0 +1,28 @@
+title: Heartbeat isolated rollover deferred archive
+
+scenario:
+  id: heartbeat-isolated-rollover-deferred-archive
+  surface: runtime
+  coverage:
+    secondary:
+      - automation.heartbeat-scheduling
+      - session-memory.transcript-persistence
+  regressionRefs:
+    - openclaw/openclaw#131770
+  objective: Prove an isolated heartbeat wake defers the replaced generation's transcript archival while a real session-work admission owns the lane, then archives it at admission release without a further wake.
+  successCriteria:
+    - A real manual wake rolls the stable isolated row while a real session-work admission holds the isolated lane.
+    - The replaced generation's reclamation is deferred onto the committed row as a pending transcript archive.
+    - The displaced transcript materializes on disk while the lane is still admitted.
+    - Releasing the admission archives the deferred transcript with no further heartbeat wake.
+  docsRefs:
+    - docs/gateway/heartbeat.md
+  codeRefs:
+    - src/infra/heartbeat-isolated-rollover.ts
+    - src/infra/heartbeat-runner-execution.ts
+    - test/e2e/qa-lab/runtime/heartbeat-isolated-rollover-deferred-archive.ts
+  execution:
+    kind: script
+    path: test/e2e/qa-lab/runtime/heartbeat-isolated-rollover-deferred-archive.ts
+    timeoutMs: 180000
+    summary: Holds a real session-work admission on the isolated lane, runs one real manual isolated-heartbeat wake, proves the deferred reclamation commit and materialized transcript, releases the admission, and proves the archive rename happens with no further wake.
