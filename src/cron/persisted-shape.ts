@@ -6,7 +6,7 @@ import {
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { compileSafeRegex } from "../security/safe-regex.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
-import { CRON_SCHEDULE_KINDS, type CronScheduleKind } from "./schedule-kind.js";
+import { isCanonicalCronScheduleKind } from "./schedule-kind.js";
 import { isSystemOwnedCronPayloadKind, type CronJobState } from "./types.js";
 
 const CRON_STATE_TIMESTAMP_FIELDS = [
@@ -87,7 +87,7 @@ export function getInvalidPersistedCronJobReason(
   }
   const scheduleRecord = schedule as Record<string, unknown>;
   const scheduleKind = scheduleRecord.kind;
-  if (!CRON_SCHEDULE_KINDS.includes(scheduleKind as CronScheduleKind)) {
+  if (!isCanonicalCronScheduleKind(scheduleKind)) {
     return "invalid-schedule";
   }
   if (scheduleKind === "at") {

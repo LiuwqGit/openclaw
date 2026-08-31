@@ -6,6 +6,17 @@ export const CRON_SCHEDULE_KINDS = ["at", "every", "cron", "on-exit", "stream"] 
 
 export type CronScheduleKind = (typeof CRON_SCHEDULE_KINDS)[number];
 
+const RECOGNIZED_CRON_SCHEDULE_KIND_BY_NORMALIZED: ReadonlyMap<string, CronScheduleKind> = new Map(
+  CRON_SCHEDULE_KINDS.map((kind) => [kind, kind] as const),
+);
+
+/** Returns true only for the exact canonical schedule kinds. */
+export function isCanonicalCronScheduleKind(value: unknown): boolean {
+  return (
+    typeof value === "string" && RECOGNIZED_CRON_SCHEDULE_KIND_BY_NORMALIZED.get(value) === value
+  );
+}
+
 /**
  * Resolves a recognized schedule kind from case or whitespace variants.
  *
@@ -15,8 +26,5 @@ export type CronScheduleKind = (typeof CRON_SCHEDULE_KINDS)[number];
  * sides agree on which kinds are recognized.
  */
 export function normalizeRecognizedCronScheduleKind(value: unknown): CronScheduleKind | undefined {
-  const kind = normalizeLowercaseStringOrEmpty(value);
-  return CRON_SCHEDULE_KINDS.includes(kind as CronScheduleKind)
-    ? (kind as CronScheduleKind)
-    : undefined;
+  return RECOGNIZED_CRON_SCHEDULE_KIND_BY_NORMALIZED.get(normalizeLowercaseStringOrEmpty(value));
 }

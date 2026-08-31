@@ -2556,11 +2556,11 @@ describe("maybeRepairLegacyCronStore quarantine recovery", () => {
     });
 
     const persisted = await readPersistedJobs(storePath);
-    expect(persisted.map((job) => job.id).toSorted((a, b) => a.localeCompare(b))).toEqual([
-      "healthy-job",
-      "recreated-variant",
-      "variant-cron",
-    ]);
+    expect(
+      persisted
+        .map((job) => (typeof job.id === "string" ? job.id : ""))
+        .toSorted((a, b) => a.localeCompare(b)),
+    ).toEqual(["healthy-job", "recreated-variant", "variant-cron"]);
     const recovered = persisted.find((job) => job.id === "variant-cron");
     if (!recovered) {
       throw new Error("expected recovered cron job variant-cron");
@@ -2571,7 +2571,7 @@ describe("maybeRepairLegacyCronStore quarantine recovery", () => {
     const quarantine = loadCronQuarantinedJobs(storePath);
     expect(
       quarantine
-        .map((entry) => (entry.job as { id?: string } | undefined)?.id)
+        .map((entry) => (entry.job as { id?: string } | undefined)?.id ?? "")
         .toSorted((a, b) => a.localeCompare(b)),
     ).toEqual(["genuinely-bad", "other-reason", "recreated-variant"]);
     expectNoteContaining("Recovered 1 quarantined automation", "Doctor changes");

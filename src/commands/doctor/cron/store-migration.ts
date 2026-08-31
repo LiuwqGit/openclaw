@@ -721,7 +721,7 @@ export function recoverQuarantinedCronScheduleJobs(
       retainedEntries.push(entry);
       continue;
     }
-    const candidate = structuredClone(job) as Record<string, unknown>;
+    const candidate = structuredClone(job);
     const jobId = restoredCronJobId(candidate);
     if (jobId && (activeJobIds.has(jobId) || recoveredJobIds.has(jobId))) {
       // The operator already recreated this automation (or a duplicate entry
