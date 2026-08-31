@@ -2335,6 +2335,28 @@ describe("runWithModelFallback", () => {
           }),
         }),
     ],
+    [
+      "active turn claim",
+      () =>
+        Object.assign(
+          new Error(
+            "Session 4ecf5e11-9e20-432b-82a6-5cf1f878b278 already has an active turn claim",
+          ),
+          { name: "ActiveTurnClaimError" },
+        ),
+    ],
+    [
+      "wrapped active turn claim",
+      () =>
+        new Error("worker turn failed", {
+          cause: Object.assign(
+            new Error(
+              "Session 4ecf5e11-9e20-432b-82a6-5cf1f878b278 already has an active turn claim",
+            ),
+            { name: "ActiveTurnClaimError" },
+          ),
+        }),
+    ],
   ])("aborts fallback on %s worker coordination failures", async (_label, makeError) => {
     const error = makeError();
     const run = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce("too late");

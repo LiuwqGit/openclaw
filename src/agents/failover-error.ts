@@ -44,6 +44,9 @@ const RUNTIME_COORDINATION_ERROR_NAMES = new Set([
   "WorkerRunnerUnavailableError",
   "WorkerRunnerCapacityError",
   "WorkerWorkspaceReconciliationError",
+  // Session-lane admission failure thrown before any provider attempt; no
+  // model choice can clear a busy turn claim, so fallback must abort (#134187).
+  "ActiveTurnClaimError",
 ]);
 
 function resolveNestedErrors(candidate: Record<string, unknown>): unknown[] {
