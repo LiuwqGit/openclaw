@@ -240,6 +240,87 @@ describe("startHeartbeatRunner targeted unscheduled wake dispatch", () => {
     },
   );
 
+  it("runs one targeted cron wake when heartbeat cadence is disabled", async () => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = await expectWakeDispatch({
+      cfg: {
+        agents: { defaults: { heartbeat: { every: "0m" } }, list: [{ id: "main" }] },
+      } as OpenClawConfig,
+      runSpy,
+      wake: {
+        source: "cron",
+        intent: "immediate",
+        reason: "cron:job-1",
+        agentId: "main",
+        coalesceMs: 0,
+      },
+      expectedCall: {
+        agentId: "main",
+        source: "cron",
+        intent: "immediate",
+        reason: "cron:job-1",
+      },
+    });
+    runner.stop();
+  });
+
+  it.each([
+    {
+      name: "with event intent",
+      wake: { agentId: "main", intent: "event" as const },
+    },
+    {
+      name: "with a non-cron reason",
+      wake: { agentId: "main", reason: "wake" },
+    },
+  ])("rejects an unscheduled cron wake $name", async ({ wake }) => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: {
+        agents: { defaults: { heartbeat: { every: "0m" } }, list: [{ id: "main" }] },
+      } as OpenClawConfig,
+      runOnce: runSpy,
+    });
+
+    requestHeartbeat({
+      source: "cron",
+      intent: "immediate",
+      reason: "cron:job-1",
+      ...wake,
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(runSpy).not.toHaveBeenCalled();
+    runner.stop();
+  });
+
+  it("keeps targeted cron wakes disabled when heartbeats are globally disabled", async () => {
+    useFakeHeartbeatTime();
+    setHeartbeatsEnabled(false);
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: {
+        agents: { defaults: { heartbeat: { every: "0m" } }, list: [{ id: "main" }] },
+      } as OpenClawConfig,
+      runOnce: runSpy,
+    });
+
+    requestHeartbeat({
+      source: "cron",
+      intent: "immediate",
+      reason: "cron:job-1",
+      agentId: "main",
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(runSpy).not.toHaveBeenCalled();
+    runner.stop();
+  });
+
   it("runs one targeted exec-event wake when heartbeat cadence is disabled", async () => {
     useFakeHeartbeatTime();
     const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });

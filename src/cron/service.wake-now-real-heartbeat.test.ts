@@ -44,7 +44,11 @@ function makeSandbox() {
 
 type WakeNowRunMode = "direct" | "queued" | "scheduled";
 
-async function runMainCronCase(mode: WakeNowRunMode, wakeMode: "now" | "next-heartbeat" = "now") {
+async function runMainCronCase(
+  mode: WakeNowRunMode,
+  wakeMode: "now" | "next-heartbeat" = "now",
+  heartbeatEvery: "5m" | "0m" = "5m",
+) {
   const sandbox = makeSandbox();
   const getReplySpy = vi.fn().mockResolvedValue({ text: "Handled the reminder" });
   const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "155462274" });
@@ -58,7 +62,7 @@ async function runMainCronCase(mode: WakeNowRunMode, wakeMode: "now" | "next-hea
     agents: {
       defaults: {
         workspace: sandbox.dir,
-        heartbeat: { every: "5m", target: "telegram" },
+        heartbeat: { every: heartbeatEvery, target: "telegram" },
       },
     },
     channels: { telegram: { allowFrom: ["*"] } },
@@ -167,6 +171,12 @@ async function runMainCronCase(mode: WakeNowRunMode, wakeMode: "now" | "next-hea
     expect(replyCtx.SessionKey).toBe(expectedMainSessionKey);
     expect(replyCtx.Body).toContain("Reminder: Send the nightly report");
     expect(peekSystemEventEntries(expectedMainSessionKey)).toHaveLength(0);
+    if (heartbeatEvery === "0m") {
+      // One-shot `at` jobs are deleted after their single execution instead of
+      // being left disabled by an impossible dispatch (#134500).
+      const jobs = await cron.list({ includeDisabled: true });
+      expect(jobs.find((j) => j.id === job.id)).toBeUndefined();
+    }
   } finally {
     cron.stop();
     const drained = await waitForActiveCronJobs(5_000);
@@ -186,6 +196,10 @@ describe("main cron with the real heartbeat runner", () => {
 
   it("delivers during a natural scheduled run", async () => {
     await runMainCronCase("scheduled");
+  });
+
+  it("runs a future one-shot scheduled main job once and deletes it when the heartbeat schedule is disabled", async () => {
+    await runMainCronCase("scheduled", "now", "0m");
   });
 
   it("delivers a next-heartbeat event through a later scheduled main-session heartbeat", async () => {

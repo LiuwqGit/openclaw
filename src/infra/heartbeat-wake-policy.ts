@@ -77,6 +77,12 @@ export function isTargetedUnscheduledWake(params: TargetedUnscheduledWakeParams)
       return params.intent === "immediate" && hasSessionTarget && reason === "wake";
     case "hook":
       return params.intent === "immediate" && (reason?.startsWith("hook:") ?? false);
+    case "cron":
+      // An admitted immediate cron intent (wakeMode "now") uses the heartbeat
+      // runner as execution transport and must not depend on the periodic
+      // heartbeat schedule being enabled; event-intent cron wakes still ride
+      // the recurring schedule (#134500).
+      return params.intent === "immediate" && (reason?.startsWith("cron:") ?? false);
     case "exec-event":
       return params.intent === "event" && reason === "exec-event";
     case "background-task":
