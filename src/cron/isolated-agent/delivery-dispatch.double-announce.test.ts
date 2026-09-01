@@ -2126,11 +2126,14 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
   });
 
-  it("skips stale cron deliveries while still suppressing fallback main summary", async () => {
+  it("retains a stale one-shot transcript without delivery or a fallback summary", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-18T17:00:00.000Z"));
 
     const params = makeBaseParams({ synthesizedText: "Yesterday's morning briefing." });
+    params.agentSessionKey = "agent:main:cron:test-job";
+    params.job.deleteAfterRun = true;
+    params.beforeSessionDelete = vi.fn();
     (params.job as { state?: { nextRunAtMs?: number } }).state = {
       nextRunAtMs: Date.now() - (3 * 60 * 60_000 + 1),
     };
@@ -2148,35 +2151,10 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     });
     expect(state.deliveryError).toEqual(deliveryError);
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
-    // The stale guard is a delivery failure, not intentional silence: without a
-    // suppression reason the whole-run completion resolves to "failed", which
-    // retains the one-shot and its transcript instead of a false success (#131491).
     expect(state.deliveryState.status).toBe("not-delivered");
     expect(state.deliveryState.delivered).toBe(false);
     expect(state.deliveryState.error).toEqual(deliveryError);
     expect(state.deliveryState.deliverySuppressionReason).toBeUndefined();
-  });
-
-  it("retains the deleteAfterRun transcript when a stale delivery suppresses a non-empty reply", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-03-18T17:00:00.000Z"));
-
-    const params = makeBaseParams({ synthesizedText: "Yesterday's morning briefing." });
-    params.agentSessionKey = "agent:main:cron:test-job";
-    params.job.deleteAfterRun = true;
-    params.beforeSessionDelete = vi.fn();
-    (params.job as { state?: { nextRunAtMs?: number } }).state = {
-      nextRunAtMs: Date.now() - (3 * 60 * 60_000 + 1),
-    };
-
-    const state = await dispatchCronDelivery(params);
-
-    // Completed non-empty output was suppressed as stale; the run transcript
-    // is the only remaining copy of the deliverable, so it must survive the
-    // deleteAfterRun cleanup that a successful one-shot would retire (#131491).
-    expect(state.deliveryState.status).toBe("not-delivered");
-    expect(state.deliveryError).toContain("skipping stale delivery");
-    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
     expect(params.beforeSessionDelete).not.toHaveBeenCalled();
     expect(callGateway).not.toHaveBeenCalled();
   });

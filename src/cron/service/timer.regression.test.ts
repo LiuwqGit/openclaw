@@ -220,10 +220,6 @@ describe("cron service timer regressions", () => {
 
   it("#131491: retains a deleteAfterRun one-shot whose stale guard suppressed its delivery", async () => {
     const store = timerRegressionFixtures.makeStorePath();
-    // The run fires long after its scheduled slot, executes fully, and the
-    // stale-delivery guard discards its only deliverable. The dispatch-level
-    // transcript retention is covered by the double-announce dispatch tests;
-    // this regression pins the service-side retention policy.
     const scheduledAt = Date.parse("2026-02-06T10:00:00.000Z");
     const firedAt = scheduledAt + 18 * 60 * 60_000;
 
@@ -238,8 +234,7 @@ describe("cron service timer regressions", () => {
     cronJob.deleteAfterRun = true;
     await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
 
-    // Faithful replay of what the isolated runner returns after the stale
-    // guard records its delivery outcome: execution ok, delivery failed.
+    // Execution succeeded, but the delivery owner rejected its stale output.
     const runIsolatedAgentJob = vi.fn().mockResolvedValue({
       status: "ok",
       summary: "report finished",
@@ -265,17 +260,23 @@ describe("cron service timer regressions", () => {
 
     await onTimer(state);
 
-    // The completed one-shot stays inspectable instead of being deleted as a success.
-    const job = state.store?.jobs.find((entry) => entry.id === "oneshot-stale-delivery");
-    expect(job).toBeDefined();
-    expect(job?.enabled).toBe(false);
-    expect(job?.state.nextRunAtMs).toBeUndefined();
-    expect(job?.state.lastStatus).toBe("ok");
-    expect(job?.state.lastDelivered).toBe(false);
-    expect(job?.state.lastDeliveryStatus).toBe("not-delivered");
-    expect(job?.state.lastDeliveryError).toContain("skipping stale delivery");
-    // The turn already ran to completion; the failed completion must not replay it.
+    const persisted = await loadCronStore(store.storePath);
+    expect(persisted.jobs).toHaveLength(1);
+    const job = requireJob({ store: persisted }, cronJob.id);
+    expect(job.enabled).toBe(false);
+    expect(job.state.nextRunAtMs).toBeUndefined();
+    expect(job.state.lastStatus).toBe("ok");
+    expect(job.state.lastDelivered).toBe(false);
+    expect(job.state.lastDeliveryStatus).toBe("not-delivered");
+    expect(job.state.lastDeliveryError).toContain("skipping stale delivery");
+
+    // A fresh scheduler must retain the evidence without replaying completed work.
+    stop(state);
+    const restarted = createCronServiceState(state.deps);
+    await onTimer(restarted);
     expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+    expect((await loadCronStore(store.storePath)).jobs).toEqual(persisted.jobs);
+    stop(restarted);
   });
 
   it("#24355: one-shot job disabled after max transient retries", async () => {
