@@ -2029,6 +2029,9 @@ describe("config cli", () => {
       expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
       expectErrorIncludes('Could not parse "{bad" as JSON for --strict-json.');
       expectErrorIncludes("For plain strings, omit --strict-json.");
+      expect(mockError.mock.calls.map((call) => String(call[0])).join("\n")).not.toContain(
+        "JSON array or object without string quotes",
+      );
     });
 
     it("keeps --json as a strict parsing alias", async () => {

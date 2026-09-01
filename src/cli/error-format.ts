@@ -58,12 +58,16 @@ export function formatUnsupportedChannelActionMessage(params: {
 /** Detect a structured value whose inner quotes were likely removed by the shell. */
 function looksShellStrippedJson(value: string): boolean {
   const trimmed = value.trim();
-  if (!trimmed.startsWith("[") && !trimmed.startsWith("{")) {
+  const balanced =
+    (trimmed.startsWith("[") && trimmed.endsWith("]")) ||
+    (trimmed.startsWith("{") && trimmed.endsWith("}"));
+  if (!balanced) {
     return false;
   }
-  // Valid JSON strings always carry quotes; a bare array/object without any
-  // quote characters reaching the parser is the classic Windows PowerShell
-  // single-quoted-argument handoff failure.
+  // Valid JSON strings always carry quotes; a bare, complete array/object
+  // without any quote character reaching the parser is the classic Windows
+  // PowerShell single-quoted-argument handoff failure. Incomplete values
+  // (e.g. "{bad") are ordinary JSON typos, not shell damage.
   return !/["']/.test(trimmed);
 }
 

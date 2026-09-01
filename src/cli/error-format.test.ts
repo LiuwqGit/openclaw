@@ -41,6 +41,20 @@ describe("formatStrictJsonParseFailure", () => {
     const message = formatStrictJsonParseFailure({ value: "{mode:'token'}", cause: "bad token" });
 
     expect(message).not.toContain("Windows PowerShell");
-    expect(message).not.toContain("openclaw config patch --file");
+    expect(message).not.toContain("JSON array or object without string quotes");
+  });
+
+  it("does not suggest a shell hint for incomplete JSON", () => {
+    const message = formatStrictJsonParseFailure({ value: "{bad", cause: "bad token" });
+
+    expect(message).not.toContain("Windows PowerShell");
+    expect(message).not.toContain("JSON array or object without string quotes");
+  });
+
+  it("does not suggest a shell hint for a value missing its closing delimiter", () => {
+    const message = formatStrictJsonParseFailure({ value: "[telegram:123456", cause: "bad token" });
+
+    expect(message).not.toContain("Windows PowerShell");
+    expect(message).not.toContain("JSON array or object without string quotes");
   });
 });
