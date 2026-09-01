@@ -12,6 +12,7 @@ import {
 } from "../agents/session-activity-notes.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { getAgentRunContext } from "../infra/agent-run-registry.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   createSessionObserverAudience,
@@ -90,6 +91,17 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     getConfig: deps.getConfig,
   });
   type ObservedAudience = ReturnType<typeof audience.classify>;
+  const broadcastDigest = (
+    digest: SessionObserverDigest,
+    connIds: ReadonlySet<string>,
+    agentId: string,
+  ) =>
+    deps.broadcastToConnIds(
+      "session.observer",
+      digest,
+      connIds,
+      audience.deliveryOptions(digest.sessionKey, agentId),
+    );
   // Narrow run-identity guard shared by persist paths: a digest may still land
   // while its session is unwatched, but never after a newer run replaces it.
   const runStillCurrent = (runId: string, sessionKey: string, agentId: string) => () =>
@@ -106,10 +118,12 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       disableModelForRun(state);
     },
     onError: (state, error) => {
+      // Native Error properties are non-enumerable; a raw Error serializes as {}
+      // in the JSON console envelope, hiding the actual failure cause.
       observerLog.warn("session observer digest persistence failed", {
         sessionKey: state.sessionKey,
         runId: state.runId,
-        error,
+        error: formatErrorMessage(error),
       });
     },
   });
@@ -119,12 +133,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     clearTimeoutFn,
     isCurrent: (state) => audienceLifecycle.stateIsCurrent(state),
     publish: (state, digest) => {
-      deps.broadcastToConnIds(
-        "session.observer",
-        digest,
-        audience.recipients(state.sessionKey, state.agentId),
-        audience.deliveryOptions(state.sessionKey, state.agentId),
-      );
+      broadcastDigest(digest, audience.recipients(state.sessionKey, state.agentId), state.agentId);
       void persistAcceptedDigest(state, digest, false, "preamble");
     },
   });
@@ -161,15 +170,15 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       if (digest && stillCurrent()) {
         // Live subscribers already saw the in-progress digest over this event;
         // the synthesized terminal correction must reach them the same way.
-        deps.broadcastToConnIds(
-          "session.observer",
-          digest,
-          audience.recipients(digest.sessionKey, agentId),
-          audience.deliveryOptions(digest.sessionKey, agentId),
-        );
+        broadcastDigest(digest, audience.recipients(digest.sessionKey, agentId), agentId);
       }
     } catch (error) {
-      observerLog.warn("session observer terminal digest synthesis failed", { runId, error });
+      // Native Error properties are non-enumerable; a raw Error serializes as {}
+      // in the JSON console envelope, hiding the actual failure cause.
+      observerLog.warn("session observer terminal digest synthesis failed", {
+        runId,
+        error: formatErrorMessage(error),
+      });
     }
   }
 
@@ -394,12 +403,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
         const recipients = criticalTransition
           ? audience.criticalRecipients(state.sessionKey, state.agentId)
           : audience.recipients(state.sessionKey, state.agentId);
-        deps.broadcastToConnIds(
-          "session.observer",
-          digest,
-          recipients,
-          audience.deliveryOptions(state.sessionKey, state.agentId),
-        );
+        broadcastDigest(digest, recipients, state.agentId);
         await persistAcceptedDigest(state, digest, final);
         if (final) {
           dormantRuns.delete(state.runId);
@@ -417,7 +421,9 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
           observerLog.warn("session observer disabled after consecutive failures", {
             sessionKey: state.sessionKey,
             runId: state.runId,
-            error,
+            // Native Error properties are non-enumerable; a raw Error serializes as
+            // {} in the JSON console envelope, hiding the actual failure cause.
+            error: formatErrorMessage(error),
           });
           if (final || state.finalPending || state.terminalHealth) {
             retireTerminalState(state);
