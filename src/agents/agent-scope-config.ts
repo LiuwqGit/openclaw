@@ -93,8 +93,77 @@ function stripNullBytes(s: string): string {
   return s.replaceAll("\0", "");
 }
 
+/**
+ * Roster facts memoized for the duration of a read-only batch (#135743).
+ *
+ * Runtime collection walks every configured agent × model ref, and each
+ * reference re-derived the full roster projection plus its derived owner
+ * resolvers, making startup O(agents² × models) on large fleets — long enough
+ * to block the event loop after the HTTP server has already bound. Inside an
+ * explicit batch scope, roster-derived facts are computed once per config
+ * object and reused for the whole batch.
+ */
+type AgentRosterFacts = {
+  entriesWithSource?: ListedAgentEntry[];
+  agentIds?: string[];
+  soleAgentId?: { value: string | undefined };
+  rawLegacyDefaultAgentId?: { value: string | undefined };
+  compatibilityAgentId?: { value: string | undefined };
+  entryByNormalizedId?: Map<string, { clone: boolean; entry: AgentEntry }>;
+};
+
+let agentRosterFactsDepth = 0;
+let agentRosterFactsByConfig = new WeakMap<object, AgentRosterFacts>();
+
+/**
+ * Runs a read-only callback with batch-scoped roster memoization.
+ *
+ * While the outermost batch is active, roster-derived facts (agent entries,
+ * ids, sole/default/compatibility owners, and point lookups) are cached per
+ * config object. The cache is dropped when the batch exits, so config changes
+ * between batches are always observed. The callback must not mutate the agent
+ * roster, agent defaults, or retained legacy owner state while it runs, and
+ * values returned from roster helpers inside the batch must be treated as
+ * immutable shared snapshots.
+ */
+export function withAgentRosterFactsBatch<T>(callback: () => T): T {
+  agentRosterFactsDepth += 1;
+  try {
+    return callback();
+  } finally {
+    agentRosterFactsDepth -= 1;
+    if (agentRosterFactsDepth === 0) {
+      agentRosterFactsByConfig = new WeakMap();
+    }
+  }
+}
+
+function readAgentRosterFacts(cfg: OpenClawConfig): AgentRosterFacts | undefined {
+  if (agentRosterFactsDepth === 0 || !cfg || typeof cfg !== "object") {
+    return undefined;
+  }
+  let facts = agentRosterFactsByConfig.get(cfg);
+  if (!facts) {
+    facts = {};
+    agentRosterFactsByConfig.set(cfg, facts);
+  }
+  return facts;
+}
+
 /** Lists valid configured agent entries from config. */
 export function listAgentEntriesWithSource(cfg: OpenClawConfig): ListedAgentEntry[] {
+  const facts = readAgentRosterFacts(cfg);
+  if (facts?.entriesWithSource) {
+    return facts.entriesWithSource;
+  }
+  const projected = projectAgentEntriesWithSource(cfg);
+  if (facts) {
+    facts.entriesWithSource = projected;
+  }
+  return projected;
+}
+
+function projectAgentEntriesWithSource(cfg: OpenClawConfig): ListedAgentEntry[] {
   const roster = readAgentRosterProperty(cfg);
   if (roster?.kind === "entries" && isRecord(roster.value)) {
     return Object.entries(roster.value).flatMap(([id, entry]) =>
@@ -160,6 +229,18 @@ export function hasAgentRosterProperty(raw: unknown): boolean {
 
 /** Lists unique configured agent ids. */
 export function listAgentIds(cfg: OpenClawConfig): string[] {
+  const facts = readAgentRosterFacts(cfg);
+  if (facts?.agentIds) {
+    return facts.agentIds;
+  }
+  const ids = projectAgentIds(cfg);
+  if (facts) {
+    facts.agentIds = ids;
+  }
+  return ids;
+}
+
+function projectAgentIds(cfg: OpenClawConfig): string[] {
   const agents = listAgentEntries(cfg);
   if (agents.length === 0 && !hasAgentRosterProperty(cfg)) {
     // Match resolveDefaultAgentId's Plugin SDK compatibility for raw pre-roster configs.
@@ -191,6 +272,18 @@ export function resolveConfiguredAgentId(cfg: OpenClawConfig, agentId: string): 
 }
 
 export function tryResolveSoleAgentId(cfg: OpenClawConfig): string | undefined {
+  const facts = readAgentRosterFacts(cfg);
+  if (facts?.soleAgentId) {
+    return facts.soleAgentId.value;
+  }
+  const value = projectSoleAgentId(cfg);
+  if (facts) {
+    facts.soleAgentId = { value };
+  }
+  return value;
+}
+
+function projectSoleAgentId(cfg: OpenClawConfig): string | undefined {
   const agents = listAgentEntries(cfg);
   if (agents.length === 0) {
     if (!hasAgentRosterProperty(cfg)) {
@@ -214,6 +307,18 @@ export function resolveSoleAgentId(cfg: OpenClawConfig, context?: AgentSelection
 }
 
 function tryResolveRawLegacyDefaultAgentId(cfg: OpenClawConfig): string | undefined {
+  const facts = readAgentRosterFacts(cfg);
+  if (facts?.rawLegacyDefaultAgentId) {
+    return facts.rawLegacyDefaultAgentId.value;
+  }
+  const value = projectRawLegacyDefaultAgentId(cfg);
+  if (facts) {
+    facts.rawLegacyDefaultAgentId = { value };
+  }
+  return value;
+}
+
+function projectRawLegacyDefaultAgentId(cfg: OpenClawConfig): string | undefined {
   if (cfg.agents?.ownership === "explicit") {
     return undefined;
   }
@@ -223,6 +328,18 @@ function tryResolveRawLegacyDefaultAgentId(cfg: OpenClawConfig): string | undefi
 
 /** Resolves sole/raw legacy owners plus the retained in-process migration owner. */
 export function tryResolveLegacyCompatibilityAgentId(cfg: OpenClawConfig): string | undefined {
+  const facts = readAgentRosterFacts(cfg);
+  if (facts?.compatibilityAgentId) {
+    return facts.compatibilityAgentId.value;
+  }
+  const value = projectLegacyCompatibilityAgentId(cfg);
+  if (facts) {
+    facts.compatibilityAgentId = { value };
+  }
+  return value;
+}
+
+function projectLegacyCompatibilityAgentId(cfg: OpenClawConfig): string | undefined {
   const retainedAgentId = getRetainedLegacyDefaultAgentId(cfg);
   return retainedAgentId && listAgentIds(cfg).includes(retainedAgentId)
     ? retainedAgentId
@@ -291,6 +408,14 @@ export function tryResolveDefaultAgentId(cfg: OpenClawConfig): string | undefine
 
 export function resolveAgentEntry(cfg: OpenClawConfig, agentId: string): AgentEntry | undefined {
   const id = normalizeAgentId(agentId);
+  const facts = readAgentRosterFacts(cfg);
+  if (facts) {
+    // Point lookups inside a batch reuse one first-match index instead of
+    // re-traversing the roster per model ref (#135743).
+    const byId = (facts.entryByNormalizedId ??= buildAgentEntryIndex(cfg));
+    const found = byId.get(id);
+    return found ? (found.clone ? { ...found.entry } : found.entry) : undefined;
+  }
   // Point lookups are hot; the public list helper must clone every keyed entry.
   // Traverse the roster directly so a match does not project unrelated agents.
   const roster = readAgentRosterProperty(cfg);
@@ -313,6 +438,26 @@ export function resolveAgentEntry(cfg: OpenClawConfig, agentId: string): AgentEn
     );
   }
   return undefined;
+}
+
+/**
+ * First-match index over the projected roster for batch point lookups.
+ *
+ * Keyed entries must stay clone-on-read (callers may mutate the returned
+ * entry); list entries keep the original object, matching the direct
+ * traversal semantics of `resolveAgentEntry` outside a batch.
+ */
+function buildAgentEntryIndex(
+  cfg: OpenClawConfig,
+): Map<string, { clone: boolean; entry: AgentEntry }> {
+  const index = new Map<string, { clone: boolean; entry: AgentEntry }>();
+  for (const { entry, source } of listAgentEntriesWithSource(cfg)) {
+    const normalizedId = normalizeAgentId(entry?.id);
+    if (!index.has(normalizedId)) {
+      index.set(normalizedId, { clone: source.kind === "entries", entry });
+    }
+  }
+  return index;
 }
 
 /** Resolves the authored entry object for in-place canonical config mutations. */

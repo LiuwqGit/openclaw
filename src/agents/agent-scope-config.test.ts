@@ -6,6 +6,7 @@ import {
   AgentSelectionRequiredError,
   listAgentEntriesWithSource,
   listAgentIds,
+  resolveAgentEntry,
   resolveConfiguredAgentId,
   resolveAgentConfig,
   resolveAgentOperationAgentId,
@@ -17,6 +18,7 @@ import {
   tryResolveAmbientOwnerAgentId,
   tryResolveDefaultAgentId,
   tryResolveSoleAgentId,
+  withAgentRosterFactsBatch,
 } from "./agent-scope-config.js";
 
 vi.unmock("./agent-scope-config.js");
@@ -344,5 +346,47 @@ describe("resolveAgentConfig model policy", () => {
     expect(resolveAgentConfig(cfg, "main")?.modelPolicy).toEqual({
       allow: ["openai/gpt-5.6-sol"],
     });
+  });
+});
+
+describe("batch-scoped roster facts (#135743)", () => {
+  it("projects the roster once per config object inside a batch", () => {
+    const cfg = { agents: { entries: { main: {}, ops: {} } } } as OpenClawConfig;
+
+    withAgentRosterFactsBatch(() => {
+      expect(listAgentIds(cfg)).toEqual(["main", "ops"]);
+      // Repeated lookups inside one batch reuse the memoized roster record.
+      expect(listAgentIds(cfg)).toBe(listAgentIds(cfg));
+      expect(listAgentEntriesWithSource(cfg)).toBe(listAgentEntriesWithSource(cfg));
+      expect(tryResolveSoleAgentId(cfg)).toBeUndefined();
+    });
+
+    // Outside the batch every helper projects a fresh roster record again.
+    expect(listAgentIds(cfg)).not.toBe(listAgentIds(cfg));
+  });
+
+  it("drops memoized facts when the outermost batch exits", () => {
+    const cfg = { agents: { entries: { main: {} } } } as OpenClawConfig;
+
+    withAgentRosterFactsBatch(() => {
+      expect(tryResolveSoleAgentId(cfg)).toBe("main");
+    });
+
+    const roster = (cfg as { agents: { entries: Record<string, unknown> } }).agents.entries;
+    roster.ops = {};
+    withAgentRosterFactsBatch(() => {
+      expect(tryResolveSoleAgentId(cfg)).toBeUndefined();
+    });
+  });
+
+  it("returns fresh keyed-entry clones for point lookups inside a batch", () => {
+    const cfg = { agents: { entries: { main: { name: "Main" } } } } as OpenClawConfig;
+
+    withAgentRosterFactsBatch(() => {
+      const first = resolveAgentEntry(cfg, "main");
+      first!.name = "Mutated";
+      expect(resolveAgentEntry(cfg, "main")).toEqual({ id: "main", name: "Main" });
+    });
+    expect(resolveAgentEntry(cfg, "main")).toEqual({ id: "main", name: "Main" });
   });
 });
