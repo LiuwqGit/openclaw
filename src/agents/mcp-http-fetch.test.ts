@@ -358,28 +358,45 @@ describe("MCP HTTP fetch helpers", () => {
     ]);
   });
 
-  it("frames OAuth POST bodies with Content-Length at a real HTTP boundary", async () => {
+  it("frames OAuth-authenticated MCP POST retries with Content-Length", async () => {
     delete testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY];
-    oauthResolveMock.mockResolvedValue("test-token-placeholder");
+    oauthResolveMock
+      .mockResolvedValueOnce("first-token-placeholder")
+      .mockResolvedValueOnce("second-token-placeholder");
     const observed: Array<{
       contentLength: string | undefined;
       transferEncoding: string | undefined;
+      authorization: string | undefined;
       body: string;
     }> = [];
     const server = createServer((request, response) => {
-      let body = "";
-      request.setEncoding("utf8");
-      request.on("data", (chunk: string) => {
-        body += chunk;
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk: Buffer) => {
+        chunks.push(chunk);
       });
       request.on("end", () => {
+        const body = Buffer.concat(chunks);
         observed.push({
           contentLength: request.headers["content-length"],
           transferEncoding: request.headers["transfer-encoding"],
-          body,
+          authorization: request.headers.authorization,
+          body: body.toString("utf8"),
         });
+        if (request.headers["content-length"] === undefined) {
+          response.writeHead(411, { "content-type": "text/plain" });
+          response.end("Content-Length required");
+          return;
+        }
+        if (observed.length === 1) {
+          response.writeHead(401, {
+            "content-type": "text/plain",
+            "www-authenticate": 'Bearer scope="docs.read"',
+          });
+          response.end("expired token");
+          return;
+        }
         response.writeHead(200, { "content-type": "application/json" });
-        response.end("{}");
+        response.end('{"jsonrpc":"2.0","id":1,"result":{"tools":[]}}');
       });
     });
     const baseUrl = await listenOnLoopback(server);
@@ -389,7 +406,7 @@ describe("MCP HTTP fetch helpers", () => {
       authFetchFn: buildMcpHttpFetch({ resourceUrl }),
       identity: operatorMcpOAuthIdentity("docs", resourceUrl),
     });
-    const jsonRpcBody = '{"jsonrpc":"2.0","method":"tools/list"}';
+    const jsonRpcBody = '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"cursor":"café"}}';
 
     try {
       const response = await fetch(resourceUrl, {
@@ -398,11 +415,19 @@ describe("MCP HTTP fetch helpers", () => {
         body: jsonRpcBody,
       });
 
-      expect(await response.text()).toBe("{}");
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe('{"jsonrpc":"2.0","id":1,"result":{"tools":[]}}');
       expect(observed).toEqual([
         {
-          contentLength: String(jsonRpcBody.length),
+          contentLength: String(Buffer.byteLength(jsonRpcBody)),
           transferEncoding: undefined,
+          authorization: "Bearer first-token-placeholder",
+          body: jsonRpcBody,
+        },
+        {
+          contentLength: String(Buffer.byteLength(jsonRpcBody)),
+          transferEncoding: undefined,
+          authorization: "Bearer second-token-placeholder",
           body: jsonRpcBody,
         },
       ]);
