@@ -117,15 +117,13 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       // An unpersistable session must not re-bill the utility model every cycle.
       disableModelForRun(state);
     },
-    onError: (state, error) => {
-      // Native Error properties are non-enumerable; a raw Error serializes as {}
-      // in the JSON console envelope, hiding the actual failure cause.
+    // JSON logging drops Error's non-enumerable fields; format before serializing.
+    onError: (state, error) =>
       observerLog.warn("session observer digest persistence failed", {
         sessionKey: state.sessionKey,
         runId: state.runId,
         error: formatErrorMessage(error),
-      });
-    },
+      }),
   });
   const preamblePublisher = createSessionObserverPreamblePublisher({
     now,
@@ -173,8 +171,6 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
         broadcastDigest(digest, audience.recipients(digest.sessionKey, agentId), agentId);
       }
     } catch (error) {
-      // Native Error properties are non-enumerable; a raw Error serializes as {}
-      // in the JSON console envelope, hiding the actual failure cause.
       observerLog.warn("session observer terminal digest synthesis failed", {
         runId,
         error: formatErrorMessage(error),
@@ -421,8 +417,6 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
           observerLog.warn("session observer disabled after consecutive failures", {
             sessionKey: state.sessionKey,
             runId: state.runId,
-            // Native Error properties are non-enumerable; a raw Error serializes as
-            // {} in the JSON console envelope, hiding the actual failure cause.
             error: formatErrorMessage(error),
           });
           if (final || state.finalPending || state.terminalHealth) {

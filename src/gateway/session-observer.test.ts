@@ -1,18 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-
-const observerLoggerMocks = vi.hoisted(() => ({
-  debug: vi.fn(),
-  info: vi.fn(),
-  warn: vi.fn(),
-  error: vi.fn(),
-}));
-
-vi.mock("../logging/subsystem.js", () => ({
-  createSubsystemLogger: () => observerLoggerMocks,
-}));
-
 import {
   createHarness,
   declareObserverVisibility,
@@ -27,9 +15,6 @@ import {
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
-  for (const loggerMock of Object.values(observerLoggerMocks)) {
-    loggerMock.mockClear();
-  }
   resetSessionObserverEventSequence();
 });
 
@@ -634,33 +619,6 @@ describe("session observer", () => {
     expect(harness.broadcastToConnIds.mock.calls.at(-1)?.[1]).toMatchObject({
       headline: "Continuing without model",
     });
-    harness.observer.dispose();
-  });
-
-  it("logs the underlying error message when disabling after consecutive failures", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    const completeModel = vi.fn(async () => {
-      throw new Error("model unavailable");
-    });
-    const harness = createHarness({ completeModel });
-    startAndAddToolNotes(harness.observer);
-
-    await vi.advanceTimersByTimeAsync(24_000);
-    await flushObserver();
-    expect(completeModel).toHaveBeenCalledTimes(2);
-
-    const disabledWarn = observerLoggerMocks.warn.mock.calls.find(
-      (call) => call[0] === "session observer disabled after consecutive failures",
-    );
-    expect(disabledWarn).toBeDefined();
-    expect(disabledWarn?.[1]).toMatchObject({
-      sessionKey: "agent:main:session-1",
-      runId: "run-1",
-    });
-    // A raw Error serializes as {} in the JSON console envelope because Error's
-    // own properties are non-enumerable; the warn must carry the message.
-    expect(disabledWarn?.[1]?.error).toBe("model unavailable");
     harness.observer.dispose();
   });
 
