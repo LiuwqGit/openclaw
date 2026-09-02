@@ -36,6 +36,9 @@ const MEMORY_REINDEX_ENTRY_SUFFIXES = ["-wal", "-shm", "-journal", ""] as const;
 const MEMORY_REINDEX_UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const MEMORY_REINDEX_ORPHAN_MIN_AGE_MS = 24 * 60 * 60_000;
+// Pre-2026 reindexes named shadow files "<db>.tmp-<uuid>"; upgrades can leave
+// those orphans behind, so cleanup must match the legacy prefix too.
+const MEMORY_REINDEX_SHADOW_PREFIX_SUFFIXES = [".memory-reindex-", ".tmp-"];
 
 function resolveMemoryReindexBaseName(
   databaseBaseName: string,
@@ -46,12 +49,14 @@ function resolveMemoryReindexBaseName(
       continue;
     }
     const baseName = entryName.slice(0, entryName.length - suffix.length);
-    const prefix = `${databaseBaseName}.memory-reindex-`;
-    if (
-      baseName.startsWith(prefix) &&
-      MEMORY_REINDEX_UUID_PATTERN.test(baseName.slice(prefix.length))
-    ) {
-      return baseName;
+    for (const prefixSuffix of MEMORY_REINDEX_SHADOW_PREFIX_SUFFIXES) {
+      const prefix = `${databaseBaseName}${prefixSuffix}`;
+      if (
+        baseName.startsWith(prefix) &&
+        MEMORY_REINDEX_UUID_PATTERN.test(baseName.slice(prefix.length))
+      ) {
+        return baseName;
+      }
     }
   }
   return undefined;
