@@ -18,14 +18,17 @@ type MemorySearchMaintenanceManager = {
  * manager, and the next search would otherwise immediately launch another
  * detached full rebuild that loses the same race under sustained concurrent
  * writes. The gate coalesces concurrent triggers into the in-flight attempt
- * and defers retries behind an escalating cooldown, reset after a success.
+ * and defers retries behind an escalating cooldown, reset only after an
+ * attempt fully clears the handed-off generation. An attempt that resolves
+ * but returns an incomplete reason (its manager stayed dirty and the
+ * generation was restored) counts as a failure just like a thrown error.
  */
 export class MemorySearchMaintenanceRetryGate {
   private inFlight: Promise<void> | null = null;
   private retryAfterMs = 0;
   private consecutiveFailures = 0;
 
-  async run(operation: () => Promise<void>): Promise<void> {
+  async run(operation: () => Promise<string | undefined>): Promise<void> {
     if (this.inFlight !== null || Date.now() < this.retryAfterMs) {
       // The in-flight attempt owns the dirty generation it took over, and a
       // recently failed attempt is cooling down. Either way the dirty state
@@ -34,16 +37,14 @@ export class MemorySearchMaintenanceRetryGate {
     }
     const tracked = (async () => {
       try {
-        await operation();
-        this.consecutiveFailures = 0;
+        const incompleteReason = await operation();
+        if (incompleteReason) {
+          this.recordFailure();
+        } else {
+          this.consecutiveFailures = 0;
+        }
       } catch (err) {
-        this.consecutiveFailures += 1;
-        this.retryAfterMs =
-          Date.now() +
-          Math.min(
-            RETRY_COOLDOWN_BASE_MS * 2 ** (this.consecutiveFailures - 1),
-            RETRY_COOLDOWN_MAX_MS,
-          );
+        this.recordFailure();
         throw err;
       } finally {
         this.inFlight = null;
@@ -51,6 +52,13 @@ export class MemorySearchMaintenanceRetryGate {
     })();
     this.inFlight = tracked;
     await tracked;
+  }
+
+  private recordFailure(): void {
+    this.consecutiveFailures += 1;
+    this.retryAfterMs =
+      Date.now() +
+      Math.min(RETRY_COOLDOWN_BASE_MS * 2 ** (this.consecutiveFailures - 1), RETRY_COOLDOWN_MAX_MS);
   }
 }
 
@@ -84,7 +92,7 @@ export async function runMemorySearchMaintenance<DirtyGeneration>(params: {
       // A provider fallback may deliberately resolve in keyword-only mode while
       // retaining retry state. Return that incomplete generation to its serving owner.
       params.restoreDirtyGeneration(dirtyGeneration);
-      incompleteReason = status.lastSyncError;
+      incompleteReason = status.lastSyncError ?? "memory search maintenance remained dirty";
     }
   } catch (err) {
     params.restoreDirtyGeneration(dirtyGeneration);

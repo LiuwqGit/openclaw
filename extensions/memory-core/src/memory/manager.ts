@@ -302,28 +302,29 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
   }
 
   protected async syncPublishedIndexInBackground(params: { reason: string }): Promise<void> {
-    // The gate single-flights concurrent search-triggered attempts and applies
-    // an escalating cooldown after a failure, so a publish-revision conflict
-    // under sustained concurrent writes cannot relaunch a full shadow-index
-    // rebuild on every subsequent search.
-    await this.searchMaintenanceRetryGate.run(
-      async () =>
-        await this.syncOutcomes.track(
-          async () =>
-            await runMemorySearchMaintenance({
-              reason: params.reason,
-              takeDirtyGeneration: () => this.takeReindexRetryStateForMaintenance(),
-              restoreDirtyGeneration: (generation) => this.restoreReindexRetryState(generation),
-              acquireManager: async () =>
-                await MemoryIndexManager.get({
-                  cfg: this.cfg,
-                  agentId: this.agentId,
-                  purpose: "maintenance",
-                  acquireLocalService: this.acquireLocalService,
-                }),
+    // The gate single-flights concurrent search-triggered attempts and defers
+    // retries after a failure or an incomplete (still-dirty) outcome, so a
+    // publish-revision conflict under sustained concurrent writes cannot
+    // relaunch a full shadow-index rebuild on every subsequent search.
+    let incompleteReason: string | undefined;
+    await this.searchMaintenanceRetryGate.run(async () => {
+      await this.syncOutcomes.track(async () => {
+        incompleteReason = await runMemorySearchMaintenance({
+          reason: params.reason,
+          takeDirtyGeneration: () => this.takeReindexRetryStateForMaintenance(),
+          restoreDirtyGeneration: (generation) => this.restoreReindexRetryState(generation),
+          acquireManager: async () =>
+            await MemoryIndexManager.get({
+              cfg: this.cfg,
+              agentId: this.agentId,
+              purpose: "maintenance",
+              acquireLocalService: this.acquireLocalService,
             }),
-        ),
-    );
+        });
+        return incompleteReason;
+      });
+      return incompleteReason;
+    });
   }
 
   protected async syncAdmitted(
