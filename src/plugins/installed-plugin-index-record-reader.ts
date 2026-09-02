@@ -433,7 +433,7 @@ function mergeRecoveredManagedNpmRecord(params: {
 }
 
 /** Merges persisted records with managed npm installs recovered from the current root. */
-export function mergeRecoveredManagedNpmInstallRecords(
+function mergeRecoveredManagedNpmInstallRecords(
   persisted: Record<string, PluginInstallRecord> | null,
   options: InstalledPluginIndexStoreOptions,
 ): Record<string, PluginInstallRecord> {
