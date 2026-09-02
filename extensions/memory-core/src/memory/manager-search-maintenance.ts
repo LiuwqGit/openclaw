@@ -1,11 +1,58 @@
 // Memory Core owns detached search-time index maintenance lifecycle.
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 
+const RETRY_COOLDOWN_BASE_MS = 30_000;
+const RETRY_COOLDOWN_MAX_MS = 15 * 60_000;
+
 type MemorySearchMaintenanceManager = {
   sync(params: { reason: string; force: true }): Promise<void>;
   status(): { dirty?: boolean; lastSyncError?: string };
   close(): Promise<void>;
 };
+
+/**
+ * Single-flight gate for detached search-triggered maintenance.
+ *
+ * A failed maintenance run (for example a publish revision conflict while a
+ * full reindex was building) restores the dirty generation on the serving
+ * manager, and the next search would otherwise immediately launch another
+ * detached full rebuild that loses the same race under sustained concurrent
+ * writes. The gate coalesces concurrent triggers into the in-flight attempt
+ * and defers retries behind an escalating cooldown, reset after a success.
+ */
+export class MemorySearchMaintenanceRetryGate {
+  private inFlight: Promise<void> | null = null;
+  private retryAfterMs = 0;
+  private consecutiveFailures = 0;
+
+  async run(operation: () => Promise<void>): Promise<void> {
+    if (this.inFlight !== null || Date.now() < this.retryAfterMs) {
+      // The in-flight attempt owns the dirty generation it took over, and a
+      // recently failed attempt is cooling down. Either way the dirty state
+      // stays owned by the serving manager until a later trigger retries.
+      return;
+    }
+    const tracked = (async () => {
+      try {
+        await operation();
+        this.consecutiveFailures = 0;
+      } catch (err) {
+        this.consecutiveFailures += 1;
+        this.retryAfterMs =
+          Date.now() +
+          Math.min(
+            RETRY_COOLDOWN_BASE_MS * 2 ** (this.consecutiveFailures - 1),
+            RETRY_COOLDOWN_MAX_MS,
+          );
+        throw err;
+      } finally {
+        this.inFlight = null;
+      }
+    })();
+    this.inFlight = tracked;
+    await tracked;
+  }
+}
 
 export async function runMemorySearchMaintenance<DirtyGeneration>(params: {
   reason: string;

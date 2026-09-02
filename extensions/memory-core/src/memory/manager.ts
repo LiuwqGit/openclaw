@@ -46,7 +46,10 @@ import {
 } from "./manager-registry.js";
 import { waitForMemoryReindexLock } from "./manager-reindex-lock.js";
 import type { MemoryIndexIdentityState } from "./manager-reindex-state.js";
-import { runMemorySearchMaintenance } from "./manager-search-maintenance.js";
+import {
+  runMemorySearchMaintenance,
+  MemorySearchMaintenanceRetryGate,
+} from "./manager-search-maintenance.js";
 import { MemorySearchOrchestration } from "./manager-search-orchestration.js";
 import {
   collectMemoryStatusAggregate,
@@ -101,6 +104,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
   protected activeManagerOperations = 0;
   protected managerIdleWaiters = new Set<() => void>();
   protected activeBackgroundSearchSyncs = new Set<Promise<void>>();
+  protected readonly searchMaintenanceRetryGate = new MemorySearchMaintenanceRetryGate();
   protected providerUnavailableReason?: string;
   protected override providerLifecycle: MemoryProviderLifecycleState;
   protected batch: {
@@ -298,20 +302,27 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
   }
 
   protected async syncPublishedIndexInBackground(params: { reason: string }): Promise<void> {
-    await this.syncOutcomes.track(
+    // The gate single-flights concurrent search-triggered attempts and applies
+    // an escalating cooldown after a failure, so a publish-revision conflict
+    // under sustained concurrent writes cannot relaunch a full shadow-index
+    // rebuild on every subsequent search.
+    await this.searchMaintenanceRetryGate.run(
       async () =>
-        await runMemorySearchMaintenance({
-          reason: params.reason,
-          takeDirtyGeneration: () => this.takeReindexRetryStateForMaintenance(),
-          restoreDirtyGeneration: (generation) => this.restoreReindexRetryState(generation),
-          acquireManager: async () =>
-            await MemoryIndexManager.get({
-              cfg: this.cfg,
-              agentId: this.agentId,
-              purpose: "maintenance",
-              acquireLocalService: this.acquireLocalService,
+        await this.syncOutcomes.track(
+          async () =>
+            await runMemorySearchMaintenance({
+              reason: params.reason,
+              takeDirtyGeneration: () => this.takeReindexRetryStateForMaintenance(),
+              restoreDirtyGeneration: (generation) => this.restoreReindexRetryState(generation),
+              acquireManager: async () =>
+                await MemoryIndexManager.get({
+                  cfg: this.cfg,
+                  agentId: this.agentId,
+                  purpose: "maintenance",
+                  acquireLocalService: this.acquireLocalService,
+                }),
             }),
-        }),
+        ),
     );
   }
 
