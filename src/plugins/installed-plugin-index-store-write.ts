@@ -24,6 +24,7 @@ import {
 } from "./installed-plugin-index-install-owner.js";
 import { resolveCompatRegistryVersion } from "./installed-plugin-index-policy.js";
 import { clearLoadInstalledPluginIndexInstallRecordsCache } from "./installed-plugin-index-record-cache.js";
+import { mergeRecoveredManagedNpmInstallRecords } from "./installed-plugin-index-record-reader.js";
 import { resolveInstalledPluginIndexStateDatabaseOptions } from "./installed-plugin-index-store-path.js";
 import {
   INSTALLED_PLUGIN_INDEX_STATE_KEY,
@@ -357,8 +358,14 @@ function resolveRefreshedPersistedInstalledPluginIndex(
   }
   return refreshInstalledPluginIndex({
     ...params,
+    // Copied state can persist managed install records rooted at another state
+    // directory; recovery rebases or retires them before the refresh rebuilds.
     installRecords:
-      params.installRecords ?? extractPluginInstallRecordsFromInstalledPluginIndex(persisted),
+      params.installRecords ??
+      mergeRecoveredManagedNpmInstallRecords(
+        extractPluginInstallRecordsFromInstalledPluginIndex(persisted),
+        params,
+      ),
   });
 }
 

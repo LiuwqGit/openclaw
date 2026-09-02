@@ -360,12 +360,56 @@ function mergeRecoveredManagedNpmMetadata(
   return next;
 }
 
+function hasManagedNpmProjectLayout(projectRoot: string): boolean {
+  // Only rebase paths that carry OpenClaw's managed shape. Custom install
+  // locations are user-managed and must survive relocation untouched.
+  if (path.basename(projectRoot) === "npm") {
+    return true;
+  }
+  const projectsDir = path.dirname(projectRoot);
+  return (
+    path.basename(projectsDir) === "projects" && path.basename(path.dirname(projectsDir)) === "npm"
+  );
+}
+
+/** True when a persisted npm record points at the managed tree of another state root. */
+function isForeignManagedNpmInstallRecord(params: {
+  npmRoot: string;
+  record: PluginInstallRecord | undefined;
+}): boolean {
+  if (params.record?.source !== "npm") {
+    return false;
+  }
+  const installPath = params.record.installPath;
+  if (!installPath) {
+    return false;
+  }
+  const packageInfo = resolveRetainedManagedNpmInstallPackageInfo(installPath);
+  if (!packageInfo) {
+    return false;
+  }
+  const npmRoot = normalizeInstallPathForComparison(params.npmRoot);
+  const projectRoot = normalizeInstallPathForComparison(packageInfo.projectRoot);
+  const insideCurrentRoot =
+    projectRoot === npmRoot ||
+    normalizeInstallPathForComparison(path.dirname(packageInfo.projectRoot)) ===
+      normalizeInstallPathForComparison(resolvePluginNpmProjectsDir(params.npmRoot));
+  if (insideCurrentRoot) {
+    return false;
+  }
+  return hasManagedNpmProjectLayout(packageInfo.projectRoot);
+}
+
 function mergeRecoveredManagedNpmRecord(params: {
   npmRoot: string;
   persisted: PluginInstallRecord | undefined;
   recovered: PluginInstallRecord;
 }): PluginInstallRecord {
-  if (params.persisted && isUnavailableManagedNpmInstallRecord(params)) {
+  if (
+    params.persisted &&
+    (isUnavailableManagedNpmInstallRecord(params) ||
+      isForeignManagedNpmInstallRecord({ npmRoot: params.npmRoot, record: params.persisted }))
+  ) {
     return mergeRecoveredManagedNpmMetadata(params.persisted, params.recovered, {
       preservePersistedSpec: true,
     });
@@ -385,7 +429,8 @@ function mergeRecoveredManagedNpmRecord(params: {
   return params.persisted ?? params.recovered;
 }
 
-function mergeRecoveredManagedNpmInstallRecords(
+/** Merges persisted install records with managed npm installs recovered from the current root. */
+export function mergeRecoveredManagedNpmInstallRecords(
   persisted: Record<string, PluginInstallRecord> | null,
   options: InstalledPluginIndexStoreOptions,
 ): Record<string, PluginInstallRecord> {
@@ -402,6 +447,16 @@ function mergeRecoveredManagedNpmInstallRecords(
         recovered: record,
       }),
     );
+  }
+  // Copied state can carry managed records rooted at another state directory.
+  // Without a local install they are stale copies, not loadable plugins.
+  for (const [pluginId, record] of Object.entries(merged)) {
+    if (
+      !Object.hasOwn(recovered, pluginId) &&
+      isForeignManagedNpmInstallRecord({ npmRoot, record })
+    ) {
+      delete merged[pluginId];
+    }
   }
   return merged;
 }
