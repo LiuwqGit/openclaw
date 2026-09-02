@@ -58,28 +58,17 @@ describe("acpx package manifest", () => {
   });
 
   it("declares ACPX-written codex-home scratch state as regenerable backup resources", () => {
-    expect(pluginJson.backupResources).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          disposition: "regenerable",
-          scope: "state",
-          relativePath: "acpx/codex-home/tmp/arg0",
-        }),
-        expect.objectContaining({
-          disposition: "regenerable",
-          scope: "state",
-          relativePath: "acpx/codex-home/.tmp/plugins",
-        }),
-        expect.objectContaining({
-          disposition: "regenerable",
-          scope: "state",
-          relativePath: "acpx/codex-home/.tmp/bundled-marketplaces",
-        }),
-      ]),
-    );
-    for (const resource of pluginJson.backupResources ?? []) {
-      expect(resource.scope).toBe("state");
-      expect(resource.relativePath.startsWith("acpx/")).toBe(true);
-    }
+    expect(pluginJson.backupResources).toStrictEqual([
+      {
+        disposition: "regenerable",
+        scope: "state",
+        relativePath: "acpx/codex-home/tmp/arg0",
+      },
+      {
+        disposition: "regenerable",
+        scope: "state",
+        relativePath: "acpx/codex-home/.tmp/plugins",
+      },
+    ]);
   });
 });

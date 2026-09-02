@@ -10,11 +10,6 @@
       "disposition": "regenerable",
       "scope": "state",
       "relativePath": "acpx/codex-home/.tmp/plugins"
-    },
-    {
-      "disposition": "regenerable",
-      "scope": "state",
-      "relativePath": "acpx/codex-home/.tmp/bundled-marketplaces"
     }
   ],
   "doctorContract": {

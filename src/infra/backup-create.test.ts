@@ -1270,17 +1270,19 @@ describe("createBackupArchive", () => {
         const acpxRoot = state.statePath("acpx");
         const codexHome = path.join(acpxRoot, "codex-home");
         const arg0Root = path.join(codexHome, "tmp", "arg0");
-        const arg0Session = path.join(arg0Root, "codex-arg0gJpCMD");
+        const arg0Session = path.join(arg0Root, "codex-arg0-session");
         await fs.mkdir(arg0Session, { recursive: true });
         await fs.mkdir(path.join(codexHome, ".tmp", "plugins"), { recursive: true });
+        await fs.writeFile(path.join(codexHome, ".tmp", "plugins", "README.md"), "cache\n");
         await fs.writeFile(
           path.join(codexHome, "config.toml"),
-          "# regenerated isolated codex home config\n",
+          "# isolated codex home config\n",
           "utf8",
         );
+        await fs.writeFile(path.join(codexHome, "user-state.txt"), "keep\n", "utf8");
         await fs.writeFile(
           path.join(acpxRoot, "codex-acp-wrapper.mjs"),
-          "// regenerated wrapper script\n",
+          "// wrapper script\n",
           "utf8",
         );
         await fs.writeFile(
@@ -1289,13 +1291,9 @@ describe("createBackupArchive", () => {
           "utf8",
         );
         if (process.platform !== "win32") {
-          // The codex-acp adapter recreates these argv0 symlinks pointing at
-          // the absolute installed binary path on every launch.
+          // Codex creates argv0 aliases as absolute links to its installed binary.
           await fs.rm(path.join(arg0Session, "apply_patch"));
-          await fs.symlink(
-            "/opt/homebrew/lib/node_modules/@openclaw/acpx/node_modules/@zed-industries/codex-acp-linux-x64/bin/codex-acp",
-            path.join(arg0Session, "apply_patch"),
-          );
+          await fs.symlink("/opt/codex/bin/codex", path.join(arg0Session, "apply_patch"));
         }
         await state.writeConfig({
           plugins: {
@@ -1310,10 +1308,13 @@ describe("createBackupArchive", () => {
         });
         const entries = await listArchiveEntries(result.archivePath);
 
-        // Durable ACPX state stays in the archive.
+        // Adjacent ACPX state stays in the archive.
         expect(entries.some((entry) => entry.endsWith("/state/acpx/codex-home/config.toml"))).toBe(
           true,
         );
+        expect(
+          entries.some((entry) => entry.endsWith("/state/acpx/codex-home/user-state.txt")),
+        ).toBe(true);
         expect(entries.some((entry) => entry.endsWith("/state/acpx/codex-acp-wrapper.mjs"))).toBe(
           true,
         );
@@ -1331,6 +1332,7 @@ describe("createBackupArchive", () => {
             reason: "regenerable",
           }),
         );
+        await expect(verifyBackupArchive(result.archivePath)).resolves.toMatchObject({ ok: true });
       },
     );
   });
