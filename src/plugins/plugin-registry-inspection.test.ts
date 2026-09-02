@@ -17,6 +17,7 @@ import {
   loadPluginRegistrySnapshotWithMetadata,
 } from "./plugin-registry.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
+import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
 
 const tempDirs: string[] = [];
 
@@ -333,6 +334,71 @@ describe("plugin registry inspection", () => {
     const repaired = await inspectPluginRegistry({ stateDir, config, env });
     expect(repaired.state).toBe("fresh");
     expect(repaired.refreshReasons).toEqual([]);
+  });
+
+  it("rebases managed records when refreshing a copied state root", async () => {
+    const sourceStateDir = makeTempDir();
+    const copiedStateDir = path.join(makeTempDir(), "copied-state");
+    const externalDir = makeTempDir();
+    createPackagedCandidate(externalDir);
+    const packageName = "openclaw-copied-managed";
+    const sourceManagedPath = writeManagedNpmPlugin({
+      stateDir: sourceStateDir,
+      packageName,
+      pluginId: "copied-managed",
+      version: "1.0.0",
+    });
+    const config = { plugins: { load: { paths: [externalDir] } } };
+
+    await refreshPluginRegistry({
+      reason: "manual",
+      stateDir: sourceStateDir,
+      config,
+      env: { ...hermeticEnv(), OPENCLAW_STATE_DIR: sourceStateDir },
+      installRecords: {
+        "copied-managed": {
+          source: "npm",
+          spec: `${packageName}@1.0.0`,
+          installPath: sourceManagedPath,
+          resolvedName: packageName,
+          resolvedVersion: "1.0.0",
+        },
+        demo: {
+          source: "path",
+          sourcePath: externalDir,
+          installPath: externalDir,
+          version: "1.0.0",
+        },
+      },
+    });
+    closeOpenClawStateDatabaseForTest();
+    clearPluginMetadataLifecycleCaches();
+    fs.cpSync(sourceStateDir, copiedStateDir, { recursive: true });
+
+    const refreshed = await refreshPluginRegistry({
+      reason: "manual",
+      stateDir: copiedStateDir,
+      config,
+      env: { ...hermeticEnv(), OPENCLAW_STATE_DIR: copiedStateDir },
+    });
+    const copiedManagedPath = path.join(
+      copiedStateDir,
+      path.relative(sourceStateDir, sourceManagedPath),
+    );
+
+    expect(fs.existsSync(sourceManagedPath)).toBe(true);
+    expect(refreshed.installRecords["copied-managed"]?.installPath).toBe(copiedManagedPath);
+    expect(refreshed.plugins.find((plugin) => plugin.pluginId === "copied-managed")?.rootDir).toBe(
+      copiedManagedPath,
+    );
+    expect(refreshed.installRecords.demo).toMatchObject({
+      source: "path",
+      sourcePath: externalDir,
+      installPath: externalDir,
+    });
+    expect(refreshed.plugins.find((plugin) => plugin.pluginId === "demo")?.rootDir).toBe(
+      externalDir,
+    );
   });
 
   it("preserves install records when refreshing the persisted registry", async () => {

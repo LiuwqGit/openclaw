@@ -14,6 +14,7 @@ import { isPrereleaseResolutionAllowed, parseRegistryNpmSpec } from "../infra/np
 import { isNotFoundPathError, normalizeWindowsPathForComparison } from "../infra/path-guards.js";
 import { compareValidSemver } from "../infra/semver.js";
 import {
+  isPluginNpmProjectDir,
   resolveDefaultPluginNpmDir,
   resolvePluginNpmProjectsDir,
   validatePluginId,
@@ -360,19 +361,6 @@ function mergeRecoveredManagedNpmMetadata(
   return next;
 }
 
-function hasManagedNpmProjectLayout(projectRoot: string): boolean {
-  // Only rebase paths that carry OpenClaw's managed shape. Custom install
-  // locations are user-managed and must survive relocation untouched.
-  if (path.basename(projectRoot) === "npm") {
-    return true;
-  }
-  const projectsDir = path.dirname(projectRoot);
-  return (
-    path.basename(projectsDir) === "projects" && path.basename(path.dirname(projectsDir)) === "npm"
-  );
-}
-
-/** True when a persisted npm record points at the managed tree of another state root. */
 function isForeignManagedNpmInstallRecord(params: {
   npmRoot: string;
   record: PluginInstallRecord | undefined;
@@ -388,16 +376,24 @@ function isForeignManagedNpmInstallRecord(params: {
   if (!packageInfo) {
     return false;
   }
-  const npmRoot = normalizeInstallPathForComparison(params.npmRoot);
-  const projectRoot = normalizeInstallPathForComparison(packageInfo.projectRoot);
-  const insideCurrentRoot =
-    projectRoot === npmRoot ||
-    normalizeInstallPathForComparison(path.dirname(packageInfo.projectRoot)) ===
-      normalizeInstallPathForComparison(resolvePluginNpmProjectsDir(params.npmRoot));
-  if (insideCurrentRoot) {
+  const projectsDir = path.dirname(packageInfo.projectRoot);
+  if (path.basename(projectsDir) !== "projects") {
     return false;
   }
-  return hasManagedNpmProjectLayout(packageInfo.projectRoot);
+  const previousNpmRoot = path.dirname(projectsDir);
+  if (
+    normalizeInstallPathForComparison(previousNpmRoot) ===
+    normalizeInstallPathForComparison(params.npmRoot)
+  ) {
+    return false;
+  }
+  // Exact package-specific project shape proves ownership. A directory named
+  // npm or an arbitrary node_modules tree remains operator-owned.
+  return isPluginNpmProjectDir({
+    packageName: packageInfo.packageName,
+    projectDir: packageInfo.projectRoot,
+    npmDir: previousNpmRoot,
+  });
 }
 
 function mergeRecoveredManagedNpmRecord(params: {
@@ -429,7 +425,7 @@ function mergeRecoveredManagedNpmRecord(params: {
   return params.persisted ?? params.recovered;
 }
 
-/** Merges persisted install records with managed npm installs recovered from the current root. */
+/** Reconciles persisted records with managed npm installs in the selected state root. */
 export function mergeRecoveredManagedNpmInstallRecords(
   persisted: Record<string, PluginInstallRecord> | null,
   options: InstalledPluginIndexStoreOptions,

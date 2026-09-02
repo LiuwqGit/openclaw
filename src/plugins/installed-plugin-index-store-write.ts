@@ -358,8 +358,8 @@ function resolveRefreshedPersistedInstalledPluginIndex(
   }
   return refreshInstalledPluginIndex({
     ...params,
-    // Copied state can persist managed install records rooted at another state
-    // directory; recovery rebases or retires them before the refresh rebuilds.
+    // Manual refresh must reconcile copied machine state before discovery can
+    // select executable plugin bytes from the prior state root.
     installRecords:
       params.installRecords ??
       mergeRecoveredManagedNpmInstallRecords(
