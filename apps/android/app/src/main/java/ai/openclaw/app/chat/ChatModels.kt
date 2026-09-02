@@ -29,10 +29,40 @@ data class ChatMessage(
   val idempotencyKey: String? = null,
   /** Canonical transcript-tree identity supplied by chat.history. */
   val entryId: String? = null,
+  val truncated: Boolean = false,
+  val isSyntheticDisplay: Boolean = false,
   val provenance: ChatMessageProvenance? = null,
   val transcriptMarker: ChatTranscriptMarker? = null,
   val senderLabel: String? = null,
-)
+) {
+  // Synthetic mirrors and commentary borrow a transcript ID, not its canonical text.
+  // Keep the ID for timeline actions, but never use it to recover or retain full text.
+  internal val canReadFullMessage: Boolean
+    get() = role == "assistant" && truncated && !isSyntheticDisplay && !entryId.isNullOrBlank()
+
+  internal fun matchesFullRead(other: ChatMessage): Boolean = canReadFullMessage && other.canReadFullMessage && entryId == other.entryId && content == other.content
+}
+
+internal sealed interface ChatFullMessageState {
+  data object Loading : ChatFullMessageState
+
+  data class Loaded(
+    val content: List<ChatMessageContent>,
+  ) : ChatFullMessageState
+
+  data class Unavailable(
+    val reason: ChatFullMessageUnavailable,
+  ) : ChatFullMessageState
+
+  data object Failed : ChatFullMessageState
+}
+
+internal enum class ChatFullMessageUnavailable {
+  GatewayUpdate,
+  Disconnected,
+  NotFound,
+  TooLarge,
+}
 
 data class ChatMessageProvenance(
   val kind: String,
@@ -189,6 +219,7 @@ internal fun parseChatPlanSteps(element: JsonElement?): List<ChatPlanStep> {
             }
           ChatPlanStep(step = step, status = status)
         }
+
         is JsonPrimitive -> {
           val step =
             entry
@@ -199,7 +230,10 @@ internal fun parseChatPlanSteps(element: JsonElement?): List<ChatPlanStep> {
               ?: return@mapNotNull null
           ChatPlanStep(step = step, status = ChatPlanStepStatus.Pending)
         }
-        else -> return@mapNotNull null
+
+        else -> {
+          return@mapNotNull null
+        }
       }
     if (parsed.status == ChatPlanStepStatus.InProgress) {
       if (hasInProgressStep) return@mapNotNull null
@@ -274,6 +308,52 @@ data class ChatThinkingLevelSelection(
   val isGatewayProvided: Boolean,
 )
 
+/** Gateway wire values accepted by sessions.patch and returned as effectiveFastMode. */
+enum class ChatFastMode {
+  Off,
+  On,
+  Automatic,
+  ;
+
+  val isEnabled: Boolean
+    get() = this != Off
+
+  companion object {
+    internal fun fromWireValue(value: String?): ChatFastMode? =
+      when (value?.trim()?.lowercase(Locale.US)) {
+        "false", "off" -> Off
+        "true", "on" -> On
+        "auto", "automatic" -> Automatic
+        else -> null
+      }
+  }
+}
+
+internal fun ChatFastMode.toWireJson(): JsonPrimitive =
+  when (this) {
+    ChatFastMode.Off -> JsonPrimitive(false)
+    ChatFastMode.On -> JsonPrimitive(true)
+    ChatFastMode.Automatic -> JsonPrimitive("auto")
+  }
+
+/** Gateway wire values for the permissions applied to new runs in a session. */
+enum class ChatPermissionMode(
+  val wireValue: String,
+) {
+  ReadOnly("read-only"),
+  Guarded("guarded"),
+  Workspace("workspace"),
+  Full("full"),
+  ;
+
+  companion object {
+    internal fun fromWireValue(value: String?): ChatPermissionMode? =
+      entries.firstOrNull { mode ->
+        mode.wireValue == value?.trim()?.lowercase(Locale.US)
+      }
+  }
+}
+
 internal val defaultChatThinkingLevelSelection =
   ChatThinkingLevelSelection(
     options =
@@ -312,6 +392,8 @@ data class ChatSessionEntry(
   val derivedTitle: String? = null,
   val label: String? = null,
   val category: String? = null,
+  val color: String? = null,
+  val hasColorMetadata: Boolean = color != null,
   val pinned: Boolean? = null,
   val archived: Boolean? = null,
   val unread: Boolean? = null,
@@ -323,14 +405,26 @@ data class ChatSessionEntry(
   val observerDigest: SessionObserverDigest? = null,
   val hasObserverDigestMetadata: Boolean = observerDigest != null,
   val lastActivityAt: Long? = null,
+  val inputTokens: Long? = null,
   val totalTokens: Long? = null,
+  val hasTotalTokensMetadata: Boolean = totalTokens != null,
   val totalTokensFresh: Boolean? = null,
   val modelProvider: String? = null,
   val model: String? = null,
+  val modelSelectionLocked: Boolean? = null,
+  val agentRuntimeId: String? = null,
   val thinkingLevel: String? = null,
   val thinkingLevels: List<ChatThinkingLevelOption>? = null,
   val thinkingDefault: String? = null,
+  val permissionMode: ChatPermissionMode? = null,
+  val hasPermissionModeMetadata: Boolean = permissionMode != null,
+  val permissionModePending: Boolean? = null,
+  val fastMode: ChatFastMode? = null,
+  val effectiveFastMode: ChatFastMode? = null,
+  val hasFastModeMetadata: Boolean = fastMode != null,
+  val hasEffectiveFastModeMetadata: Boolean = effectiveFastMode != null,
   val contextTokens: Long? = null,
+  val estimatedCostUsd: Double? = null,
   val hasContextUsageMetadata: Boolean = totalTokens != null || totalTokensFresh != null || contextTokens != null,
   val hasActiveRun: Boolean? = null,
   val activeRunIds: List<String>? = null,
@@ -350,6 +444,8 @@ data class ChatSessionEntry(
   val endedAt: Long? = null,
   val runtimeMs: Long? = null,
   val outputTokens: Long? = null,
+  val hasSessionUsageMetadata: Boolean =
+    inputTokens != null || outputTokens != null || estimatedCostUsd != null,
   val hasRunMetadata: Boolean =
     status != null || startedAt != null || endedAt != null || runtimeMs != null || outputTokens != null,
 )

@@ -5,14 +5,10 @@ import fs from "node:fs/promises";
 import type { Command } from "commander";
 import { FsSafeError, readRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import { resolveBrowserActRequestTimeoutMs } from "../../browser/act-policy.js";
-import type { BrowserActRequest } from "../../browser/client-actions.types.js";
+import type { BrowserActRequest, BrowserFormField } from "../../browser/client-actions.types.js";
+import { normalizeBrowserFormFields } from "../../browser/form-fields.js";
 import { callBrowserRequest, type BrowserParentOpts } from "../browser-cli-shared.js";
-import {
-  danger,
-  defaultRuntime,
-  normalizeBrowserFormFields,
-  type BrowserFormField,
-} from "../core-api.js";
+import { danger, defaultRuntime } from "../core-api.js";
 
 type BrowserActionContext = {
   parent: BrowserParentOpts;

@@ -25,13 +25,13 @@ function normalizeBrowserFormFieldType(value: unknown): string {
 }
 
 /** Normalize a form field value to the types accepted by fill actions. */
-function normalizeBrowserFormFieldValue(value: unknown): BrowserFormFieldValue | undefined {
+export function normalizeBrowserFormFieldValue(value: unknown): BrowserFormFieldValue | undefined {
   return typeof value === "string" || typeof value === "number" || typeof value === "boolean"
     ? value
     : undefined;
 }
 
-function normalizeBrowserFormField(
+export function normalizeBrowserFormField(
   record: Record<string, unknown>,
   index: number,
 ): BrowserFormField {
@@ -47,14 +47,14 @@ function normalizeBrowserFormField(
       );
     }
   }
-  if (record.value === undefined) {
-    throw new Error(`${prefix} must include value; use value: "" to clear a field`);
+  const type = normalizeBrowserFormFieldType(record.type);
+  if (record.value === undefined || record.value === null) {
+    return { ref, type };
   }
   const value = normalizeBrowserFormFieldValue(record.value);
   if (value === undefined) {
-    throw new Error(`${prefix} value must be a string, number, or boolean`);
+    throw new Error(`${prefix} value must be a string, number, boolean, or null`);
   }
-  const type = normalizeBrowserFormFieldType(record.type);
   return { ref, type, value };
 }
 

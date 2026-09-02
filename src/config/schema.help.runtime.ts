@@ -61,6 +61,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Allows access to private-network address ranges from browser tooling. Default is disabled when unset; enable only for explicitly trusted private-network destinations.",
   "browser.ssrfPolicy.allowedHostnames":
     "Exact hostnames or IP literals allowed by browser SSRF policy checks. Keep the list minimal.",
+  "browser.ssrfPolicy.blockedHostnames":
+    'Hostname patterns denied before DNS and allow rules, even with private-network access enabled. Supports exact hosts and "*.example.com" for subdomains only; add "example.com" separately to block the apex. Empty or unset adds no denials.',
   "browser.ssrfPolicy.allowRfc2544BenchmarkRange":
     "Allow RFC 2544 benchmark-range IPs (198.18.0.0/15) for trusted fake-IP proxy environments.",
   "browser.ssrfPolicy.allowIpv6UniqueLocalRange":
@@ -130,7 +132,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.codeMode":
     "Generic OpenClaw code mode. When enabled, agent runs expose only `exec` and `wait` to the model and hide normal tools behind a QuickJS-WASI catalog bridge.",
   "tools.codeMode.enabled":
-    'Enables generic code mode. Default is off, including when an object configures other Code Mode options without `enabled`. `"auto"` engages only models whose catalog flags `compat.codeMode: "preferred"`. `true` engages every tool-capable run and fails closed if the runtime is unavailable instead of exposing the full tool list.',
+    'Global OpenClaw Code Mode default. Off when omitted, including objects without `enabled`. `"auto"` engages catalog-preferred models; `true` engages tool-capable runs. Agent and model activation overrides take precedence. An engaged run fails closed if the runtime is unavailable instead of exposing the full tool list.',
   "tools.codeMode.runtime": 'Guest JavaScript runtime. Only "quickjs-wasi" is supported.',
   "tools.codeMode.mode":
     'Model-facing surface. Only "only" is supported: expose code-mode `exec` and `wait` and hide normal tools.',
@@ -426,7 +428,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "agents.entries.*.tools.alsoAllow":
     "Per-agent additive allowlist for tools on top of global and profile policy. Keep narrow to avoid accidental privilege expansion on specialized agents.",
   "agents.entries.*.tools.codeMode":
-    "Per-agent code mode override. Use this to test or roll out exec/wait tool-surface mode for one agent without enabling it fleet-wide.",
+    "Per-agent Code Mode options. Explicit enabled overrides the shared model and global activation defaults; an agent-specific model codeMode override wins. Other options merge over tools.codeMode without changing activation.",
   "agents.entries.*.tools.swarm":
     "Per-agent swarm override. Values merge over the top-level tools.swarm configuration.",
   "agents.entries.*.tools.byProvider":
@@ -541,7 +543,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.fs.workspaceOnly":
     "Restrict filesystem tools (read/write/edit/apply_patch) to the workspace directory (default: false).",
   "tools.sessions.visibility":
-    'Controls which sessions can be targeted by sessions_list/sessions_history/sessions_search/sessions_send. ("tree" default = current session + spawned subagent sessions; "self" = only current; "agent" = any session in the current agent id; "all" = any session; cross-agent still requires tools.agentToAgent).',
+    'Controls which sessions can be targeted by sessions_list/sessions_history/sessions_search/sessions_send. ("agent" default = any session in the current agent id, including other users; "self" = only current; "tree" = current session + spawned subagent sessions; "all" = any session; cross-agent still requires tools.agentToAgent).',
   "tools.message.crossContext.allowWithinProvider":
     "Allow sends to other channels within the same provider (default: true).",
   "tools.message.crossContext.allowAcrossProviders":
@@ -600,6 +602,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Allows web_fetch access to private and internal network targets. Keep disabled unless model-selected URLs are trusted in this deployment.",
   "tools.web.fetch.ssrfPolicy.allowedHostnames":
     "Exact hostnames or IP literals allowed for web_fetch, including otherwise blocked targets. Keep the list minimal.",
+  "tools.web.fetch.ssrfPolicy.blockedHostnames":
+    'Hostname patterns denied before DNS and allow rules on every web_fetch redirect. Supports exact hosts and "*.example.com" for subdomains only; add "example.com" separately to block the apex. Empty or unset adds no denials.',
   "tools.web.fetch.ssrfPolicy.allowRfc2544BenchmarkRange":
     "Allow RFC 2544 benchmark-range IPs (198.18.0.0/15) for fake-IP proxy compatibility such as Clash or Surge.",
   "tools.web.fetch.ssrfPolicy.allowIpv6UniqueLocalRange":

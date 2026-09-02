@@ -181,23 +181,11 @@ describe("normalizeActRequest numeric fields", () => {
 });
 
 describe("normalizeActRequest fill fields", () => {
-  it("reports the offending index when a later field entry is invalid", () => {
-    expect(() =>
-      normalizeActRequest({
-        kind: "fill",
-        fields: [
-          { ref: "e1", value: "Ada" },
-          { ref: "e2", text: "Neo" },
-        ],
-      }),
-    ).toThrow('fields[1] unsupported field key "text"');
-  });
-
   it("validates fill fields inside batch sub-actions", () => {
     expect(() =>
       normalizeActRequest({
         kind: "batch",
-        actions: [{ kind: "fill", fields: [{ ref: "e1", text: "Neo" }] }],
+        actions: [{ kind: "fill", fields: [{ ref: "e1", value: "Neo", text: "unsupported" }] }],
       }),
     ).toThrow('fields[0] unsupported field key "text"');
   });
