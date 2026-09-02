@@ -21,6 +21,7 @@ import {
   markTerminalPollObserved,
   waitForExecScope,
 } from "./bash-process-registry.js";
+import { EXEC_NO_OUTPUT_PLACEHOLDER } from "./bash-tools.exec-output.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import {
   getGatewayToolCallerIdentity,
@@ -780,6 +781,31 @@ describe("runExecProcess exit outcomes", () => {
     }
     expect(outcome.exitCode).toBe(1);
     expect(outcome.aggregated).toBe("done\n\n(Command exited with code 1)");
+  });
+
+  it("inserts the no-output placeholder before the non-zero exit suffix for empty output", async () => {
+    const { outcome } = await runExecWithExit({
+      stdout: "",
+      exit: {
+        reason: "exit",
+        exitCode: 1,
+        exitSignal: null,
+        durationMs: 123,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      },
+      timeoutSec: 30,
+    });
+    expect(outcome.status).toBe("completed");
+    if (outcome.status !== "completed") {
+      throw new Error(`Expected completed outcome, got ${outcome.status}`);
+    }
+    expect(outcome.exitCode).toBe(1);
+    expect(outcome.aggregated).toBe(
+      `${EXEC_NO_OUTPUT_PLACEHOLDER}\n\n(Command exited with code 1)`,
+    );
   });
 
   it("classifies timed out exits with registered-background guidance", async () => {

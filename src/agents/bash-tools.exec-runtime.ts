@@ -48,6 +48,7 @@ import {
 } from "./bash-process-registry.js";
 import {
   appendExecTimeoutRetryGuidance,
+  EXEC_NO_OUTPUT_PLACEHOLDER,
   renderExecExitLabel,
   renderExecUpdateText,
 } from "./bash-tools.exec-output.js";
@@ -563,13 +564,16 @@ function buildExecExitOutcome(params: {
     isNormalExit && !isShellFailure ? "completed" : "failed";
   if (status === "completed") {
     const exitMsg = exitCode !== 0 ? `\n\n(Command exited with code ${exitCode})` : "";
+    // Apply the empty-output placeholder before appending the exit-code suffix so
+    // truly empty output is still marked once the suffix makes the value non-empty.
+    const baseOutput = params.aggregated || EXEC_NO_OUTPUT_PLACEHOLDER;
     return {
       status: "completed",
       exitCode,
       exitSignal: params.exit.exitSignal,
       exitReason: params.exit.reason,
       durationMs: params.durationMs,
-      aggregated: params.aggregated + exitMsg,
+      aggregated: baseOutput + exitMsg,
       timedOut: false,
       noOutputTimedOut: params.exit.noOutputTimedOut,
     };
