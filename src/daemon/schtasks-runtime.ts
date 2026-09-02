@@ -31,6 +31,11 @@ import {
   terminateGatewayProcessTree,
 } from "./schtasks-process.js";
 import {
+  isScheduledTaskDefinitelyNotRunning,
+  probeScheduledTaskExists,
+  probeScheduledTaskState,
+} from "./schtasks-task-state.js";
+import {
   createServiceRuntimeInspectionFailure,
   type GatewayServiceRuntime,
 } from "./service-runtime.js";
@@ -42,12 +47,13 @@ import type {
 } from "./service-types.js";
 import { WINDOWS_TASK_SUPERVISOR_FLAG } from "./windows-task-supervisor-contract.js";
 
+export { isScheduledTaskDefinitelyNotRunning, probeScheduledTaskExists };
+
 type ScheduledTaskInfo = {
   status?: string;
   lastRunTime?: string;
   lastRunResult?: string;
 };
-
 function parseSchtasksQuery(output: string): ScheduledTaskInfo {
   const entries = parseKeyValueOutput(output, ":");
   const info: ScheduledTaskInfo = {};
@@ -373,60 +379,6 @@ export async function resolveFallbackRuntime(
   };
 }
 
-type ScheduledTaskStateProbe =
-  | { status: "found"; state: number | null }
-  | { status: "missing" }
-  | { status: "unknown" };
-
-function probeScheduledTaskState(taskName: string): ScheduledTaskStateProbe {
-  const encodedTaskName = Buffer.from(taskName, "utf8").toString("base64");
-  const script = [
-    "$ErrorActionPreference='Stop'",
-    `$taskName=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encodedTaskName}'))`,
-    "try { $service=New-Object -ComObject 'Schedule.Service'; $service.Connect(); $task=$service.GetFolder('\\').GetTask($taskName); [Console]::Out.Write([int]$task.State); exit 0 } catch { $exception=$_.Exception; while($null -ne $exception.InnerException){$exception=$exception.InnerException}; [Console]::Out.Write($exception.HResult); exit 1 }",
-  ].join("; ");
-  const probe = spawnSync(
-    getWindowsPowerShellExePath(),
-    [
-      "-NoProfile",
-      "-NonInteractive",
-      "-EncodedCommand",
-      Buffer.from(script, "utf16le").toString("base64"),
-    ],
-    { encoding: "utf8", timeout: 5_000, windowsHide: true },
-  );
-  if (probe.error) {
-    return { status: "unknown" };
-  }
-  if (probe.status === 0) {
-    const rawState = probe.stdout.trim();
-    const state = /^\d+$/.test(rawState) ? Number.parseInt(rawState, 10) : null;
-    return {
-      status: "found",
-      state,
-    };
-  }
-  const hresult = Number.parseInt(probe.stdout.trim(), 10);
-  // Only the locale-independent missing task/folder HRESULT values prove absence.
-  return hresult === -2147024894 || hresult === -2147024893
-    ? { status: "missing" }
-    : { status: "unknown" };
-}
-
-export function probeScheduledTaskExists(taskName: string): boolean | null {
-  const probe = probeScheduledTaskState(taskName);
-  return probe.status === "found" ? true : probe.status === "missing" ? false : null;
-}
-
-export function isScheduledTaskDefinitelyNotRunning(taskName: string): boolean {
-  const probe = probeScheduledTaskState(taskName);
-  if (probe.status !== "found") {
-    return false;
-  }
-  // TASK_STATE_DISABLED and TASK_STATE_READY both prove no instance is queued or running.
-  return probe.state === 1 || probe.state === 3;
-}
-
 export async function readWindowsStartupFallbackRuntimeForUpdate(
   env: GatewayServiceEnv,
 ): Promise<GatewayServiceRuntime | null> {
@@ -574,6 +526,22 @@ export async function readScheduledTaskRuntime(
       };
     }
   }
+  // `schtasks /FO LIST` labels are localized and encoding-fragile under UAC
+  // elevation, so an unclassified runtime falls back to the Task Scheduler's
+  // numeric state, which is locale- and encoding-independent (#136123).
+  const numericDerived =
+    derived.status === "unknown"
+      ? deriveScheduledTaskRuntimeStatusFromNumericState(probeScheduledTaskState(taskName))
+      : null;
+  if (numericDerived) {
+    return {
+      status: numericDerived.status,
+      state: parsed.status,
+      lastRunTime: parsed.lastRunTime,
+      lastRunResult: parsed.lastRunResult,
+      ...(numericDerived.detail ? { detail: numericDerived.detail } : {}),
+    };
+  }
   return {
     status: derived.status,
     state: parsed.status,
@@ -581,4 +549,29 @@ export async function readScheduledTaskRuntime(
     lastRunResult: parsed.lastRunResult,
     ...(derived.detail ? { detail: derived.detail } : {}),
   };
+}
+
+function deriveScheduledTaskRuntimeStatusFromNumericState(
+  probe: ReturnType<typeof probeScheduledTaskState>,
+): { status: GatewayServiceRuntime["status"]; detail?: string } | null {
+  if (probe.status !== "found" || probe.state === null) {
+    // Failed inspection must not be treated as stopped.
+    return null;
+  }
+  // TASK_STATE_RUNNING
+  if (probe.state === 4) {
+    return {
+      status: "running",
+      detail: "Task Scheduler numeric state=4 (running); locale-independent probe.",
+    };
+  }
+  // TASK_STATE_DISABLED and TASK_STATE_READY prove no instance is queued or running.
+  if (probe.state === 1 || probe.state === 3) {
+    return {
+      status: "stopped",
+      detail: `Task Scheduler numeric state=${probe.state}; locale-independent probe found no queued or running instance.`,
+    };
+  }
+  // TASK_STATE_UNKNOWN and TASK_STATE_QUEUED cannot establish a safe stop.
+  return null;
 }

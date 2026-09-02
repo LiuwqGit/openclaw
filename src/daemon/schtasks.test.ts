@@ -13,11 +13,25 @@ import {
 const schtasksResponses = vi.hoisted(
   (): Array<{ code: number; stdout: string; stderr: string }> => [],
 );
+const scheduledTaskStateProbes = vi.hoisted(
+  (): Array<{ status: string; state?: number | null }> => [],
+);
 const resolveWindowsOemEncodingMock = vi.hoisted(() => vi.fn((): string | null => null));
 
 vi.mock("./schtasks-exec.js", () => ({
   execSchtasks: async () => schtasksResponses.shift() ?? { code: 0, stdout: "", stderr: "" },
 }));
+
+vi.mock("./schtasks-task-state.js", async () => {
+  const actual = await vi.importActual<typeof import("./schtasks-task-state.js")>(
+    "./schtasks-task-state.js",
+  );
+  return {
+    ...actual,
+    probeScheduledTaskState: () =>
+      scheduledTaskStateProbes.shift() ?? { status: "unknown" as const },
+  };
+});
 
 vi.mock("../infra/windows-encoding.js", async () => {
   const actual = await vi.importActual<typeof import("../infra/windows-encoding.js")>(
@@ -32,6 +46,7 @@ vi.mock("../infra/windows-encoding.js", async () => {
 
 beforeEach(() => {
   schtasksResponses.length = 0;
+  scheduledTaskStateProbes.length = 0;
   resolveWindowsOemEncodingMock.mockReset();
   resolveWindowsOemEncodingMock.mockReturnValue(null);
 });
@@ -151,6 +166,62 @@ describe("scheduled task runtime derivation", () => {
     ).resolves.toMatchObject({
       status: "unknown",
       detail: "Task status is locale-dependent and no numeric Last Run Result was available.",
+    });
+  });
+
+  // pt-BR LIST output: field labels are localized, so the English-only key
+  // lookup cannot extract Last Run Result (#136123).
+  function localizedTaskQueryOutput(): string {
+    return [
+      "Nome do Host: DESKTOP-TESTE",
+      "Nome da Tarefa: \\OpenClaw Gateway",
+      "Próxima Execução: 02/09/2026 09:00:00",
+      "Status: Pronto",
+      "Hora da Última Execução: 01/09/2026 22:00:00",
+      "Último Resultado: 0",
+      "",
+    ].join("\r\n");
+  }
+
+  it("classifies stopped via the numeric Task Scheduler state when LIST labels are localized (pt-BR, #136123)", async () => {
+    scheduledTaskStateProbes.push({ status: "found", state: 3 });
+    await expect(readRuntimeFromQueryOutput(localizedTaskQueryOutput())).resolves.toMatchObject({
+      status: "stopped",
+      state: "Pronto",
+      detail:
+        "Task Scheduler numeric state=3; locale-independent probe found no queued or running instance.",
+    });
+  });
+
+  it("classifies running via the numeric Task Scheduler state when LIST labels are localized (pt-BR, #136123)", async () => {
+    scheduledTaskStateProbes.push({ status: "found", state: 4 });
+    await expect(readRuntimeFromQueryOutput(localizedTaskQueryOutput())).resolves.toMatchObject({
+      status: "running",
+      detail: "Task Scheduler numeric state=4 (running); locale-independent probe.",
+    });
+  });
+
+  it("treats a disabled task (numeric state 1) as stopped (#136123)", async () => {
+    scheduledTaskStateProbes.push({ status: "found", state: 1 });
+    await expect(readRuntimeFromQueryOutput(localizedTaskQueryOutput())).resolves.toMatchObject({
+      status: "stopped",
+      detail:
+        "Task Scheduler numeric state=1; locale-independent probe found no queued or running instance.",
+    });
+  });
+
+  it("keeps unknown when the numeric Task Scheduler probe cannot establish state (fail-closed, #136123)", async () => {
+    scheduledTaskStateProbes.push({ status: "unknown" });
+    await expect(readRuntimeFromQueryOutput(localizedTaskQueryOutput())).resolves.toMatchObject({
+      status: "unknown",
+      detail: "Task status is locale-dependent and no numeric Last Run Result was available.",
+    });
+  });
+
+  it("keeps unknown when the numeric Task Scheduler state is queued (2) (#136123)", async () => {
+    scheduledTaskStateProbes.push({ status: "found", state: 2 });
+    await expect(readRuntimeFromQueryOutput(localizedTaskQueryOutput())).resolves.toMatchObject({
+      status: "unknown",
     });
   });
 });
