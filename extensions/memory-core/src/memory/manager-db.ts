@@ -36,9 +36,9 @@ const MEMORY_REINDEX_ENTRY_SUFFIXES = ["-wal", "-shm", "-journal", ""] as const;
 const MEMORY_REINDEX_UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const MEMORY_REINDEX_ORPHAN_MIN_AGE_MS = 24 * 60 * 60_000;
-// Pre-2026 reindexes named shadow files "<db>.tmp-<uuid>"; upgrades can leave
+// Earlier reindexes named shadow files "<db>.tmp-<uuid>"; upgrades can leave
 // those orphans behind, so cleanup must match the legacy prefix too.
-const MEMORY_REINDEX_SHADOW_PREFIX_SUFFIXES = [".memory-reindex-", ".tmp-"];
+const MEMORY_REINDEX_SHADOW_PREFIX_SUFFIXES = [".memory-reindex-", ".tmp-"] as const;
 
 function resolveMemoryReindexBaseName(
   databaseBaseName: string,
@@ -60,14 +60,6 @@ function resolveMemoryReindexBaseName(
     }
   }
   return undefined;
-}
-
-function isRegularFile(filePath: string): boolean {
-  try {
-    return fs.statSync(filePath).isFile();
-  } catch {
-    return false;
-  }
 }
 
 function tableExists(db: DatabaseSync, schema: string, tableName: string): boolean {
@@ -349,11 +341,12 @@ export function removeMemoryDatabaseFiles(dbPath: string): void {
   }
 }
 
-/** Remove crash-left shadows while the caller owns the reindex lease. */
-export function cleanupAgedMemoryReindexTempFiles(dbPath: string, nowMs = Date.now()): void {
-  if (!isRegularFile(dbPath)) {
-    return;
-  }
+/** Remove crash-left shadows for an active leased DB or a retired migration path. */
+export function cleanupAgedMemoryReindexTempFiles(
+  dbPath: string,
+  nowMs = Date.now(),
+): { removed: number; failed: number } {
+  const result = { removed: 0, failed: 0 };
   const dir = path.dirname(dbPath);
   const databaseBaseName = path.basename(dbPath);
   const shadowBaseNames = new Set<string>();
@@ -361,7 +354,7 @@ export function cleanupAgedMemoryReindexTempFiles(dbPath: string, nowMs = Date.n
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true });
   } catch {
-    return;
+    return result;
   }
 
   for (const entry of entries) {
@@ -391,6 +384,9 @@ export function cleanupAgedMemoryReindexTempFiles(dbPath: string, nowMs = Date.n
       }
     }
     if (hasUnknownFileState || stats.length === 0) {
+      if (hasUnknownFileState) {
+        result.failed += 1;
+      }
       continue;
     }
     if (nowMs - Math.max(...stats.map((stat) => stat.mtimeMs)) < MEMORY_REINDEX_ORPHAN_MIN_AGE_MS) {
@@ -401,7 +397,17 @@ export function cleanupAgedMemoryReindexTempFiles(dbPath: string, nowMs = Date.n
         fs.rmSync(filePath, { force: true });
       } catch {}
     }
+    const removalComplete = filePaths.every((filePath) => {
+      try {
+        fs.statSync(filePath);
+        return false;
+      } catch (err) {
+        return typeof err === "object" && err !== null && "code" in err && err.code === "ENOENT";
+      }
+    });
+    result[removalComplete ? "removed" : "failed"] += 1;
   }
+  return result;
 }
 
 export function openMemoryDatabaseAtPath(

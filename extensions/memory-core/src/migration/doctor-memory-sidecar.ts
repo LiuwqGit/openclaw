@@ -233,6 +233,89 @@ async function collectLegacyMemorySidecarSources(params: {
   return sources;
 }
 
+async function collectLegacyMemoryReindexShadowDatabasePaths(params: {
+  config: unknown;
+  env: NodeJS.ProcessEnv;
+  stateDir: string;
+}): Promise<string[]> {
+  const { resolveOpenClawAgentSqlitePath } = await import("openclaw/plugin-sdk/sqlite-runtime");
+  const legacyDir = path.join(params.stateDir, "memory");
+  const directories = new Map<string, Set<string> | undefined>([[legacyDir, undefined]]);
+  const migrationEnv = { ...params.env, OPENCLAW_STATE_DIR: params.stateDir };
+  for (const agentId of resolveConfiguredAgentIds(params.config)) {
+    const canonicalPath = path.resolve(
+      resolveOpenClawAgentSqlitePath({ agentId, env: migrationEnv }),
+    );
+    for (const configuredPath of readLegacyMemorySearchStorePaths(params.config, agentId)) {
+      const resolvedPath = path.resolve(
+        resolveUserPath(configuredPath.replaceAll("{agentId}", agentId), migrationEnv),
+      );
+      if (resolvedPath !== canonicalPath) {
+        const directoryPath = path.dirname(resolvedPath);
+        const allowed = directories.get(directoryPath);
+        if (allowed) {
+          allowed.add(path.basename(resolvedPath));
+        } else if (!directories.has(directoryPath)) {
+          directories.set(directoryPath, new Set([path.basename(resolvedPath)]));
+        }
+      }
+    }
+  }
+  const databasePaths = new Set<string>();
+  const shadowPattern =
+    /^(.+)\.(?:memory-reindex|tmp)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:-(?:wal|shm|journal))?$/;
+  for (const [directoryPath, allowed] of directories) {
+    for (const entry of await readDirectoryEntries(directoryPath)) {
+      const databaseBaseName = entry.isFile() ? shadowPattern.exec(entry.name)?.[1] : undefined;
+      if (
+        databaseBaseName &&
+        (allowed?.has(databaseBaseName) || (!allowed && databaseBaseName.endsWith(".sqlite")))
+      ) {
+        databasePaths.add(path.join(directoryPath, databaseBaseName));
+      }
+    }
+  }
+  return [...databasePaths].toSorted();
+}
+
+async function cleanupLegacyMemoryReindexShadows(params: {
+  databasePaths: string[];
+  changes: string[];
+  warnings: string[];
+}): Promise<void> {
+  const { cleanupAgedMemoryReindexTempFiles } = await import("../memory/manager-db.js");
+  for (const databasePath of params.databasePaths) {
+    // Current runtimes never select these retired paths. The 24-hour age gate
+    // protects a recently written legacy shadow without creating another lock DB.
+    const result = cleanupAgedMemoryReindexTempFiles(databasePath);
+    if (result.removed > 0) {
+      params.changes.push(
+        `Removed ${result.removed} aged Memory Core reindex orphan shadow database(s) beside retired memory index ${databasePath}`,
+      );
+    }
+    if (result.failed > 0) {
+      params.warnings.push(
+        `Failed removing ${result.failed} aged Memory Core reindex orphan shadow database(s) beside retired memory index ${databasePath}`,
+      );
+    }
+  }
+}
+
+async function collectMemorySidecarMigrationState(params: {
+  config: unknown;
+  env: NodeJS.ProcessEnv;
+  stateDir: string;
+}): Promise<{
+  sources: LegacyMemorySidecarSource[];
+  reindexShadowDatabasePaths: string[];
+}> {
+  const [sources, reindexShadowDatabasePaths] = await Promise.all([
+    collectLegacyMemorySidecarSources(params),
+    collectLegacyMemoryReindexShadowDatabasePaths(params),
+  ]);
+  return { sources, reindexShadowDatabasePaths };
+}
+
 async function archiveLegacyMemorySidecar(params: {
   source: LegacyMemorySidecarSource;
   changes: string[];
@@ -535,34 +618,48 @@ export const memorySidecarStateMigration: PluginDoctorStateMigration = {
   id: "memory-core-legacy-sidecar-index-to-agent-sqlite",
   label: "Memory Core legacy memory index sidecar",
   async detectLegacyState(params) {
-    const sources = await collectLegacyMemorySidecarSources({
+    const migrationParams = {
       config: params.config,
       env: params.env,
       stateDir: params.stateDir,
-    });
-    if (sources.length === 0) {
+    };
+    const { sources, reindexShadowDatabasePaths } =
+      await collectMemorySidecarMigrationState(migrationParams);
+    if (sources.length === 0 && reindexShadowDatabasePaths.length === 0) {
       return null;
     }
     return {
-      preview: sources.map(
-        (source) =>
-          `- Memory Core legacy memory index: ${source.legacyPath} -> ${source.agentDatabasePath}`,
-      ),
+      preview: [
+        ...sources.map(
+          (source) =>
+            `- Memory Core legacy memory index: ${source.legacyPath} -> ${source.agentDatabasePath}`,
+        ),
+        ...reindexShadowDatabasePaths.map(
+          (databasePath) =>
+            `- Memory Core legacy reindex shadows: ${databasePath} -> remove aged orphans`,
+        ),
+      ],
     };
   },
   async migrateLegacyState(params) {
     const changes: string[] = [];
     const warnings: string[] = [];
-    const groups = groupLegacyMemorySidecarSourcesByPath(
-      await collectLegacyMemorySidecarSources({
-        config: params.config,
-        env: params.env,
-        stateDir: params.stateDir,
-      }),
-    );
-    for (const sources of groups) {
+    const migrationParams = {
+      config: params.config,
+      env: params.env,
+      stateDir: params.stateDir,
+    };
+    const { sources, reindexShadowDatabasePaths } =
+      await collectMemorySidecarMigrationState(migrationParams);
+    await cleanupLegacyMemoryReindexShadows({
+      databasePaths: reindexShadowDatabasePaths,
+      changes,
+      warnings,
+    });
+    const groups = groupLegacyMemorySidecarSourcesByPath(sources);
+    for (const sourceGroup of groups) {
       let archiveReady = true;
-      for (const source of sources) {
+      for (const source of sourceGroup) {
         try {
           const result = await migrateLegacyMemorySidecarSource({
             source,
@@ -580,9 +677,9 @@ export const memorySidecarStateMigration: PluginDoctorStateMigration = {
           );
         }
       }
-      if (archiveReady && sources[0]) {
+      if (archiveReady && sourceGroup[0]) {
         await archiveLegacyMemorySidecar({
-          source: sources[0],
+          source: sourceGroup[0],
           changes,
           warnings,
         });

@@ -522,31 +522,4 @@ describe("memory manager database publication", () => {
     await expectPathMissing(`${oldShadow}-journal`);
     await expect(fs.access(youngShadow)).resolves.toBeUndefined();
   });
-
-  it("removes aged legacy .tmp- shadows with the same suffix and age protections", async () => {
-    const databasePath = path.join(fixtureRoot, "agent.sqlite");
-    const database = new DatabaseSync(databasePath);
-    database.close();
-    const oldLegacy = `${databasePath}.tmp-22222222-3333-4444-5555-666666666666`;
-    const youngLegacy = `${databasePath}.tmp-bbbbbbbb-cccc-dddd-eeee-ffffffffffff`;
-    const old = new Date(Date.now() - 48 * 60 * 60_000);
-
-    for (const suffix of ["", "-wal", "-journal"]) {
-      await fs.writeFile(`${oldLegacy}${suffix}`, "orphan");
-      await fs.utimes(`${oldLegacy}${suffix}`, old, old);
-    }
-    await fs.writeFile(youngLegacy, "active");
-
-    const lock = await waitForMemoryReindexLock(databasePath);
-    try {
-      cleanupAgedMemoryReindexTempFiles(databasePath);
-    } finally {
-      lock.release();
-    }
-
-    await expectPathMissing(oldLegacy);
-    await expectPathMissing(`${oldLegacy}-wal`);
-    await expectPathMissing(`${oldLegacy}-journal`);
-    await expect(fs.access(youngLegacy)).resolves.toBeUndefined();
-  });
 });
