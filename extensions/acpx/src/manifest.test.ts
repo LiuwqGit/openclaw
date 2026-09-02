@@ -12,9 +12,21 @@ type AcpxPackageManifest = {
   };
 };
 
+type AcpxPluginManifest = {
+  backupResources?: Array<{
+    disposition: string;
+    scope: string;
+    relativePath: string;
+  }>;
+};
+
 const packageJson = JSON.parse(
   fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"),
 ) as AcpxPackageManifest;
+
+const pluginJson = JSON.parse(
+  fs.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),
+) as AcpxPluginManifest;
 
 describe("acpx package manifest", () => {
   it("keeps runtime dependencies in the package manifest", () => {
@@ -43,5 +55,31 @@ describe("acpx package manifest", () => {
       "@openai/codex-win32-x64",
       "@openai/codex-win32-arm64",
     ]);
+  });
+
+  it("declares ACPX-written codex-home scratch state as regenerable backup resources", () => {
+    expect(pluginJson.backupResources).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          disposition: "regenerable",
+          scope: "state",
+          relativePath: "acpx/codex-home/tmp/arg0",
+        }),
+        expect.objectContaining({
+          disposition: "regenerable",
+          scope: "state",
+          relativePath: "acpx/codex-home/.tmp/plugins",
+        }),
+        expect.objectContaining({
+          disposition: "regenerable",
+          scope: "state",
+          relativePath: "acpx/codex-home/.tmp/bundled-marketplaces",
+        }),
+      ]),
+    );
+    for (const resource of pluginJson.backupResources ?? []) {
+      expect(resource.scope).toBe("state");
+      expect(resource.relativePath.startsWith("acpx/")).toBe(true);
+    }
   });
 });
