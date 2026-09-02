@@ -4,7 +4,6 @@ import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { collectConfiguredAgentHarnessRuntimes as collectConfiguredAgentHarnessRuntimesBase } from "./harness-runtimes.js";
 
-/** Wraps `agents.entries` in a counting getter (test-local instrumentation). */
 function countRosterReads(config: OpenClawConfig): () => number {
   const agents = (config as { agents: Record<string, unknown> }).agents;
   const entries = agents.entries;
@@ -165,17 +164,14 @@ describe("collectConfiguredAgentHarnessRuntimes", () => {
   });
 
   it("bounds roster reads per collection batch on large fleets (#135743)", () => {
-    // 300 agents × 40 model refs each previously re-projected the full roster
-    // for every reference (O(agents² × models)), blocking the event loop long
-    // after the HTTP server had bound. A collection batch must read the roster
-    // a bounded number of times instead of once per model reference.
+    // The collector must not multiply full-roster reads by model-reference count.
     const agentCount = 300;
     const modelsPerAgent = 40;
     const entries: Record<string, { models: Record<string, Record<string, never>> }> = {};
     for (let i = 0; i < agentCount; i++) {
       const models: Record<string, Record<string, never>> = {};
       for (let m = 0; m < modelsPerAgent; m++) {
-        models[`openai/gpt-${m}`] = {};
+        models[`openai/proof-model-${m}`] = {};
       }
       entries[`agent-${i}`] = { models };
     }
@@ -193,8 +189,6 @@ describe("collectConfiguredAgentHarnessRuntimes", () => {
     const runtimes = collectConfiguredAgentHarnessRuntimesBase(migrated);
 
     expect(runtimes).toEqual(["codex"]);
-    // Bounded by a small constant per batch, not by agents × model refs
-    // (the unfixed path performs ~hundreds of thousands of reads here).
     expect(rosterReads()).toBeLessThanOrEqual(16);
   });
 

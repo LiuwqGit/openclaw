@@ -150,7 +150,7 @@ export function collectConfiguredAgentHarnessRuntimes(
   // resolution otherwise re-projects the roster O(agents × models) times,
   // which blocks the event loop on large fleets (#135743). The batch is a
   // pure read of config.
-  return withAgentRosterFactsBatch(() => {
+  return withAgentRosterFactsBatch(config, () => {
     const runtimes = new Set<string>();
     const includeImplicitRuntimePreferences = options.includeImplicitRuntimePreferences ?? true;
 
