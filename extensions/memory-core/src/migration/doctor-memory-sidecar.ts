@@ -613,11 +613,6 @@ export const memorySidecarStateMigration: PluginDoctorStateMigration = {
     };
     const { sources, reindexShadowDatabasePaths } =
       await collectMemorySidecarMigrationState(migrationParams);
-    const { cleanupLegacyMemoryReindexShadows } =
-      await import("./doctor-memory-reindex-shadows.js");
-    const cleanup = await cleanupLegacyMemoryReindexShadows(reindexShadowDatabasePaths);
-    changes.push(...cleanup.changes);
-    warnings.push(...cleanup.warnings);
     const groups = groupLegacyMemorySidecarSourcesByPath(sources);
     for (const sourceGroup of groups) {
       let archiveReady = true;
@@ -647,6 +642,11 @@ export const memorySidecarStateMigration: PluginDoctorStateMigration = {
         });
       }
     }
+    const { cleanupLegacyMemoryReindexShadows } =
+      await import("./doctor-memory-reindex-shadows.js");
+    const cleanup = await cleanupLegacyMemoryReindexShadows(reindexShadowDatabasePaths);
+    changes.push(...cleanup.changes);
+    warnings.push(...cleanup.warnings);
     return { changes, warnings };
   },
 };

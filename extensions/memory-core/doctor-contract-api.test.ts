@@ -2180,6 +2180,12 @@ describe("memory-core doctor dreaming migration", () => {
     const archivedPath = `${legacyPath}.migrated`;
     const agedShadow = `${legacyPath}.tmp-11111111-2222-3333-4444-555555555555`;
     const youngShadow = `${legacyPath}.tmp-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee`;
+    const currentShadow = `${legacyPath}.memory-reindex-22222222-3333-4444-5555-666666666666`;
+    const missingPrimaryShadow = path.join(
+      stateDir,
+      "memory",
+      "recoverable.sqlite.tmp-33333333-4444-5555-6666-777777777777",
+    );
     const malformedShadow = `${legacyPath}.tmp-not-a-uuid`;
     const canonicalPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
     await fs.mkdir(path.dirname(legacyPath), { recursive: true });
@@ -2192,6 +2198,10 @@ describe("memory-core doctor dreaming migration", () => {
       await fs.utimes(`${agedShadow}${suffix}`, old, old);
     }
     await fs.writeFile(youngShadow, "active");
+    await fs.writeFile(currentShadow, "recoverable");
+    await fs.utimes(currentShadow, old, old);
+    await fs.writeFile(missingPrimaryShadow, "recoverable");
+    await fs.utimes(missingPrimaryShadow, old, old);
     await fs.writeFile(malformedShadow, "unrelated");
 
     const migration = legacyMemoryIndexMigration();
@@ -2210,6 +2220,8 @@ describe("memory-core doctor dreaming migration", () => {
       await expect(fs.access(`${agedShadow}${suffix}`)).rejects.toMatchObject({ code: "ENOENT" });
     }
     await expect(fs.access(youngShadow)).resolves.toBeUndefined();
+    await expect(fs.access(currentShadow)).resolves.toBeUndefined();
+    await expect(fs.access(missingPrimaryShadow)).resolves.toBeUndefined();
     await expect(fs.access(malformedShadow)).resolves.toBeUndefined();
     await expect(fs.access(archivedPath)).resolves.toBeUndefined();
     await expect(fs.access(canonicalPath)).resolves.toBeUndefined();
