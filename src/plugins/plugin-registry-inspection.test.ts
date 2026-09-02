@@ -336,7 +336,7 @@ describe("plugin registry inspection", () => {
     expect(repaired.refreshReasons).toEqual([]);
   });
 
-  it("rebases managed records when refreshing a copied state root", async () => {
+  it("fails closed when refreshing a copied state root", async () => {
     const sourceStateDir = makeTempDir();
     const copiedStateDir = path.join(makeTempDir(), "copied-state");
     const externalDir = makeTempDir();
@@ -375,30 +375,70 @@ describe("plugin registry inspection", () => {
     clearPluginMetadataLifecycleCaches();
     fs.cpSync(sourceStateDir, copiedStateDir, { recursive: true });
 
-    const refreshed = await refreshPluginRegistry({
-      reason: "manual",
-      stateDir: copiedStateDir,
-      config,
-      env: { ...hermeticEnv(), OPENCLAW_STATE_DIR: copiedStateDir },
-    });
-    const copiedManagedPath = path.join(
-      copiedStateDir,
-      path.relative(sourceStateDir, sourceManagedPath),
-    );
-
     expect(fs.existsSync(sourceManagedPath)).toBe(true);
-    expect(refreshed.installRecords["copied-managed"]?.installPath).toBe(copiedManagedPath);
-    expect(refreshed.plugins.find((plugin) => plugin.pluginId === "copied-managed")?.rootDir).toBe(
-      copiedManagedPath,
+    await expect(
+      refreshPluginRegistry({
+        reason: "manual",
+        stateDir: copiedStateDir,
+        config,
+        env: { ...hermeticEnv(), OPENCLAW_STATE_DIR: copiedStateDir },
+      }),
+    ).rejects.toThrow("cannot verify npm install ownership outside the selected state directory");
+    const persisted = expectDefined(
+      await readPersistedInstalledPluginIndex({ stateDir: copiedStateDir }),
+      "copied plugin registry",
     );
-    expect(refreshed.installRecords.demo).toMatchObject({
+    expect(persisted.installRecords["copied-managed"]?.installPath).toBe(sourceManagedPath);
+    expect(persisted.installRecords.demo).toMatchObject({
       source: "path",
       sourcePath: externalDir,
       installPath: externalDir,
     });
-    expect(refreshed.plugins.find((plugin) => plugin.pluginId === "demo")?.rootDir).toBe(
-      externalDir,
+  });
+
+  it("does not rewrite an external managed npm project", async () => {
+    const stateDir = makeTempDir();
+    const externalStateDir = makeTempDir();
+    const packageName = "openclaw-external-managed";
+    const externalInstallPath = writeManagedNpmPlugin({
+      stateDir: externalStateDir,
+      packageName,
+      pluginId: "external-managed",
+      version: "1.0.0",
+    });
+    writeManagedNpmPlugin({
+      stateDir,
+      packageName,
+      pluginId: "external-managed",
+      version: "2.0.0",
+    });
+    await refreshPluginRegistry({
+      reason: "manual",
+      stateDir,
+      env: { ...hermeticEnv(), OPENCLAW_STATE_DIR: stateDir },
+      installRecords: {
+        "external-managed": {
+          source: "npm",
+          spec: `${packageName}@1.0.0`,
+          installPath: externalInstallPath,
+          resolvedName: packageName,
+          resolvedVersion: "1.0.0",
+        },
+      },
+    });
+
+    await expect(
+      refreshPluginRegistry({
+        reason: "manual",
+        stateDir,
+        env: { ...hermeticEnv(), OPENCLAW_STATE_DIR: stateDir },
+      }),
+    ).rejects.toThrow("cannot verify npm install ownership outside the selected state directory");
+    const persisted = expectDefined(
+      await readPersistedInstalledPluginIndex({ stateDir }),
+      "external plugin registry",
     );
+    expect(persisted.installRecords["external-managed"]?.installPath).toBe(externalInstallPath);
   });
 
   it("preserves install records when refreshing the persisted registry", async () => {

@@ -396,16 +396,23 @@ function isForeignManagedNpmInstallRecord(params: {
   });
 }
 
+/** Lists existing npm projects that could be copied managed state or external installs. */
+export function findForeignManagedNpmInstallRecordPluginIds(
+  persisted: Record<string, PluginInstallRecord> | null,
+  options: InstalledPluginIndexStoreOptions,
+): string[] {
+  const npmRoot = resolveRecoveredManagedNpmRoot(options);
+  return Object.entries(persisted ?? {}).flatMap(([pluginId, record]) =>
+    isForeignManagedNpmInstallRecord({ npmRoot, record }) ? [pluginId] : [],
+  );
+}
+
 function mergeRecoveredManagedNpmRecord(params: {
   npmRoot: string;
   persisted: PluginInstallRecord | undefined;
   recovered: PluginInstallRecord;
 }): PluginInstallRecord {
-  if (
-    params.persisted &&
-    (isUnavailableManagedNpmInstallRecord(params) ||
-      isForeignManagedNpmInstallRecord({ npmRoot: params.npmRoot, record: params.persisted }))
-  ) {
+  if (params.persisted && isUnavailableManagedNpmInstallRecord(params)) {
     return mergeRecoveredManagedNpmMetadata(params.persisted, params.recovered, {
       preservePersistedSpec: true,
     });
@@ -425,7 +432,7 @@ function mergeRecoveredManagedNpmRecord(params: {
   return params.persisted ?? params.recovered;
 }
 
-/** Reconciles persisted records with managed npm installs in the selected state root. */
+/** Merges persisted records with managed npm installs recovered from the current root. */
 export function mergeRecoveredManagedNpmInstallRecords(
   persisted: Record<string, PluginInstallRecord> | null,
   options: InstalledPluginIndexStoreOptions,
@@ -443,16 +450,6 @@ export function mergeRecoveredManagedNpmInstallRecords(
         recovered: record,
       }),
     );
-  }
-  // Copied state can carry managed records rooted at another state directory.
-  // Without a local install they are stale copies, not loadable plugins.
-  for (const [pluginId, record] of Object.entries(merged)) {
-    if (
-      !Object.hasOwn(recovered, pluginId) &&
-      isForeignManagedNpmInstallRecord({ npmRoot, record })
-    ) {
-      delete merged[pluginId];
-    }
   }
   return merged;
 }
