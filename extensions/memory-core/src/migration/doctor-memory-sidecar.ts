@@ -29,10 +29,10 @@ function formatLegacyVectorRows(count: number | undefined): string {
 type MemoryFtsTokenizer = "unicode61" | "trigram";
 
 function resolveConfiguredAgentIds(config: unknown): string[] {
-  const agents = readLegacyObjectRecord(readLegacyObjectRecord(config)?.agents);
-  const entries = readLegacyObjectRecord(agents?.entries);
-  const listedIds = Array.isArray(agents?.list)
-    ? agents.list.flatMap((entry) => {
+  const cfg = config as { agents?: { entries?: unknown; list?: unknown } };
+  const entries = readLegacyObjectRecord(cfg.agents?.entries);
+  const listedIds = Array.isArray(cfg.agents?.list)
+    ? cfg.agents.list.flatMap((entry) => {
         const id = readLegacyObjectRecord(entry)?.id;
         return typeof id === "string" ? [id] : [];
       })
