@@ -15,11 +15,13 @@ function withBearerHeader(request: Request, accessToken: string): Request {
   return new Request(request, { headers });
 }
 
-async function toFetchInit(request: Request): Promise<RequestInit & { duplex?: "half" }> {
-  const streamBody = request.body ?? undefined;
-  // Fetch rejects keepalive requests whose body is exposed as a stream. Buffer
-  // the payload before reserializing the Request with its original semantics.
-  const body = request.keepalive && streamBody ? await request.arrayBuffer() : streamBody;
+async function toFetchInit(request: Request): Promise<RequestInit> {
+  // Materialize the body before handing it to Undici: a stream body has no
+  // known length, so the request is framed with transfer-encoding: chunked,
+  // which some MCP servers and WAFs reject. Buffering restores Content-Length
+  // framing, and keepalive requires it anyway. MCP JSON-RPC payloads are small,
+  // so always buffering costs nothing meaningful.
+  const body = request.body ? await request.arrayBuffer() : undefined;
   return {
     method: request.method,
     headers: request.headers,
@@ -33,7 +35,6 @@ async function toFetchInit(request: Request): Promise<RequestInit & { duplex?: "
     referrer: request.referrer,
     referrerPolicy: request.referrerPolicy,
     signal: request.signal,
-    ...(streamBody && !request.keepalive ? { duplex: "half" as const } : {}),
   };
 }
 

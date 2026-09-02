@@ -358,6 +358,59 @@ describe("MCP HTTP fetch helpers", () => {
     ]);
   });
 
+  it("frames OAuth POST bodies with Content-Length at a real HTTP boundary", async () => {
+    delete testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY];
+    oauthResolveMock.mockResolvedValue("test-token-placeholder");
+    const observed: Array<{
+      contentLength: string | undefined;
+      transferEncoding: string | undefined;
+      body: string;
+    }> = [];
+    const server = createServer((request, response) => {
+      let body = "";
+      request.setEncoding("utf8");
+      request.on("data", (chunk: string) => {
+        body += chunk;
+      });
+      request.on("end", () => {
+        observed.push({
+          contentLength: request.headers["content-length"],
+          transferEncoding: request.headers["transfer-encoding"],
+          body,
+        });
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end("{}");
+      });
+    });
+    const baseUrl = await listenOnLoopback(server);
+    const resourceUrl = `${baseUrl}/mcp`;
+    const fetch = withMcpOAuthBearer({
+      fetchFn: buildMcpHttpFetch({ resourceUrl }),
+      authFetchFn: buildMcpHttpFetch({ resourceUrl }),
+      identity: operatorMcpOAuthIdentity("docs", resourceUrl),
+    });
+    const jsonRpcBody = '{"jsonrpc":"2.0","method":"tools/list"}';
+
+    try {
+      const response = await fetch(resourceUrl, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: jsonRpcBody,
+      });
+
+      expect(await response.text()).toBe("{}");
+      expect(observed).toEqual([
+        {
+          contentLength: String(jsonRpcBody.length),
+          transferEncoding: undefined,
+          body: jsonRpcBody,
+        },
+      ]);
+    } finally {
+      await closeLoopbackServer(server);
+    }
+  });
+
   it.each([undefined, "64", "1048577"])(
     "drops body-less foreign OAuth text without trusting Content-Length %s",
     async (contentLength) => {
