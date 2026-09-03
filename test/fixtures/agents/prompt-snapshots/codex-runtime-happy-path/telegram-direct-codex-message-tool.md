@@ -243,16 +243,16 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 14243
   },
   "openClawDeveloperInstructions": {
-    "chars": 3224,
-    "roughTokens": 806
+    "chars": 3184,
+    "roughTokens": 796
   },
   "totalTextOnly": {
-    "chars": 27170,
-    "roughTokens": 6793
+    "chars": 27130,
+    "roughTokens": 6783
   },
   "totalWithDynamicToolsJson": {
-    "chars": 84143,
-    "roughTokens": 21036
+    "chars": 84103,
+    "roughTokens": 21026
   },
   "userInputText": {
     "chars": 863,
@@ -462,7 +462,6 @@ When explicitly_mentioned_bot is true, the incoming message mentions your channe
 
 ```json
 {
-  "schema": "openclaw.inbound_meta.v2",
   "account_id": "primary",
   "channel": "telegram",
   "provider": "telegram",

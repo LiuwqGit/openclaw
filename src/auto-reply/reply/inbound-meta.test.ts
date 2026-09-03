@@ -165,7 +165,12 @@ describe("buildInboundMetaSystemPrompt", () => {
     );
 
     const payload = parseInboundMetaPayload(prompt);
-    expect(payload["schema"]).toBe("openclaw.inbound_meta.v2");
+    // Regression for #137413: Anthropic's harness detection rejects prompts containing
+    // the `openclaw.inbound_meta.*` marker string (billed as third-party usage → 400
+    // "out of extra usage"). The schema discriminator had no runtime consumer, so the
+    // trusted inbound metadata payload must not carry any versioned marker token.
+    expect(payload["schema"]).toBeUndefined();
+    expect(prompt).not.toContain("openclaw.inbound_meta");
     expect(payload["chat_id"]).toBeUndefined();
     expect(payload["account_id"]).toBe("work");
     expect(payload["channel"]).toBe("telegram");
