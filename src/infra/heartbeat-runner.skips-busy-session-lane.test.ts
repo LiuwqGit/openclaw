@@ -20,6 +20,8 @@ import {
   markCronJobWaitingForHeartbeat,
   resetCronActiveJobs,
 } from "../cron/active-jobs.js";
+import { readHeartbeatMonitorScratch, writeCronJobScratch } from "../cron/scratch-store.js";
+import { resolveCronJobsStorePath } from "../cron/store.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { CommandLane } from "../process/lanes.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -301,6 +303,65 @@ describe("heartbeat runner skips when target session lane is busy", () => {
       const result = await runHeartbeat(cfg, replySpy);
 
       expect(result).toEqual({ status: "skipped", reason: HEARTBEAT_SKIP_CRON_IN_PROGRESS });
+      expect(replySpy).not.toHaveBeenCalled();
+    });
+  });
+
+  it("skips an empty scheduled heartbeat before busy queue guards instead of deferring", async () => {
+    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
+      const cfg = createHeartbeatTelegramConfig(storePath);
+      await seedHeartbeatTelegramSession(storePath, cfg);
+      const scratchStorePath = resolveCronJobsStorePath();
+      const monitor = readHeartbeatMonitorScratch(scratchStorePath, "main");
+      expect(monitor).toBeDefined();
+      writeCronJobScratch({
+        storePath: scratchStorePath,
+        jobId: monitor!.jobId,
+        content: "# Heartbeat scratch\n\n## Tasks\n\n",
+      });
+
+      const result = await runHeartbeat(
+        cfg,
+        replySpy,
+        {
+          source: "interval",
+          intent: "scheduled",
+          reason: "interval",
+          scheduledEveryMs: 30 * 60_000,
+        },
+        { getQueueSize: vi.fn((lane?: string) => (lane === CommandLane.Main ? 2 : 0)) },
+      );
+
+      // An effectively empty scratch must resolve its terminal skip before the
+      // shared busy guards; a retryable busy skip would defer the settlement.
+      expect(result).toEqual({ status: "skipped", reason: "empty-heartbeat-file" });
+      expect(getLastHeartbeatEvent()).toMatchObject({
+        status: "skipped",
+        reason: "empty-heartbeat-file",
+        durationMs: expect.any(Number),
+      });
+      expect(replySpy).not.toHaveBeenCalled();
+    });
+  });
+
+  it("still defers a scheduled heartbeat with actionable scratch behind busy queues", async () => {
+    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
+      const cfg = createHeartbeatTelegramConfig(storePath);
+      await seedHeartbeatTelegramSession(storePath, cfg);
+
+      const result = await runHeartbeat(
+        cfg,
+        replySpy,
+        {
+          source: "interval",
+          intent: "scheduled",
+          reason: "interval",
+          scheduledEveryMs: 30 * 60_000,
+        },
+        { getQueueSize: vi.fn((lane?: string) => (lane === CommandLane.Main ? 2 : 0)) },
+      );
+
+      expect(result).toEqual({ status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT });
       expect(replySpy).not.toHaveBeenCalled();
     });
   });

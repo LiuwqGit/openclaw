@@ -68,7 +68,7 @@ import {
   resolveHeartbeatPreflight,
   resolveHeartbeatRunPrompt,
   selectSystemEventsConsumedByHeartbeat,
-  shouldPreflightExecEventWake,
+  shouldPreflightWakeBeforeBusy,
 } from "./heartbeat-runner-prompt.js";
 import {
   resolveHeartbeatSession,
@@ -203,7 +203,7 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
     return skippedHeartbeatStage("quiet-hours", startedAt);
   }
 
-  const shouldInspectExecWakeBeforeBusy = shouldPreflightExecEventWake(
+  const shouldPreflightBeforeBusy = shouldPreflightWakeBeforeBusy(
     wakeSource,
     opts.scheduledEveryMs,
     scheduledTasks.length,
@@ -217,7 +217,7 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
       source: wakeSource,
       scheduledTasks,
     });
-  let preflight = shouldInspectExecWakeBeforeBusy ? await resolvePreflight() : undefined;
+  let preflight = shouldPreflightBeforeBusy ? await resolvePreflight() : undefined;
   if (preflight?.skipReason) {
     return skippedHeartbeatStage(preflight.skipReason, startedAt);
   }
