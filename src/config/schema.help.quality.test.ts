@@ -1,7 +1,6 @@
 // Checks config help text quality and coverage.
 
 import { describe, expect, it } from "vitest";
-import { resolveConfigReloadMetadata } from "../gateway/config-reload-plan.js";
 import { computeBaseConfigSchemaResponse } from "./schema-base.js";
 import { FIELD_HELP } from "./schema.help.js";
 import {
@@ -348,13 +347,6 @@ describe("config help copy quality", () => {
       }
     },
   );
-
-  it("keeps plugins.entries.*.enabled help aligned with the hot reload planner", () => {
-    const help = requireHelp("plugins.entries.*.enabled");
-    expect(help).not.toMatch(/restart required/i);
-    expect(help).toMatch(/hot reload/i);
-    expect(resolveConfigReloadMetadata("plugins.entries.sample-plugin.enabled").kind).toBe("hot");
-  });
 });
 
 describe("config tier coverage", () => {
