@@ -197,6 +197,11 @@ export function fanInChannelIngressLifecycles(
           lifecycle.onAdoptionFinalizing();
         }
       },
+      onProcessingStarted: () => {
+        for (const lifecycle of lifecycles) {
+          lifecycle.onProcessingStarted?.();
+        }
+      },
       onFailed: async (error) => {
         handedOff = true;
         await failAll(error);

@@ -25,6 +25,9 @@ describe("channel ingress drain lifecycle", () => {
       onAbandoned: () => {
         calls.push("abandoned");
       },
+      onProcessingStarted: () => {
+        calls.push("processing-started");
+      },
     });
 
     expect(bound.turnAdoptionLifecycle).toMatchObject({
@@ -35,9 +38,10 @@ describe("channel ingress drain lifecycle", () => {
     expect("onCancelled" in bound.turnAdoptionLifecycle).toBe(false);
     expect("onAdopted" in bound).toBe(false);
     expect(Object.keys(bound)).toEqual(["turnAdoptionLifecycle"]);
+    bound.turnAdoptionLifecycle.onProcessingStarted?.();
     bound.turnAdoptionLifecycle.onDeferred();
     await bound.turnAdoptionLifecycle.onAbandoned();
-    expect(calls).toEqual(["deferred", "abandoned"]);
+    expect(calls).toEqual(["processing-started", "deferred", "abandoned"]);
     calls.length = 0;
     bound.turnAdoptionLifecycle.onDeferred();
     await bound.turnAdoptionLifecycle.onAdopted();

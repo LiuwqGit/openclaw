@@ -54,12 +54,15 @@ duplicates. `context.isNew` is `true` if and only if this admission inserted the
 delivery. If retention previously pruned the row, a later admission may insert
 it again and report `isNew: true`.
 
-`deliver` receives `onAdopted`, `onDeferred`, `onAdoptionFinalizing`, `onFailed`,
-`onCancelled`, `onAbandoned`, and `abortSignal`. Use `onFailed` for delivery
-errors, `onCancelled` for explicit pre-adoption cancellation that must preserve
-retry accounting, and `onAbandoned` when a non-adopted turn should consume a
-retry attempt. Returning without an explicit handoff marks a terminal
-no-dispatch event adopted. `admission` is always `exclusive`. A deferred handoff
+`deliver` receives `onAdopted`, `onDeferred`, `onAdoptionFinalizing`,
+`onProcessingStarted`, `onFailed`, `onCancelled`, `onAbandoned`, and
+`abortSignal`. Use `onFailed` for delivery errors, `onCancelled` for explicit
+pre-adoption cancellation that must preserve retry accounting, and
+`onAbandoned` when a non-adopted turn should consume a retry attempt. Call
+`onProcessingStarted` once the bounded reply runtime begins processing (before
+long pre-adoption maintenance such as preflight compaction) so the shorter
+adoption watchdog retires while the claim stays held. Returning without an
+explicit handoff marks a terminal no-dispatch event adopted. `admission` is always `exclusive`. A deferred handoff
 keeps the claim held, while shutdown or abort leaves unadopted work retryable.
 The monitor tracks delivery independently from claim settlement because
 adoption can tombstone a row before the channel's delivery promise returns.

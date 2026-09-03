@@ -26,7 +26,15 @@ export type ChannelIngressDispatchLifecycle = {
   /** Explicit cancellation before adoption; releases without consuming retry budget. */
   onCancelled?: () => void | Promise<void>;
   /**
-   * Deferred turn finished without ever owning the reply lane.
+   * Fires when the bounded reply runtime has started processing this event
+   * (before pre-adoption maintenance such as memory flush / preflight
+   * compaction). Retires the shorter pre-adoption stall watchdog while the
+   * durable claim stays held: stall detection belongs to the processing
+   * runtime's own bounded maintenance timeouts from here until adoption or
+   * terminal settlement.
+   */
+  onProcessingStarted?: () => void;
+  /** Deferred turn finished without ever owning the reply lane.
    * Drain releases the claim for retry.
    */
   onAbandoned: () => void | Promise<void>;
@@ -40,6 +48,7 @@ export function bindIngressLifecycleToReplyOptions(lifecycle: ChannelIngressDisp
     onDeferred: () => void;
     onDeferredHeartbeat?: () => void;
     onAbandoned: () => void | Promise<void>;
+    onProcessingStarted?: () => void;
     abortSignal: AbortSignal;
   };
 } {
@@ -50,6 +59,7 @@ export function bindIngressLifecycleToReplyOptions(lifecycle: ChannelIngressDisp
       onDeferred: lifecycle.onDeferred,
       onDeferredHeartbeat: lifecycle.onDeferredHeartbeat,
       onAbandoned: lifecycle.onAbandoned,
+      onProcessingStarted: lifecycle.onProcessingStarted,
       abortSignal: lifecycle.abortSignal,
     },
   };

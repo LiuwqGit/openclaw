@@ -792,6 +792,125 @@ describe("runReplyAgent auto-compaction token update", () => {
     }
   });
 
+  it("signals processing start before preflight maintenance and adoption", async () => {
+    const events: string[] = [];
+    const tmp = tempDirs.make("openclaw-processing-start-handoff-");
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "agent:main:main";
+    const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 30_000,
+      totalTokensFresh: true,
+      totalTokensVersion: 1,
+      compactionCount: 0,
+    };
+    const prompt = "What is two plus two? Answer in one short sentence without tools.";
+    const config: OpenClawConfig = {
+      models: {
+        providers: {
+          anthropic: {
+            baseUrl: "https://example.test",
+            models: [
+              {
+                id: "claude-opus-4-6",
+                name: "Test model",
+                contextTokens: 32_768,
+                reasoning: false,
+                input: ["text"],
+                maxTokens: 8_192,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    };
+    registerMemoryFlushPlanResolverForTest(() => ({
+      softThresholdTokens: 4_000,
+      reserveTokensFloor: 20_000,
+      forceFlushTranscriptBytes: 1_000_000_000,
+      prompt: "Pre-compaction memory flush.",
+      systemPrompt: "Write durable memory, then reply NO_REPLY.",
+      relativePath: "memory/active.md",
+    }));
+    const terminalEvent = (input: number, output: number) => ({
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "NO_REPLY" }],
+        stopReason: "stop",
+        usage: { input, output, totalTokens: input + output },
+      },
+    });
+    compactState.compactEmbeddedAgentSessionMock.mockImplementation(async () => {
+      events.push("compaction");
+      return { ok: true, compacted: true, result: { tokensAfter: 1_000 } };
+    });
+    runEmbeddedAgentMock.mockImplementation(
+      async (params: { trigger?: string; prompt?: string }) => {
+        if (params.trigger === "memory") {
+          events.push("memory-flush");
+          // Still over the blocking threshold after the flush, so preflight
+          // compaction must also run before admission.
+          await replaceTranscriptEvents(scope, [terminalEvent(25_039, 34)]);
+          return {
+            payloads: [],
+            meta: { agentMeta: { lastCallUsage: { input: 25_039, output: 34 } } },
+          };
+        }
+        events.push("agent-run");
+        return { payloads: [{ text: "Two plus two is four." }], meta: {} };
+      },
+    );
+    try {
+      setRuntimeConfigSnapshot(config, config);
+      await replaceSessionEntry(scope, sessionEntry);
+      await replaceTranscriptEvents(scope, [terminalEvent(30_000, 10)]);
+      const result = await createBaseRun({
+        followup: { prompt },
+        run: {
+          agentId: "main",
+          agentDir: path.join(tmp, "agent"),
+          sessionKey,
+          sessionFile: path.join(tmp, "session.jsonl"),
+          workspaceDir: tmp,
+          model: "claude-opus-4-6",
+          config,
+        },
+        reply: {
+          commandBody: prompt,
+          sessionEntry,
+          sessionStore: { [sessionKey]: sessionEntry },
+          sessionKey,
+          storePath,
+          opts: {
+            turnAdoptionLifecycle: {
+              onProcessingStarted: () => {
+                events.push("processing-started");
+              },
+              onAdopted: () => {
+                events.push("adopted");
+              },
+            },
+          },
+        },
+      }).run();
+
+      expectReplyText(result, "Two plus two is four.");
+      // Regression (#137294): the processing-start handoff retires the shorter
+      // ingress adoption watchdog before bounded pre-adoption maintenance
+      // (memory flush, preflight compaction) can outlive it.
+      expect(events[0]).toBe("processing-started");
+      expect(events.indexOf("memory-flush")).toBeGreaterThan(events.indexOf("processing-started"));
+      expect(events.indexOf("compaction")).toBeGreaterThan(events.indexOf("memory-flush"));
+      expect(events.indexOf("adopted")).toBeGreaterThan(events.indexOf("compaction"));
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     ["without side effects", { meta: { agentMeta: {} } }, true],
     [

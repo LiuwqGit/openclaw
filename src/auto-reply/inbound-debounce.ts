@@ -58,6 +58,7 @@ type InboundDebounceAdmissionLifecycleInput = {
   onDeferred?: () => boolean | void;
   onDeferredHeartbeat?: () => void;
   onAdoptionFinalizing?: () => void;
+  onProcessingStarted?: () => void;
   onFailed?: (error: unknown) => void | Promise<void>;
   onAbandoned?: () => void | Promise<void>;
 };
@@ -69,6 +70,7 @@ type InboundDebounceAdmissionLifecycle = {
   onDeferred: () => boolean | void;
   onDeferredHeartbeat?: () => void;
   onAdoptionFinalizing: () => void;
+  onProcessingStarted?: () => void;
   onFailed?: (error: unknown) => Promise<void>;
   onAbandoned: () => Promise<void>;
 };
@@ -109,6 +111,7 @@ function createInboundDebounceFlush(params: {
     },
     onDeferredHeartbeat: () => source?.onDeferredHeartbeat?.(),
     onAdoptionFinalizing: () => source?.onAdoptionFinalizing?.(),
+    onProcessingStarted: () => source?.onProcessingStarted?.(),
     onFailed: source?.onFailed
       ? async (error) => {
           try {

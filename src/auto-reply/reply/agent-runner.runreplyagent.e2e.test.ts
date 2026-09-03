@@ -1974,6 +1974,24 @@ describe("runReplyAgent heartbeat followup guard", () => {
       }
     },
   );
+
+  it("signals processing start before adoption", async () => {
+    const events: string[] = [];
+    const onProcessingStarted = vi.fn(() => {
+      events.push("processing-started");
+    });
+    const onAdopted = vi.fn(() => {
+      events.push("adopted");
+    });
+    const { run } = createMinimalRun({
+      opts: { turnAdoptionLifecycle: { onAdopted, onProcessingStarted } },
+    });
+
+    await run();
+
+    expect(onProcessingStarted).toHaveBeenCalledOnce();
+    expect(events).toEqual(["processing-started", "adopted"]);
+  });
 });
 
 describe("runReplyAgent pending final delivery capture", () => {

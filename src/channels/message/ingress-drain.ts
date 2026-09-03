@@ -374,6 +374,18 @@ export function createChannelIngressDrain<
         // stall watchdog race and dead-letter an about-to-complete event.
         clearStallTimer(state);
       },
+      onProcessingStarted: () => {
+        if (state.phase !== "dispatching" && state.phase !== "deferred") {
+          return;
+        }
+        if (state.guillotined || state.superseded) {
+          return;
+        }
+        // The bounded reply runtime now owns stall detection (its maintenance
+        // timeouts and abort signal); retire only the shorter ingress adoption
+        // watchdog while the claim stays held until adoption or settlement.
+        clearStallTimer(state);
+      },
       onFailed: async (error) => {
         if (state.phase !== "dispatching" && state.phase !== "deferred") {
           return;

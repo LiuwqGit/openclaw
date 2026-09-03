@@ -187,6 +187,12 @@ export async function executePreparedReplyAgentRun(
 
   await typingSignals.signalRunStart();
 
+  // Pre-adoption processing handoff: the bounded reply runtime (memory flush /
+  // preflight compaction safety timeouts plus the reply abort signal) now owns
+  // stall detection, so retire the shorter ingress adoption watchdog while the
+  // durable claim stays held until adoption or terminal settlement (#137294).
+  turnAdoptionLifecycle?.onProcessingStarted?.();
+
   // Preserve the one-flush-per-compaction-cycle gate: an earlier same-cycle
   // flush is the checkpoint for this upcoming compaction, not a reason to rerun maintenance.
   const memoryFlushResult = await traceAgentPhase("reply.memory_flush", () =>

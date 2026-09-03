@@ -92,6 +92,44 @@ describe("channel ingress drain watchdog", () => {
     });
   });
 
+  it("retires the adoption watchdog at processing start while the claim stays held", async () => {
+    await withTempState(async (stateDir) => {
+      let clock = 50_000;
+      const queue = createTestIngressQueue(stateDir, { now: () => clock });
+      await queue.enqueue("evt-slow-maintenance", { text: "x" }, { laneKey: "l1" });
+      let processingLifecycle: ChannelIngressDispatchLifecycle | undefined;
+
+      const drain = createChannelIngressDrain<Payload>({
+        queue,
+        now: () => clock,
+        adoptionStallTimeoutMs: 5_000,
+        dispatchClaimedEvent: async (_event, lifecycle) => {
+          processingLifecycle = lifecycle;
+          // Bounded pre-adoption maintenance now owns stall detection.
+          lifecycle.onProcessingStarted?.();
+          await new Promise(() => {});
+        },
+      });
+
+      await drain.drainOnce();
+      const held = await queue.listClaims();
+      expect(held).toHaveLength(1);
+      clock += 60_000;
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      // No watchdog abort, no retry replay: the live turn keeps its durable claim.
+      expect(await queue.listClaims()).toEqual(held);
+      expect(await queue.listPending()).toEqual([]);
+      expect(processingLifecycle?.abortSignal.aborted).toBe(false);
+
+      // Adoption after exceeding the ingress window still completes without replay.
+      await processingLifecycle?.onAdopted();
+      expect(await queue.listClaims()).toEqual([]);
+      expect((await queue.enqueue("evt-slow-maintenance", { text: "x" })).kind).toBe("completed");
+      drain.dispose();
+    });
+  });
+
   it("rearms a live deferred wait, then guillotines silence", async () => {
     await withTempState(async (stateDir) => {
       let clock = 30_000;

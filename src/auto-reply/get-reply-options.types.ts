@@ -94,6 +94,12 @@ export type TurnAdoptionLifecycle = {
   onDeferred?: () => boolean | void;
   /** Reports that a deferred turn is still queued behind an active turn. */
   onDeferredHeartbeat?: () => void;
+  /**
+   * Pre-adoption processing has started under a bounded runtime (before memory
+   * flush / preflight compaction); retire the shorter durable ingress adoption
+   * watchdog while the claim stays held until adoption or terminal settlement.
+   */
+  onProcessingStarted?: () => void;
   /** Deferred turn finished without owning the reply lane. */
   onAbandoned?: () => void;
   /** Always fires when the followup ownership cycle ends (admitted or not). Gateway cleanup. */
