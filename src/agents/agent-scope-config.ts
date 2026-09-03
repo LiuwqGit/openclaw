@@ -96,6 +96,8 @@ function stripNullBytes(s: string): string {
 type AgentRosterFacts = {
   compatibilityAgentId?: { value: string | undefined };
   entryByNormalizedId?: Map<string, { clone: boolean; entry: AgentEntry }>;
+  /** Batch-scoped memo for expensive derived roster values (#137570). */
+  derivedValues?: Map<string, unknown>;
 };
 
 type AgentRosterFactsBatch = {
@@ -126,6 +128,31 @@ function readAgentRosterFacts(cfg: OpenClawConfig): AgentRosterFacts | undefined
   return activeAgentRosterFactsBatch?.config === cfg
     ? activeAgentRosterFactsBatch.facts
     : undefined;
+}
+
+/**
+ * Reads a batch-scoped derived roster value, computing it once per batch.
+ *
+ * Per-agent summaries (health heartbeat enrollment, status) resolve roster
+ * facts through the same walk for every configured agent. Memoizing the
+ * derived value on the active batch keeps repeated lookups O(1) without a
+ * process-wide config cache, so config mutations between batches stay
+ * visible (#137570).
+ */
+export function readOrComputeAgentRosterFact<T>(
+  cfg: OpenClawConfig,
+  key: string,
+  compute: () => T,
+): T | undefined {
+  const facts = readAgentRosterFacts(cfg);
+  if (!facts) {
+    return undefined;
+  }
+  const derived = (facts.derivedValues ??= new Map<string, unknown>());
+  if (!derived.has(key)) {
+    derived.set(key, compute());
+  }
+  return derived.get(key) as T;
 }
 
 /** Lists valid configured agent entries from config. */

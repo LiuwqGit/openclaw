@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { withAgentRosterFactsBatch } from "../../agents/agent-scope-config.js";
 import { listAgentEntries } from "../../agents/agent-scope.js";
 import { redactChannelStatusSummaryBaseUrl } from "../../channels/account-snapshot-fields.js";
 import { buildChannelAccountSnapshotFromInspection } from "../../channels/account-summary.js";
@@ -145,19 +146,24 @@ export async function buildHealthAgentSummaries(
   { defaultAgentId, ordered }: ReturnType<typeof resolveHealthAgentOrder>,
 ): Promise<AgentHealthSummary[]> {
   const reader = await createHealthSessionStoreReader(ordered.map((entry) => entry.id));
-  return ordered.map((entry) => {
-    const store = reader.read(
-      resolveSessionStorePathCore(cfg.session?.store, { agentId: entry.id }),
-      entry.id,
-    );
-    return {
-      agentId: entry.id,
-      name: entry.name,
-      isDefault: entry.id === defaultAgentId,
-      heartbeat: resolveHeartbeatSummary(cfg, entry.id),
-      sessions: projectHealthSessions(store.path, store),
-    };
-  });
+  // One roster batch per collection: per-agent heartbeat summaries reuse the
+  // entry index and enrollment memo instead of re-walking every configured
+  // agent per agent (#137570).
+  return withAgentRosterFactsBatch(cfg, () =>
+    ordered.map((entry) => {
+      const store = reader.read(
+        resolveSessionStorePathCore(cfg.session?.store, { agentId: entry.id }),
+        entry.id,
+      );
+      return {
+        agentId: entry.id,
+        name: entry.name,
+        isDefault: entry.id === defaultAgentId,
+        heartbeat: resolveHeartbeatSummary(cfg, entry.id),
+        sessions: projectHealthSessions(store.path, store),
+      };
+    }),
+  );
 }
 
 function buildPluginHealthSummary(cfg: OpenClawConfig): PluginHealthSummary | undefined {

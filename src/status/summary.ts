@@ -1,6 +1,7 @@
 // Builds the status summary used by human and JSON status output.
 // It aggregates sessions, tasks, heartbeat, channel summary, and model/runtime metadata.
 
+import { withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { resolveAgentConfig } from "../agents/agent-scope.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
@@ -410,45 +411,50 @@ export async function getStatusSummary(
         )
     : null;
   const agentList = listGatewayAgentsBasic(cfg);
-  const heartbeatAgents: HeartbeatStatus[] = agentList.agents.map((agent) => {
-    const summary = resolveHeartbeatSummaryForAgent(cfg, agent.id);
-    let waitingForRoute = false;
-    if (summary.enabled && (summary.target === "last" || summary.target === "owner")) {
-      const heartbeatSession = resolveHeartbeatSessionKey(
-        cfg,
-        agent.id,
-        summary.session === undefined ? undefined : { session: summary.session },
-      );
-      // Only these enabled targets consume the session route. Keep the probe
-      // read-only so status cannot create, register, or migrate an absent store.
-      const entry = loadExactSessionEntryReadOnly({
+  // One roster batch for the per-agent walk: heartbeat summaries reuse the
+  // entry index and enrollment memo instead of re-walking every configured
+  // agent per agent (#137570).
+  const heartbeatAgents: HeartbeatStatus[] = withAgentRosterFactsBatch(cfg, () =>
+    agentList.agents.map((agent) => {
+      const summary = resolveHeartbeatSummaryForAgent(cfg, agent.id);
+      let waitingForRoute = false;
+      if (summary.enabled && (summary.target === "last" || summary.target === "owner")) {
+        const heartbeatSession = resolveHeartbeatSessionKey(
+          cfg,
+          agent.id,
+          summary.session === undefined ? undefined : { session: summary.session },
+        );
+        // Only these enabled targets consume the session route. Keep the probe
+        // read-only so status cannot create, register, or migrate an absent store.
+        const entry = loadExactSessionEntryReadOnly({
+          agentId: agent.id,
+          storePath: heartbeatSession.storePath,
+          sessionKey: heartbeatSession.sessionKey,
+        })?.entry;
+        const route = deliveryContextFromSession(entry);
+        // Owner status uses the runner's synchronous stage-1 decision.
+        waitingForRoute =
+          summary.target === "last"
+            ? !(route?.channel && route.to)
+            : !hasResolvableHeartbeatOwnerRoute({
+                cfg,
+                agentId: agent.id,
+                entry,
+                heartbeat: {
+                  ...cfg.agents?.defaults?.heartbeat,
+                  ...resolveAgentConfig(cfg, agent.id)?.heartbeat,
+                },
+              });
+      }
+      return {
         agentId: agent.id,
-        storePath: heartbeatSession.storePath,
-        sessionKey: heartbeatSession.sessionKey,
-      })?.entry;
-      const route = deliveryContextFromSession(entry);
-      // Owner status uses the runner's synchronous stage-1 decision.
-      waitingForRoute =
-        summary.target === "last"
-          ? !(route?.channel && route.to)
-          : !hasResolvableHeartbeatOwnerRoute({
-              cfg,
-              agentId: agent.id,
-              entry,
-              heartbeat: {
-                ...cfg.agents?.defaults?.heartbeat,
-                ...resolveAgentConfig(cfg, agent.id)?.heartbeat,
-              },
-            });
-    }
-    return {
-      agentId: agent.id,
-      enabled: summary.enabled,
-      every: summary.every,
-      everyMs: summary.everyMs,
-      waitingForRoute,
-    } satisfies HeartbeatStatus;
-  });
+        enabled: summary.enabled,
+        every: summary.every,
+        everyMs: summary.everyMs,
+        waitingForRoute,
+      } satisfies HeartbeatStatus;
+    }),
+  );
   const channelSummary = needsChannelPlugins
     ? await channelSummaryModuleLoader.load().then(({ buildChannelSummary }) =>
         buildChannelSummary(cfg, {

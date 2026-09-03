@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   listAgentEntries,
   listAgentIds,
+  readOrComputeAgentRosterFact,
   resolveAgentConfig,
 } from "../agents/agent-scope-config.js";
 import { DEFAULT_HEARTBEAT_EVERY } from "../auto-reply/heartbeat.js";
@@ -54,7 +55,7 @@ export function resolveHeartbeatIntervalMs(
   }
 }
 
-export function resolveHeartbeatAgents(cfg: OpenClawConfig): HeartbeatAgent[] {
+function computeHeartbeatAgents(cfg: OpenClawConfig): HeartbeatAgent[] {
   const explicitAgents = listAgentEntries(cfg).filter((entry) => entry.heartbeat);
   if (explicitAgents.length > 0) {
     return explicitAgents
@@ -77,6 +78,21 @@ export function resolveHeartbeatAgents(cfg: OpenClawConfig): HeartbeatAgent[] {
   }
   const agentId = tryResolveAmbientHeartbeatAgentId(cfg);
   return agentId ? [{ agentId, heartbeat: resolveHeartbeatConfig(cfg, agentId) }] : [];
+}
+
+/**
+ * Resolves heartbeat enrollment, memoized per read-only roster batch.
+ *
+ * Health and status summaries call this once per configured agent; the
+ * batch-scoped memo keeps a large fleet's summary O(agents) instead of
+ * re-walking the whole roster per agent (#137570). Callers must not mutate
+ * the returned array. Outside a batch the enrollment is computed directly.
+ */
+export function resolveHeartbeatAgents(cfg: OpenClawConfig): HeartbeatAgent[] {
+  return (
+    readOrComputeAgentRosterFact(cfg, "heartbeatAgents", () => computeHeartbeatAgents(cfg)) ??
+    computeHeartbeatAgents(cfg)
+  );
 }
 
 export function isHeartbeatOwnerUnresolved(cfg: OpenClawConfig): boolean {
