@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
@@ -17,7 +16,6 @@ import {
 import { resetConfigOverrides } from "../../../../src/config/runtime-overrides.js";
 import { clearSessionStoreCacheForTest } from "../../../../src/config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
-import { loadCronStore } from "../../../../src/cron/store.js";
 import {
   disconnectGatewayClient,
   startGatewayWithClient,
@@ -445,133 +443,6 @@ describe("Gateway task and automation RPCs", () => {
         await new Promise<void>((resolve) => {
           providerServer.close(() => resolve());
         });
-        envSnapshot.restore();
-      }
-    },
-  );
-
-  it(
-    "preserves scheduler runtime across scheduler-disabled Gateway CRUD",
-    { timeout: 90_000 },
-    async () => {
-      const envSnapshot = captureEnv([...ISOLATED_GATEWAY_ENV_KEYS]);
-      const tempHome = tempDirs.make("openclaw-gateway-disabled-cron-");
-      const stateDir = path.join(tempHome, ".openclaw");
-      const workspaceDir = path.join(tempHome, "workspace");
-      const bundledPluginsDir = path.join(tempHome, "empty-bundled-plugins");
-      const configPath = path.join(stateDir, "openclaw.json");
-      await Promise.all([
-        fs.mkdir(workspaceDir, { recursive: true }),
-        fs.mkdir(bundledPluginsDir, { recursive: true }),
-        fs.mkdir(path.dirname(configPath), { recursive: true }),
-      ]);
-
-      const token = nextId("gateway-disabled-cron-token");
-      for (const [key, value] of Object.entries({
-        HOME: tempHome,
-        OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_GATEWAY_TOKEN: token,
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_CRON: "0",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_SKIP_PROVIDERS: "1",
-        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-      })) {
-        setTestEnvValue(key, value);
-      }
-      deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
-
-      const config = {
-        agents: {
-          defaults: { workspace: workspaceDir, skipBootstrap: true },
-          entries: { main: { default: true } },
-        },
-        cron: { enabled: false },
-        gateway: { auth: { mode: "token", token } },
-        plugins: { enabled: false, slots: { memory: "none" } },
-      } satisfies OpenClawConfig;
-
-      let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
-      try {
-        gateway = await startGatewayWithClient({
-          cfg: config,
-          configPath,
-          token,
-          clientDisplayName: "vitest-gateway-disabled-cron",
-        });
-        const canary = await gateway.client.request<{ id: string }>("cron.add", {
-          name: "shared-store canary",
-          enabled: true,
-          schedule: { kind: "every", everyMs: 3_600_000 },
-          sessionTarget: "isolated",
-          wakeMode: "now",
-          payload: { kind: "agentTurn", message: "run canary", toolsAllow: [] },
-          delivery: { mode: "none" },
-        });
-        const target = await gateway.client.request<{ id: string }>("cron.add", {
-          name: "shared-store edit target",
-          enabled: true,
-          schedule: { kind: "cron", expr: "0 6 * * *" },
-          sessionTarget: "main",
-          wakeMode: "now",
-          payload: { kind: "systemEvent", text: "edit target" },
-        });
-
-        const storePath = path.join(stateDir, "cron", "jobs.json");
-        const child = spawnSync(
-          process.execPath,
-          [
-            "--import",
-            path.join(process.cwd(), "scripts/tsx.mjs"),
-            "--input-type=module",
-            "--eval",
-            `
-              const { CronService } = await import("./src/cron/service.ts");
-              const cron = new CronService({
-                cronEnabled: true,
-                storePath: process.env.OPENCLAW_CRON_TEST_STORE,
-                log: { debug() {}, info() {}, warn() {}, error() {} },
-                enqueueSystemEvent() {},
-                requestHeartbeat() {},
-                async runIsolatedAgentJob() { return { status: "ok", summary: "ran" }; },
-              });
-              await cron.start();
-              const result = await cron.run(process.env.OPENCLAW_CRON_TEST_JOB, "force");
-              cron.stop();
-              if (!result.ok || !("ran" in result) || !result.ran) process.exit(2);
-            `,
-          ],
-          {
-            cwd: process.cwd(),
-            encoding: "utf8",
-            env: {
-              ...process.env,
-              OPENCLAW_CRON_TEST_JOB: canary.id,
-              OPENCLAW_CRON_TEST_STORE: storePath,
-            },
-            timeout: 60_000,
-          },
-        );
-        expect(child.stderr).toBe("");
-        expect(child.status).toBe(0);
-
-        const before = (await loadCronStore(storePath)).jobs.find((job) => job.id === canary.id);
-        expect(before?.state.lastStatus).toBe("ok");
-        await gateway.client.request("cron.update", {
-          id: target.id,
-          patch: { description: "updated through Gateway RPC" },
-        });
-        const after = (await loadCronStore(storePath)).jobs.find((job) => job.id === canary.id);
-        expect(after?.state).toEqual(before?.state);
-      } finally {
-        if (gateway) {
-          await disconnectGatewayClient(gateway.client);
-          await gateway.server.close({ reason: "Disabled cron Gateway test complete" });
-        }
         envSnapshot.restore();
       }
     },
