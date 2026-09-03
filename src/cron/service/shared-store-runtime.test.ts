@@ -3,7 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { CronService } from "../service.js";
 import { createCronStoreHarness } from "../service.test-harness.js";
-import { loadCronStore, saveCronStore } from "../store.js";
+import { loadCronStore, saveCronJobsStoreChanges, saveCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
 
 const { makeStorePath } = createCronStoreHarness({ prefix: "cron-shared-runtime-" });
@@ -198,5 +198,26 @@ describe("scheduler-disabled shared-store mutations", () => {
     expect(persisted?.name).toBe("peer-update");
     expect(persisted?.delivery).toBeUndefined();
     cron.stop();
+  });
+
+  it("rejects deleting a row whose config a peer rewrote", async () => {
+    const { storePath } = await makeStorePath();
+    const cron = createDisabledService(storePath);
+    const target = await addTarget(cron, "delete-conflict");
+    cron.stop();
+    const baseline = await loadCronStore(storePath);
+    const peerStore = structuredClone(baseline);
+    const peerTarget = peerStore.jobs.find((job) => job.id === target.id);
+    if (!peerTarget) {
+      throw new Error("missing peer delete target");
+    }
+    peerTarget.description = "peer rewrite";
+    await saveCronStore(storePath, peerStore);
+
+    await expect(
+      saveCronJobsStoreChanges(storePath, baseline, { version: 1, jobs: [] }),
+    ).rejects.toThrow("changed after it was read");
+    const persisted = (await loadCronStore(storePath)).jobs.find((job) => job.id === target.id);
+    expect(persisted?.description).toBe("peer rewrite");
   });
 });

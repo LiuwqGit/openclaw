@@ -370,16 +370,22 @@ export async function saveCronJobsStoreChanges(
         const before = previousById.get(jobId);
         const after = nextById.get(jobId);
         const current = currentById.get(jobId);
+        if (
+          before &&
+          current &&
+          resolveCronJobConfigRevision(current) !== resolveCronJobConfigRevision(before)
+        ) {
+          throw new CronJobsStoreChangedError(resolvedStorePath);
+        }
         if (!after) {
-          deleteCronJobRowInDatabase(db, storeKey, jobId);
+          if (current) {
+            deleteCronJobRowInDatabase(db, storeKey, jobId);
+          }
           currentById.delete(jobId);
           continue;
         }
         if (before) {
           if (!current) {
-            throw new CronJobsStoreChangedError(resolvedStorePath);
-          }
-          if (resolveCronJobConfigRevision(current) !== resolveCronJobConfigRevision(before)) {
             throw new CronJobsStoreChangedError(resolvedStorePath);
           }
         } else if (current && opts?.preserveConcurrentAdds) {
