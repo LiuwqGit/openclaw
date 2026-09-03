@@ -155,6 +155,30 @@ test("rejects malformed direct actions before requiring a session id", async () 
   expect(result.details).toMatchObject({ status: "failed" });
 });
 
+test.skipIf(process.platform === "win32")(
+  "renders the no-output placeholder before a real foreground nonzero exit",
+  async () => {
+    const execTool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      allowBackground: false,
+      timeoutSec: 10,
+    });
+    const result = await execTool.execute("foreground-empty-nonzero", {
+      command: "sh -c 'exit 1'",
+    });
+    const expected = "(no output)\n\n(Command exited with code 1)";
+
+    expect(textContent(result)).toBe(expected);
+    expect(result.details).toMatchObject({
+      status: "completed",
+      exitCode: 1,
+      aggregated: expected,
+    });
+  },
+);
+
 test.skipIf(process.platform === "win32").each([
   { name: "quiet successful exit", exitCode: 0, output: "", expectsNotification: false },
   { name: "quiet nonzero exit", exitCode: 7, output: "", expectsNotification: true },
