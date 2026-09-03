@@ -20,4 +20,27 @@ describe("formatStrictJsonParseFailure", () => {
     expect(message).toContain(`${"x".repeat(44)}...`);
     expect(message).not.toContain("\uD83D");
   });
+
+  it("suggests config patch --file for quote-stripped array values", () => {
+    const message = formatStrictJsonParseFailure({
+      value: "[telegram:123456]",
+      cause: "Unexpected token 't', ...",
+    });
+
+    expect(message).toContain("Windows PowerShell");
+    expect(message).toContain("openclaw config patch --file");
+  });
+
+  it("suggests config patch --file for quote-stripped object values", () => {
+    const message = formatStrictJsonParseFailure({ value: "{mode:token}", cause: "bad token" });
+
+    expect(message).toContain("openclaw config patch --file");
+  });
+
+  it("does not suggest a shell hint when the value still contains quotes", () => {
+    const message = formatStrictJsonParseFailure({ value: "{mode:'token'}", cause: "bad token" });
+
+    expect(message).not.toContain("Windows PowerShell");
+    expect(message).not.toContain("openclaw config patch --file");
+  });
 });

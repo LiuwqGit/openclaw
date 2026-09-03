@@ -2047,6 +2047,17 @@ describe("config cli", () => {
       expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
     });
 
+    it("suggests config patch --file when strict parsing receives a quote-stripped array", async () => {
+      await expect(
+        runConfigSet("commands.ownerAllowFrom", "[telegram:123456]", "--strict-json"),
+      ).rejects.toThrow(ExitError);
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expectErrorIncludes('Could not parse "[telegram:123456]" as JSON for --strict-json.');
+      expectErrorIncludes("Windows PowerShell");
+      expectErrorIncludes("openclaw config patch --file");
+    });
+
     it("accepts --strict-json with batch mode and applies batch payload", async () => {
       const resolved: OpenClawConfig = { gateway: { port: 18789 } };
       setSnapshot(resolved, resolved);
