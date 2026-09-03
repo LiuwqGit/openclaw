@@ -23,6 +23,11 @@ function createContext(
   };
 }
 
+const validOptions = [
+  { label: "A", description: "First option." },
+  { label: "B", description: "Second option." },
+];
+
 const input = {
   questions: [
     {
@@ -123,19 +128,107 @@ describe("Claude Agent SDK user input adapter", () => {
     });
   });
 
-  it("rejects malformed questions before invoking the host", async () => {
+  it("rejects malformed questions before invoking the host, naming the failed field", async () => {
     const requestUserInput = vi.fn();
     const authorizer = createClaudeAgentSdkUserInputAuthorizer(createContext(requestUserInput));
 
-    await expect(
-      authorizer.authorize({
-        input: { questions: [{ header: "Too long for Claude", question: "Missing options" }] },
-        signal: new AbortController().signal,
-      }),
-    ).resolves.toEqual({
+    const result = await authorizer.authorize({
+      input: { questions: [{ header: "Too long for Claude", question: "Missing options" }] },
+      signal: new AbortController().signal,
+    });
+
+    expect(result).toEqual({
       behavior: "deny",
-      message: "OpenClaw rejected malformed Claude user questions.",
+      message:
+        "OpenClaw rejected malformed Claude user questions: questions[0].header must be at most 12 characters.",
     });
     expect(requestUserInput).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ["missing questions array", {}, "questions must be an array of 1 to 4 questions"],
+    [
+      "too many questions",
+      {
+        questions: [
+          { header: "A", question: "Q?", options: validOptions, multiSelect: false },
+          { header: "B", question: "Q?", options: validOptions, multiSelect: false },
+          { header: "C", question: "Q?", options: validOptions, multiSelect: false },
+          { header: "D", question: "Q?", options: validOptions, multiSelect: false },
+          { header: "E", question: "Q?", options: validOptions, multiSelect: false },
+        ],
+      },
+      "questions must be an array of 1 to 4 questions",
+    ],
+    [
+      "non-boolean multiSelect",
+      {
+        questions: [{ header: "Stack", question: "Q?", options: validOptions, multiSelect: "no" }],
+      },
+      "questions[0].multiSelect must be a boolean",
+    ],
+    [
+      "too few options",
+      {
+        questions: [
+          {
+            header: "Stack",
+            question: "Q?",
+            options: [{ label: "A", description: "a" }],
+            multiSelect: false,
+          },
+        ],
+      },
+      "questions[0].options must be an array of 2 to 4 options",
+    ],
+    [
+      "empty option description",
+      {
+        questions: [
+          {
+            header: "Stack",
+            question: "Q?",
+            options: [
+              { label: "A", description: "a" },
+              { label: "B", description: "" },
+            ],
+            multiSelect: false,
+          },
+        ],
+      },
+      "questions[0].options[1].description must not be empty",
+    ],
+    [
+      "missing option label",
+      {
+        questions: [
+          {
+            header: "Stack",
+            question: "Q?",
+            options: validOptions.map((option) => ({ description: option.description })),
+            multiSelect: false,
+          },
+        ],
+      },
+      "questions[0].options[0].label must be a string",
+    ],
+    ["non-record question", { questions: ["not a question"] }, "questions[0] must be an object"],
+  ])(
+    "reports the failed constraint for %s without echoing payload text",
+    async (_case, malformedInput, expectedDetail) => {
+      const requestUserInput = vi.fn();
+      const authorizer = createClaudeAgentSdkUserInputAuthorizer(createContext(requestUserInput));
+
+      const result = await authorizer.authorize({
+        input: malformedInput as Record<string, unknown>,
+        signal: new AbortController().signal,
+      });
+
+      expect(result).toEqual({
+        behavior: "deny",
+        message: `OpenClaw rejected malformed Claude user questions: ${expectedDetail}.`,
+      });
+      expect(requestUserInput).not.toHaveBeenCalled();
+    },
+  );
 });
