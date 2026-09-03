@@ -26,6 +26,10 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
+// Every pair JetBrains Mono ligates, each closed by the trailing space that
+// triggers the corruption reported in issue #137473.
+const COMPOSER_LIGATURE_SEQUENCE = ">= ... -> => != <= :: ";
+
 const suite = createControlUiE2eSuite({
   name: "Control UI theme typography",
   trackBrowserContexts: true,
@@ -301,14 +305,14 @@ suite.define(() => {
     },
   );
 
-  // JetBrains Mono routes through --font-body in both themes, so the native
-  // composer textarea inherits contextual ligatures. Chromium mispaints those
-  // at the caret boundary (issue #137473): typing a trailing space after `>=`
-  // or `...` makes parts of the already-typed sequence vanish while
-  // textarea.value stays correct. The composer opts out of contextual
-  // ligatures; rendered chat keeps them.
+  // JetBrains Mono routes through --font-body in both themes, so native text
+  // controls inherit contextual ligatures. Typing into one then corrupts the
+  // already-typed glyphs (issue #137473) and the damage survives caret moves
+  // and blur, while the value stays correct — so the assertion is that typing a
+  // string paints what that same string paints without incremental input.
+  // Rendered chat is not a text control and keeps its ligatures.
   it.each(["crt", "phosphor"])(
-    "keeps caret-adjacent mono input legible in the %s composer",
+    "paints typed operator sequences like their own value in the %s composer",
     async (theme) => {
       const timestamp = Date.now();
       const { page } = await openThemedChat(theme, "dark", {
@@ -330,21 +334,38 @@ suite.define(() => {
 
       const textarea = page.locator(".agent-chat__composer-combobox textarea");
       await expect.poll(() => textarea.isEditable()).toBe(true);
+      await page.evaluate(() => document.fonts.ready);
       await textarea.click();
-      // The reported failure sequence: an operator sequence followed by a
-      // trailing space at the caret.
-      await textarea.pressSequentially(">= ");
-      await textarea.pressSequentially("... ");
-      expect(await textarea.inputValue()).toBe(">= ... ");
+      // The reported failure sequence: operator pairs each closed by a trailing
+      // space at the caret.
+      await textarea.pressSequentially(COMPOSER_LIGATURE_SEQUENCE);
+      expect(await textarea.inputValue()).toBe(COMPOSER_LIGATURE_SEQUENCE);
+      // Blur first: the corruption outlives focus, and an unfocused control
+      // paints no caret, so the two shots differ only in how the text arrived.
+      await textarea.evaluate((element) => (element as HTMLTextAreaElement).blur());
+      const typedPixels = await textarea.screenshot();
 
-      const report = await page.evaluate(async () => {
-        await document.fonts.ready;
+      await textarea.evaluate((element, sequence) => {
+        const field = element as HTMLTextAreaElement;
+        field.value = "";
+        field.dispatchEvent(new Event("input", { bubbles: true }));
+        field.value = sequence;
+        field.dispatchEvent(new Event("input", { bubbles: true }));
+        field.blur();
+      }, COMPOSER_LIGATURE_SEQUENCE);
+      await expect.poll(() => textarea.inputValue()).toBe(COMPOSER_LIGATURE_SEQUENCE);
+      const valuePixels = await textarea.screenshot();
+
+      // Typing must paint what the value itself paints. On an unfixed control
+      // the typed shot drops glyphs the value shot renders, and these differ.
+      expect(Buffer.compare(typedPixels, valuePixels)).toBe(0);
+
+      const report = await page.evaluate(() => {
         const composer = document.querySelector<HTMLTextAreaElement>(
           ".agent-chat__composer-combobox textarea",
         );
         const chat = document.querySelector(".chat-text");
         return {
-          composerLigatures: composer ? getComputedStyle(composer).fontVariantLigatures : null,
           chatLigatures: chat ? getComputedStyle(chat).fontVariantLigatures : null,
           composerFontFamily: composer
             ? (getComputedStyle(composer).fontFamily.split(",")[0] ?? "")
@@ -353,12 +374,9 @@ suite.define(() => {
             : null,
         };
       });
-      // The composer is still in the theme's mono face…
+      // The composer is still in the theme's mono face, and the transcript is
+      // untouched — the opt-out is scoped to controls text is edited in.
       expect(report.composerFontFamily).toBe("JetBrains Mono");
-      // …but contextual ligatures are off there, so the caret-adjacent paint
-      // bug cannot drop glyphs of typed operator sequences.
-      expect(report.composerLigatures).toMatch(/no-contextual|none/u);
-      // Rendered chat keeps the theme's ligature rendering.
       expect(report.chatLigatures).toBe("normal");
     },
   );

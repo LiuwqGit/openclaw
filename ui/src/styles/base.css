@@ -936,9 +936,14 @@ input[type="radio"] {
   accent-color: var(--accent);
 }
 
+/* Every surface text is edited in. Typing into one whose face carries `calt`
+   corrupts the already-typed glyphs and the damage survives caret moves and
+   blur; important because feature-local `font:` shorthands reset font-variant.
+   Static text keeps its ligatures. */
 input,
 textarea,
 [contenteditable]:not([contenteditable="false"]) {
+  font-variant-ligatures: no-contextual !important;
   user-select: text;
 }
 
