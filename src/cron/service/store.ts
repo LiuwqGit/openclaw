@@ -292,8 +292,8 @@ export async function ensureLoaded(
   }
 }
 
-/** Loads the authoritative mutation baseline without discarding enabled-scheduler transients. */
-export async function ensureLoadedForMutation(state: CronServiceState): Promise<void> {
+/** Loads authoritative passive state without discarding enabled-scheduler transients. */
+export async function ensureLoadedForOperation(state: CronServiceState): Promise<void> {
   await ensureLoaded(state, {
     forceReload: !state.deps.cronEnabled,
     skipRecompute: true,
