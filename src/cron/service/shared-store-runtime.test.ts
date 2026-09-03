@@ -1,821 +1,202 @@
-// Cron shared-store regression tests: a scheduler-disabled gateway's CRUD must
-// not clobber runtime state a separate scheduler gateway wrote to the same
-// SQLite state store, and must apply its edits to the current shared rows (#131401).
 import { spawnSync } from "node:child_process";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
-import { describe, expect, it, vi } from "vitest";
-import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
-import { withEnvAsync } from "../../test-utils/env.js";
-import { setupCronServiceSuite } from "../service.test-harness.js";
-import { loadCronJobsStoreWithConfigJobs, saveCronStore } from "../store.js";
-import { cronStoreKey } from "../store/key.js";
-import {
-  deleteCronJobRowInDatabase,
-  updateCronRuntimeRows,
-  upsertCronJobRow,
-} from "../store/row-codec.js";
+import { describe, expect, it } from "vitest";
+import { CronService } from "../service.js";
+import { createCronStoreHarness } from "../service.test-harness.js";
+import { loadCronStore, saveCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
-import {
-  remove,
-  removeAgentJobsTransactional,
-  update,
-  updateWithPrecondition,
-} from "./ops-mutations.js";
-import { createCronServiceState } from "./state.js";
-import { ensureLoaded } from "./store.js";
 
-const { logger, makeStorePath } = setupCronServiceSuite({
-  prefix: "cron-shared-store-runtime",
-});
+const { makeStorePath } = createCronStoreHarness({ prefix: "cron-shared-runtime-" });
 
-const SEED_UPDATED_AT_MS = 1_000;
-const FOREIGN_CONFIG_UPDATED_AT_MS = 5_000;
-const FOREIGN_RUNTIME_UPDATED_AT_MS = 8_000;
-const FOREIGN_NEXT_RUN_AT_MS = 9_000;
+const log = { debug() {}, info() {}, warn() {}, error() {} };
 
-function createSharedStoreJob(params?: {
-  id?: string;
-  description?: string;
-  agentId?: string;
-}): CronJob {
-  return {
-    id: params?.id ?? "shared-job",
-    name: params?.id ?? "shared-job",
+function createDisabledService(storePath: string): CronService {
+  return new CronService({
+    cronEnabled: false,
+    storePath,
+    log,
+    enqueueSystemEvent() {},
+    requestHeartbeat() {},
+    async runIsolatedAgentJob() {
+      return { status: "ok" as const, summary: "unused" };
+    },
+  });
+}
+
+async function addCanary(cron: CronService, suffix: string): Promise<CronJob> {
+  return await cron.add({
+    name: `canary-${suffix}`,
     enabled: true,
-    createdAtMs: 0,
-    updatedAtMs: SEED_UPDATED_AT_MS,
+    schedule: {
+      kind: "every",
+      everyMs: 86_400_000,
+      anchorMs: Date.now() + 86_400_000,
+    },
+    sessionTarget: "isolated",
+    wakeMode: "next-heartbeat",
+    payload: { kind: "agentTurn", message: "run canary" },
+  });
+}
+
+async function addTarget(cron: CronService, suffix: string): Promise<CronJob> {
+  return await cron.add({
+    name: `target-${suffix}`,
+    enabled: true,
     schedule: { kind: "cron", expr: "0 6 * * *", tz: "UTC" },
     sessionTarget: "main",
-    wakeMode: "now",
-    payload: { kind: "systemEvent", text: "tick" },
-    ...(params?.agentId === undefined ? {} : { agentId: params.agentId }),
-    ...(params?.description === undefined ? {} : { description: params.description }),
-    state: {},
-  };
-}
-
-function createGatewayState(storePath: string, cronEnabled: boolean) {
-  return createCronServiceState({
-    storePath,
-    cronEnabled,
-    log: logger,
-    nowMs: () => Date.now(),
-    enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
-    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    wakeMode: "next-heartbeat",
+    payload: { kind: "systemEvent", text: "target" },
   });
 }
 
-/** Commits runtime rows the way a separate scheduler gateway process would,
- *  without bumping this process's revision map. */
-function commitForeignRuntimeRows(storePath: string, jobs: CronJob[]) {
-  const storeKey = cronStoreKey(path.resolve(storePath));
-  runOpenClawStateWriteTransaction(({ db }) => {
-    updateCronRuntimeRows(db, storeKey, { version: 1, jobs });
+const schedulerChildScript = String.raw`
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+const runs = JSON.parse(process.env.OPENCLAW_CRON_SHARED_STORE_RUNS);
+const { CronService } = await import(pathToFileURL(path.join(process.cwd(), "src/cron/service.ts")).href);
+const log = { debug() {}, info() {}, warn() {}, error() {} };
+for (const run of runs) {
+  const cron = new CronService({
+    cronEnabled: true,
+    storePath: run.storePath,
+    log,
+    enqueueSystemEvent() {},
+    requestHeartbeat() {},
+    async runIsolatedAgentJob() {
+      return { status: "ok", summary: "scheduler child completed" };
+    },
   });
-}
-
-/** Commits one full row the way a separate gateway's CRUD process would. */
-function commitForeignJobRow(storePath: string, job: CronJob, sortOrder: number) {
-  const storeKey = cronStoreKey(path.resolve(storePath));
-  runOpenClawStateWriteTransaction(({ db }) => {
-    upsertCronJobRow(db, storeKey, job, sortOrder);
-  });
-}
-
-/** Deletes one row the way a separate gateway's CRUD process would. */
-function deleteForeignJobRow(storePath: string, jobId: string) {
-  const storeKey = cronStoreKey(path.resolve(storePath));
-  runOpenClawStateWriteTransaction(({ db }) => {
-    deleteCronJobRowInDatabase(db, storeKey, jobId);
-  });
-}
-
-async function loadPersistedJob(storePath: string, jobId: string) {
-  const loaded = await loadCronJobsStoreWithConfigJobs(storePath);
-  const job = loaded.store.jobs.find((entry) => entry.id === jobId);
-  if (!job) {
-    throw new Error(`missing persisted job ${jobId}`);
+  await cron.start();
+  const result = await cron.run(run.jobId, "force");
+  cron.stop();
+  if (!result.ok || !("ran" in result) || result.ran !== true) {
+    throw new Error("scheduler child did not run " + run.jobId + ": " + JSON.stringify(result));
   }
-  return job;
 }
+`;
 
-describe("shared SQLite cron store across gateways", () => {
-  it("keeps newer foreign runtime state when a scheduler-disabled gateway edits an unrelated job", async () => {
-    const { storePath } = await makeStorePath();
-    const jobA = createSharedStoreJob({ id: "shared-job-a" });
-    const jobB = createSharedStoreJob({ id: "shared-job-b" });
-    await saveCronStore(storePath, { version: 1, jobs: [jobA, jobB] });
+describe("scheduler-disabled shared-store mutations", () => {
+  it("cannot overwrite runtime committed by a scheduler process", async () => {
+    const cases = await Promise.all(
+      ["add", "update", "remove", "same-job-update", "state-update"].map(async (operation) => {
+        const { storePath } = await makeStorePath();
+        const cron = createDisabledService(storePath);
+        await cron.start();
+        const canary = await addCanary(cron, operation);
+        const target = ["update", "remove"].includes(operation)
+          ? await addTarget(cron, operation)
+          : undefined;
+        return { canary, cron, operation, storePath, target };
+      }),
+    );
 
-    const managementGateway = createGatewayState(storePath, false);
-    await ensureLoaded(managementGateway, { skipRecompute: true });
-
-    // A separate scheduler gateway advances job A's runtime state in the
-    // shared store after the management gateway loaded its stale snapshot.
-    commitForeignRuntimeRows(storePath, [
+    const child = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        path.join(process.cwd(), "scripts/tsx.mjs"),
+        "--input-type=module",
+        "--eval",
+        schedulerChildScript,
+      ],
       {
-        ...jobA,
-        updatedAtMs: FOREIGN_RUNTIME_UPDATED_AT_MS,
-        state: {
-          nextRunAtMs: FOREIGN_NEXT_RUN_AT_MS,
-          lastRunAtMs: FOREIGN_RUNTIME_UPDATED_AT_MS,
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_CRON_SHARED_STORE_RUNS: JSON.stringify(
+            cases.map(({ canary, storePath }) => ({ jobId: canary.id, storePath })),
+          ),
         },
-      },
-    ]);
-
-    await update(managementGateway, "shared-job-b", {
-      description: "edited by management gateway",
-    });
-
-    const persistedJobA = await loadPersistedJob(storePath, "shared-job-a");
-    expect(persistedJobA.state.nextRunAtMs).toBe(FOREIGN_NEXT_RUN_AT_MS);
-    expect(persistedJobA.state.lastRunAtMs).toBe(FOREIGN_RUNTIME_UPDATED_AT_MS);
-    expect(persistedJobA.updatedAtMs).toBe(FOREIGN_RUNTIME_UPDATED_AT_MS);
-
-    const persistedJobB = await loadPersistedJob(storePath, "shared-job-b");
-    expect(persistedJobB.description).toBe("edited by management gateway");
-  });
-
-  it("preserves config-identical rows' newer runtime state during a full store rewrite", async () => {
-    const { storePath } = await makeStorePath();
-    const jobA = createSharedStoreJob({ id: "shared-job-a" });
-    const jobB = createSharedStoreJob({ id: "shared-job-b" });
-    await saveCronStore(storePath, { version: 1, jobs: [jobA, jobB] });
-
-    // Even an enabled gateway keeps its in-process snapshot when the foreign
-    // commit does not touch this process's revision map.
-    const gateway = createGatewayState(storePath, true);
-    await ensureLoaded(gateway, { skipRecompute: true });
-
-    commitForeignRuntimeRows(storePath, [
-      {
-        ...jobA,
-        updatedAtMs: FOREIGN_RUNTIME_UPDATED_AT_MS,
-        state: {
-          nextRunAtMs: FOREIGN_NEXT_RUN_AT_MS,
-          lastRunAtMs: FOREIGN_RUNTIME_UPDATED_AT_MS,
-        },
-      },
-    ]);
-
-    await update(gateway, "shared-job-b", {
-      description: "edited by gateway",
-    });
-
-    const persistedJobA = await loadPersistedJob(storePath, "shared-job-a");
-    expect(persistedJobA.state.nextRunAtMs).toBe(FOREIGN_NEXT_RUN_AT_MS);
-    expect(persistedJobA.state.lastRunAtMs).toBe(FOREIGN_RUNTIME_UPDATED_AT_MS);
-    expect(persistedJobA.updatedAtMs).toBe(FOREIGN_RUNTIME_UPDATED_AT_MS);
-  });
-
-  it("applies scheduler-disabled CRUD to current shared rows instead of a stale snapshot", async () => {
-    const { storePath } = await makeStorePath();
-    const jobB = createSharedStoreJob({ id: "shared-job-b" });
-    await saveCronStore(storePath, { version: 1, jobs: [jobB] });
-
-    const managementGateway = createGatewayState(storePath, false);
-    await ensureLoaded(managementGateway, { skipRecompute: true });
-
-    // A separate gateway edits the same job's config after the snapshot was taken.
-    commitForeignJobRow(
-      storePath,
-      { ...jobB, description: "foreign edit", updatedAtMs: FOREIGN_CONFIG_UPDATED_AT_MS },
-      0,
-    );
-
-    await update(managementGateway, "shared-job-b", {
-      name: "renamed by management gateway",
-    });
-
-    const persistedJobB = await loadPersistedJob(storePath, "shared-job-b");
-    expect(persistedJobB.name).toBe("renamed by management gateway");
-    expect(persistedJobB.description).toBe("foreign edit");
-    expect(persistedJobB.updatedAtMs).toBeGreaterThan(FOREIGN_CONFIG_UPDATED_AT_MS);
-  });
-
-  it("preserves scheduler runtime committed between reload and write for the edited job", async () => {
-    const { storePath } = await makeStorePath();
-    const jobB = createSharedStoreJob({ id: "shared-job-b" });
-    await saveCronStore(storePath, { version: 1, jobs: [jobB] });
-
-    const managementGateway = createGatewayState(storePath, false);
-    await ensureLoaded(managementGateway, { skipRecompute: true });
-
-    // The precondition runs after the mutation-time reload but before the
-    // write transaction, so a scheduler commit landing in that interval is a
-    // same-job runtime update newer than the reloaded snapshot.
-    await updateWithPrecondition(
-      managementGateway,
-      "shared-job-b",
-      { name: "renamed by management gateway" },
-      async () => {
-        commitForeignRuntimeRows(storePath, [
-          {
-            ...jobB,
-            updatedAtMs: FOREIGN_RUNTIME_UPDATED_AT_MS,
-            state: {
-              nextRunAtMs: FOREIGN_NEXT_RUN_AT_MS,
-              lastRunAtMs: FOREIGN_RUNTIME_UPDATED_AT_MS,
-            },
-          },
-        ]);
+        timeout: 60_000,
       },
     );
+    expect(child.stderr).toBe("");
+    expect(child.status).toBe(0);
 
-    const persistedJobB = await loadPersistedJob(storePath, "shared-job-b");
-    expect(persistedJobB.name).toBe("renamed by management gateway");
-    expect(persistedJobB.state.nextRunAtMs).toBe(FOREIGN_NEXT_RUN_AT_MS);
-    expect(persistedJobB.state.lastRunAtMs).toBe(FOREIGN_RUNTIME_UPDATED_AT_MS);
-    expect(persistedJobB.updatedAtMs).toBe(FOREIGN_RUNTIME_UPDATED_AT_MS);
-  });
+    for (const testCase of cases) {
+      const before = (await loadCronStore(testCase.storePath)).jobs.find(
+        (job) => job.id === testCase.canary.id,
+      );
+      expect(before?.state.lastStatus).toBe("ok");
+      expect(before?.state.lastRunAtMs).toEqual(expect.any(Number));
 
-  it("lets a scheduling edit recompute runtime instead of keeping foreign runtime", async () => {
-    const { storePath } = await makeStorePath();
-    const jobB = createSharedStoreJob({ id: "shared-job-b" });
-    await saveCronStore(storePath, { version: 1, jobs: [jobB] });
-
-    const managementGateway = createGatewayState(storePath, false);
-    await ensureLoaded(managementGateway, { skipRecompute: true });
-
-    await updateWithPrecondition(
-      managementGateway,
-      "shared-job-b",
-      { schedule: { kind: "cron", expr: "0 7 * * *", tz: "UTC" } },
-      async () => {
-        commitForeignRuntimeRows(storePath, [
-          {
-            ...jobB,
-            updatedAtMs: FOREIGN_RUNTIME_UPDATED_AT_MS,
-            state: {
-              nextRunAtMs: FOREIGN_NEXT_RUN_AT_MS,
-              lastRunAtMs: FOREIGN_RUNTIME_UPDATED_AT_MS,
-            },
-          },
-        ]);
-      },
-    );
-
-    // The new schedule owns scheduling state: its recomputed next run replaces
-    // the stale slot the scheduler wrote under the previous schedule.
-    const persistedJobB = await loadPersistedJob(storePath, "shared-job-b");
-    expect(persistedJobB.schedule).toEqual({ kind: "cron", expr: "0 7 * * *", tz: "UTC" });
-    expect(persistedJobB.state.nextRunAtMs).not.toBe(FOREIGN_NEXT_RUN_AT_MS);
-    expect(persistedJobB.updatedAtMs).toBeGreaterThan(FOREIGN_RUNTIME_UPDATED_AT_MS);
-  });
-
-  it("detects equal-timestamp foreign runtime commits by comparing state content", async () => {
-    const { storePath } = await makeStorePath();
-    const jobB = createSharedStoreJob({ id: "shared-job-b" });
-    await saveCronStore(storePath, { version: 1, jobs: [jobB] });
-
-    const managementGateway = createGatewayState(storePath, false);
-    await ensureLoaded(managementGateway, { skipRecompute: true });
-
-    await updateWithPrecondition(
-      managementGateway,
-      "shared-job-b",
-      { name: "renamed by management gateway" },
-      async () => {
-        // The foreign runtime commit carries the same runtime timestamp as the
-        // reload baseline; only its state content differs.
-        commitForeignRuntimeRows(storePath, [
-          {
-            ...jobB,
-            updatedAtMs: SEED_UPDATED_AT_MS,
-            state: {
-              nextRunAtMs: FOREIGN_NEXT_RUN_AT_MS,
-              lastRunAtMs: SEED_UPDATED_AT_MS,
-            },
-          },
-        ]);
-      },
-    );
-
-    const persistedJobB = await loadPersistedJob(storePath, "shared-job-b");
-    expect(persistedJobB.name).toBe("renamed by management gateway");
-    expect(persistedJobB.state.nextRunAtMs).toBe(FOREIGN_NEXT_RUN_AT_MS);
-    expect(persistedJobB.state.lastRunAtMs).toBe(SEED_UPDATED_AT_MS);
-  });
-
-  it("hydrates preserved foreign runtime into the service state", async () => {
-    const { storePath } = await makeStorePath();
-    const jobB = createSharedStoreJob({ id: "shared-job-b" });
-    await saveCronStore(storePath, { version: 1, jobs: [jobB] });
-
-    const managementGateway = createGatewayState(storePath, false);
-    await ensureLoaded(managementGateway, { skipRecompute: true });
-
-    const updated = await updateWithPrecondition(
-      managementGateway,
-      "shared-job-b",
-      { name: "renamed by management gateway" },
-      async () => {
-        commitForeignRuntimeRows(storePath, [
-          {
-            ...jobB,
-            updatedAtMs: FOREIGN_RUNTIME_UPDATED_AT_MS,
-            state: {
-              nextRunAtMs: FOREIGN_NEXT_RUN_AT_MS,
-              lastRunAtMs: FOREIGN_RUNTIME_UPDATED_AT_MS,
-            },
-          },
-        ]);
-      },
-    );
-
-    // The update response and the in-memory service store both reflect the
-    // preserved foreign runtime instead of the stale snapshot values.
-    expect(updated.state.nextRunAtMs).toBe(FOREIGN_NEXT_RUN_AT_MS);
-    const inMemoryJob = managementGateway.store?.jobs.find((job) => job.id === "shared-job-b");
-    expect(inMemoryJob?.state.nextRunAtMs).toBe(FOREIGN_NEXT_RUN_AT_MS);
-    expect(inMemoryJob?.state.lastRunAtMs).toBe(FOREIGN_RUNTIME_UPDATED_AT_MS);
-  });
-
-  it("keeps explicitly patched runtime fields instead of the foreign row", async () => {
-    const { storePath } = await makeStorePath();
-    const jobB = createSharedStoreJob({ id: "shared-job-b" });
-    await saveCronStore(storePath, { version: 1, jobs: [jobB] });
-
-    const managementGateway = createGatewayState(storePath, false);
-    await ensureLoaded(managementGateway, { skipRecompute: true });
-
-    await updateWithPrecondition(
-      managementGateway,
-      "shared-job-b",
-      { name: "renamed", state: { lastRunAtMs: 5555, lastRunStatus: "ok" } },
-      async () => {
-        commitForeignRuntimeRows(storePath, [
-          {
-            ...jobB,
-            updatedAtMs: FOREIGN_RUNTIME_UPDATED_AT_MS,
-            state: { nextRunAtMs: FOREIGN_NEXT_RUN_AT_MS, lastRunAtMs: 8000 },
-          },
-        ]);
-      },
-    );
-
-    // An explicit state patch owns the row's runtime: the foreign row must not
-    // silently replace the caller-requested fields.
-    const persistedJobB = await loadPersistedJob(storePath, "shared-job-b");
-    expect(persistedJobB.state.lastRunAtMs).toBe(5555);
-    expect(persistedJobB.state.lastRunStatus).toBe("ok");
-    expect(persistedJobB.state.nextRunAtMs).not.toBe(FOREIGN_NEXT_RUN_AT_MS);
-  });
-
-  it("does not keep foreign runtime computed for a concurrently changed schedule", async () => {
-    const { storePath } = await makeStorePath();
-    const jobB = createSharedStoreJob({ id: "shared-job-b" });
-    await saveCronStore(storePath, { version: 1, jobs: [jobB] });
-
-    const managementGateway = createGatewayState(storePath, false);
-    await ensureLoaded(managementGateway, { skipRecompute: true });
-
-    await updateWithPrecondition(
-      managementGateway,
-      "shared-job-b",
-      { name: "renamed" },
-      async () => {
-        // A separate gateway changes the schedule after the reload; its runtime
-        // belongs to that new schedule and must not survive a cosmetic edit
-        // that writes the previous schedule back.
-        commitForeignJobRow(
-          storePath,
-          {
-            ...jobB,
-            schedule: { kind: "cron", expr: "0 7 * * *", tz: "UTC" },
-            updatedAtMs: FOREIGN_RUNTIME_UPDATED_AT_MS,
-            state: { nextRunAtMs: FOREIGN_NEXT_RUN_AT_MS, lastRunAtMs: 8000 },
-          },
-          0,
+      if (testCase.operation === "add") {
+        const added = await addTarget(testCase.cron, "added");
+        expect(
+          (await loadCronStore(testCase.storePath)).jobs.some((job) => job.id === added.id),
+        ).toBe(true);
+      } else if (testCase.operation === "update" && testCase.target) {
+        await testCase.cron.updateWithPrecondition(
+          testCase.target.id,
+          { name: "target-updated" },
+          () => {},
         );
-      },
-    );
+        expect(
+          (await loadCronStore(testCase.storePath)).jobs.find(
+            (job) => job.id === testCase.target?.id,
+          )?.name,
+        ).toBe("target-updated");
+      } else if (testCase.operation === "same-job-update") {
+        await testCase.cron.update(testCase.canary.id, { name: "canary-updated" });
+      } else if (testCase.operation === "state-update") {
+        await testCase.cron.update(testCase.canary.id, { state: { consecutiveErrors: 7 } });
+      } else if (testCase.target) {
+        await testCase.cron.remove(testCase.target.id);
+        expect(
+          (await loadCronStore(testCase.storePath)).jobs.some(
+            (job) => job.id === testCase.target?.id,
+          ),
+        ).toBe(false);
+      }
 
-    const persistedJobB = await loadPersistedJob(storePath, "shared-job-b");
-    expect(persistedJobB.state.nextRunAtMs).not.toBe(FOREIGN_NEXT_RUN_AT_MS);
-    expect(persistedJobB.state.lastRunAtMs).not.toBe(FOREIGN_RUNTIME_UPDATED_AT_MS);
-  });
+      const after = (await loadCronStore(testCase.storePath)).jobs.find(
+        (job) => job.id === testCase.canary.id,
+      );
+      expect(after?.state).toEqual(
+        testCase.operation === "state-update"
+          ? { ...before?.state, consecutiveErrors: 7 }
+          : before?.state,
+      );
+      testCase.cron.stop();
+    }
+  }, 90_000);
 
-  it("preserves foreign runtime through an agent-deletion rollback", async () => {
+  it("rejects a stale config mutation instead of overwriting its peer", async () => {
     const { storePath } = await makeStorePath();
-    const jobA = createSharedStoreJob({ id: "agent-job", agentId: "agent-x" });
-    const jobB = createSharedStoreJob({ id: "shared-job-b" });
-    await saveCronStore(storePath, { version: 1, jobs: [jobA, jobB] });
+    const seed = createDisabledService(storePath);
+    const target = await addTarget(seed, "config-conflict");
+    seed.stop();
 
-    const managementGateway = createGatewayState(storePath, false);
-    await ensureLoaded(managementGateway, { skipRecompute: true });
+    const cron = new CronService({
+      cronEnabled: false,
+      storePath,
+      log,
+      enqueueSystemEvent() {},
+      requestHeartbeat() {},
+      async runIsolatedAgentJob() {
+        return { status: "ok" as const, summary: "unused" };
+      },
+      async listConfiguredChannels() {
+        const peerStore = await loadCronStore(storePath);
+        const peerTarget = peerStore.jobs.find((job) => job.id === target.id);
+        if (!peerTarget) {
+          throw new Error("missing peer target");
+        }
+        peerTarget.name = "peer-update";
+        await saveCronStore(storePath, peerStore);
+        return [];
+      },
+    });
 
     await expect(
-      removeAgentJobsTransactional(managementGateway, "agent-x", async () => {
-        // The scheduler advances the unrelated job while the roster commit is
-        // in flight; the rollback must not replay the stale snapshot over it.
-        commitForeignRuntimeRows(storePath, [
-          {
-            ...jobB,
-            updatedAtMs: FOREIGN_RUNTIME_UPDATED_AT_MS,
-            state: { nextRunAtMs: FOREIGN_NEXT_RUN_AT_MS, lastRunAtMs: 8000 },
-          },
-        ]);
-        throw new Error("roster commit failed");
+      cron.update(target.id, {
+        delivery: { mode: "webhook", to: "https://example.com/cron" },
       }),
-    ).rejects.toThrow("roster commit failed");
-
-    const persistedJobB = await loadPersistedJob(storePath, "shared-job-b");
-    expect(persistedJobB.state.nextRunAtMs).toBe(FOREIGN_NEXT_RUN_AT_MS);
-    expect(persistedJobB.state.lastRunAtMs).toBe(FOREIGN_RUNTIME_UPDATED_AT_MS);
-    expect(await loadPersistedJob(storePath, "agent-job")).toBeTruthy();
-  });
-});
-it("does not revive old trigger state when the trigger definition is replaced", async () => {
-  const { storePath } = await makeStorePath();
-  const jobB: CronJob = {
-    ...createSharedStoreJob({ id: "shared-job-b" }),
-    trigger: { script: "return false" },
-    state: { triggerState: { seen: 1 }, triggerEvalCount: 3 },
-  };
-  await saveCronStore(storePath, { version: 1, jobs: [jobB] });
-
-  const managementGateway = createGatewayState(storePath, false);
-  await ensureLoaded(managementGateway, { skipRecompute: true });
-
-  await updateWithPrecondition(
-    managementGateway,
-    "shared-job-b",
-    { trigger: { script: "return true" } },
-    async () => {
-      commitForeignRuntimeRows(storePath, [
-        {
-          ...jobB,
-          updatedAtMs: FOREIGN_RUNTIME_UPDATED_AT_MS,
-          state: {
-            ...jobB.state,
-            nextRunAtMs: FOREIGN_NEXT_RUN_AT_MS,
-            lastRunAtMs: FOREIGN_RUNTIME_UPDATED_AT_MS,
-            lastStatus: "ok",
-          },
-        },
-      ]);
-    },
-  );
-
-  // Replacing the trigger definition retires its evaluation state; the kept
-  // foreign runtime must not reattach old triggerState to the new script.
-  const persistedJobB = await loadPersistedJob(storePath, "shared-job-b");
-  expect(persistedJobB.trigger).toEqual({ script: "return true" });
-  expect(persistedJobB.state.triggerState).toBeUndefined();
-  expect(persistedJobB.state.triggerEvalCount).toBeUndefined();
-  // Combined sequence: the baseline carried old trigger state AND the scheduler
-  // committed fresh runtime between the reload and the write. Retiring the
-  // trigger fields must not discard that scheduler-owned runtime.
-  expect(persistedJobB.state.nextRunAtMs).toBe(FOREIGN_NEXT_RUN_AT_MS);
-  expect(persistedJobB.state.lastRunAtMs).toBe(FOREIGN_RUNTIME_UPDATED_AT_MS);
-  expect(persistedJobB.state.lastStatus).toBe("ok");
-});
-
-it("keeps explicit runtime-state patches when the foreign clock runs ahead", async () => {
-  const { storePath } = await makeStorePath();
-  const jobB = createSharedStoreJob({ id: "shared-job-b" });
-  await saveCronStore(storePath, { version: 1, jobs: [jobB] });
-
-  const managementGateway = createGatewayState(storePath, false);
-  await ensureLoaded(managementGateway, { skipRecompute: true });
-
-  const SKEWED_FOREIGN_RUNTIME_AT_MS = 9_999_999_999_999;
-  await updateWithPrecondition(
-    managementGateway,
-    "shared-job-b",
-    { state: { lastRunAtMs: 5555 } },
-    async () => {
-      // The scheduler gateway's clock is far ahead of the management
-      // gateway's; its runtime timestamp exceeds every local timestamp.
-      commitForeignRuntimeRows(storePath, [
-        {
-          ...jobB,
-          updatedAtMs: SKEWED_FOREIGN_RUNTIME_AT_MS,
-          state: { nextRunAtMs: FOREIGN_NEXT_RUN_AT_MS, lastRunAtMs: 8000 },
-        },
-      ]);
-    },
-  );
-
-  const persistedJobB = await loadPersistedJob(storePath, "shared-job-b");
-  expect(persistedJobB.state.lastRunAtMs).toBe(5555);
-  expect(persistedJobB.state.nextRunAtMs).not.toBe(FOREIGN_NEXT_RUN_AT_MS);
-});
-
-it("retires foreign trigger state created after the reload when the trigger is replaced", async () => {
-  const { storePath } = await makeStorePath();
-  const jobB: CronJob = {
-    ...createSharedStoreJob({ id: "shared-job-b" }),
-    trigger: { script: "return false" },
-    state: {},
-  };
-  await saveCronStore(storePath, { version: 1, jobs: [jobB] });
-
-  const managementGateway = createGatewayState(storePath, false);
-  await ensureLoaded(managementGateway, { skipRecompute: true });
-
-  await updateWithPrecondition(
-    managementGateway,
-    "shared-job-b",
-    { trigger: { script: "return true" } },
-    async () => {
-      // The scheduler evaluates the old trigger after the reload and stores
-      // fresh trigger state that the baseline never saw.
-      commitForeignRuntimeRows(storePath, [
-        {
-          ...jobB,
-          updatedAtMs: FOREIGN_RUNTIME_UPDATED_AT_MS,
-          state: {
-            nextRunAtMs: FOREIGN_NEXT_RUN_AT_MS,
-            triggerState: { evaluated: true },
-            triggerEvalCount: 7,
-          },
-        },
-      ]);
-    },
-  );
-
-  // The replaced trigger definition owns its evaluation state: scheduler
-  // fields survive, but trigger state from the old definition does not.
-  const persistedJobB = await loadPersistedJob(storePath, "shared-job-b");
-  expect(persistedJobB.trigger).toEqual({ script: "return true" });
-  expect(persistedJobB.state.triggerState).toBeUndefined();
-  expect(persistedJobB.state.triggerEvalCount).toBeUndefined();
-  expect(persistedJobB.state.nextRunAtMs).toBe(FOREIGN_NEXT_RUN_AT_MS);
-});
-
-it("keeps a job inserted by another gateway between the scheduler-disabled reload and CRUD", async () => {
-  const { storePath } = await makeStorePath();
-  const jobB = createSharedStoreJob({ id: "shared-job-b" });
-  await saveCronStore(storePath, { version: 1, jobs: [jobB] });
-
-  const managementGateway = createGatewayState(storePath, false);
-  await ensureLoaded(managementGateway, { skipRecompute: true });
-
-  // A separate gateway inserts a brand-new job after the mutation-time
-  // reload; it is absent from the management gateway's snapshot.
-  const foreignInsertedJob = createSharedStoreJob({ id: "foreign-inserted-job" });
-  await updateWithPrecondition(
-    managementGateway,
-    "shared-job-b",
-    { description: "edited" },
-    async () => {
-      commitForeignJobRow(storePath, foreignInsertedJob, 1);
-    },
-  );
-
-  const loaded = await loadCronJobsStoreWithConfigJobs(storePath);
-  const ids = loaded.store.jobs.map((job) => job.id);
-  expect(ids).toContain("foreign-inserted-job");
-  const edited = loaded.store.jobs.find((job) => job.id === "shared-job-b");
-  expect(edited?.description).toBe("edited");
-});
-
-it("still deletes intentionally removed jobs while keeping foreign inserts", async () => {
-  const { storePath } = await makeStorePath();
-  const jobB = createSharedStoreJob({ id: "shared-job-b" });
-  const jobC = createSharedStoreJob({ id: "shared-job-c" });
-  await saveCronStore(storePath, { version: 1, jobs: [jobB, jobC] });
-
-  const managementGateway = createGatewayState(storePath, false);
-  await ensureLoaded(managementGateway, { skipRecompute: true });
-
-  const foreignInsertedJob = createSharedStoreJob({ id: "foreign-inserted-job" });
-  await remove(managementGateway, "shared-job-c", {
-    commitGuard: () => {
-      commitForeignJobRow(storePath, foreignInsertedJob, 2);
-    },
-  });
-
-  const loaded = await loadCronJobsStoreWithConfigJobs(storePath);
-  const ids = loaded.store.jobs.map((job) => job.id);
-  expect(ids).not.toContain("shared-job-c");
-  expect(ids).toContain("shared-job-b");
-  expect(ids).toContain("foreign-inserted-job");
-});
-
-it("does not resurrect a job another gateway deleted between the scheduler-disabled reload and CRUD", async () => {
-  const { storePath } = await makeStorePath();
-  const jobA = createSharedStoreJob({ id: "shared-job-a" });
-  const jobB = createSharedStoreJob({ id: "shared-job-b" });
-  await saveCronStore(storePath, { version: 1, jobs: [jobA, jobB] });
-
-  const managementGateway = createGatewayState(storePath, false);
-  await ensureLoaded(managementGateway, { skipRecompute: true });
-
-  // A separate gateway deletes job A after the mutation-time reload; the
-  // management gateway's stale snapshot still lists it while it edits job B.
-  await updateWithPrecondition(
-    managementGateway,
-    "shared-job-b",
-    { description: "edited" },
-    async () => {
-      deleteForeignJobRow(storePath, "shared-job-a");
-    },
-  );
-
-  // SQLite: the peer deletion survives and the edit to job B lands.
-  const loaded = await loadCronJobsStoreWithConfigJobs(storePath);
-  const ids = loaded.store.jobs.map((job) => job.id);
-  expect(ids).not.toContain("shared-job-a");
-  expect(ids).toContain("shared-job-b");
-  const edited = loaded.store.jobs.find((job) => job.id === "shared-job-b");
-  expect(edited?.description).toBe("edited");
-
-  // Service memory: the management gateway's snapshot drops the stale row
-  // instead of serving a job another gateway already deleted.
-  const memoryIds = managementGateway.store?.jobs.map((job) => job.id) ?? [];
-  expect(memoryIds).not.toContain("shared-job-a");
-  expect(memoryIds).toContain("shared-job-b");
-});
-
-it("rejects an update whose target job another gateway deleted between reload and write", async () => {
-  const { storePath } = await makeStorePath();
-  const jobB = createSharedStoreJob({ id: "shared-job-b" });
-  await saveCronStore(storePath, { version: 1, jobs: [jobB] });
-
-  const managementGateway = createGatewayState(storePath, false);
-  await ensureLoaded(managementGateway, { skipRecompute: true });
-
-  // A separate gateway deletes the very job being edited after the
-  // mutation-time reload; the durable write skips the vanished row, so the
-  // update must surface a failure instead of reporting success for it.
-  await expect(
-    updateWithPrecondition(
-      managementGateway,
-      "shared-job-b",
-      { description: "edited" },
-      async () => {
-        deleteForeignJobRow(storePath, "shared-job-b");
-      },
-    ),
-  ).rejects.toThrow(/shared-job-b/);
-
-  const loaded = await loadCronJobsStoreWithConfigJobs(storePath);
-  expect(loaded.store.jobs.map((job) => job.id)).not.toContain("shared-job-b");
-  const memoryIds = managementGateway.store?.jobs.map((job) => job.id) ?? [];
-  expect(memoryIds).not.toContain("shared-job-b");
-});
-
-it("does not resurrect a peer-deleted job when an agent-deletion rollback fails", async () => {
-  const { storePath } = await makeStorePath();
-  const jobA = createSharedStoreJob({ id: "agent-job", agentId: "agent-x" });
-  const jobC = createSharedStoreJob({ id: "shared-job-c" });
-  await saveCronStore(storePath, { version: 1, jobs: [jobA, jobC] });
-
-  const managementGateway = createGatewayState(storePath, false);
-  await ensureLoaded(managementGateway, { skipRecompute: true });
-
-  await expect(
-    removeAgentJobsTransactional(
-      managementGateway,
-      "agent-x",
-      async () => {
-        throw new Error("roster commit failed");
-      },
-      {
-        commitGuard: () => {
-          // A separate gateway deletes the unrelated job between the
-          // mutation-time reload and the durable write.
-          deleteForeignJobRow(storePath, "shared-job-c");
-        },
-      },
-    ),
-  ).rejects.toThrow("roster commit failed");
-
-  // The locally removed agent job is restored by the rollback...
-  expect(await loadPersistedJob(storePath, "agent-job")).toBeTruthy();
-  // ...but the peer-deleted job stays deleted: the rollback must not
-  // re-upsert the stale snapshot row another gateway already removed.
-  const loaded = await loadCronJobsStoreWithConfigJobs(storePath);
-  expect(loaded.store.jobs.map((job) => job.id)).not.toContain("shared-job-c");
-  const memoryIds = managementGateway.store?.jobs.map((job) => job.id) ?? [];
-  expect(memoryIds).toContain("agent-job");
-  expect(memoryIds).not.toContain("shared-job-c");
-});
-
-describe("real cross-process shared SQLite cron store", () => {
-  it("preserves scheduler runtime written by a separate gateway process", async () => {
-    const { storePath } = await makeStorePath();
-    const stateDir = path.dirname(path.dirname(storePath));
-    const jobA = createSharedStoreJob({ id: "shared-job-a" });
-    const jobB = createSharedStoreJob({ id: "shared-job-b" });
-
-    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      await saveCronStore(storePath, { version: 1, jobs: [jobA, jobB] });
-      const managementGateway = createGatewayState(storePath, false);
-      await ensureLoaded(managementGateway, { skipRecompute: true });
-
-      // A real scheduler gateway is a separate OS process: spawn one that
-      // advances job A's runtime through its own state database connection.
-      const schedulerScript = `
-        import { runOpenClawStateWriteTransaction } from ${JSON.stringify(pathToFileURL(path.resolve(import.meta.dirname, "../../state/openclaw-state-db.js")).href)};
-        import { cronStoreKey } from ${JSON.stringify(pathToFileURL(path.resolve(import.meta.dirname, "../store/key.js")).href)};
-        import { updateCronRuntimeRows } from ${JSON.stringify(pathToFileURL(path.resolve(import.meta.dirname, "../store/row-codec.js")).href)};
-        const job = ${JSON.stringify({
-          ...jobA,
-          updatedAtMs: FOREIGN_RUNTIME_UPDATED_AT_MS,
-          state: {
-            nextRunAtMs: FOREIGN_NEXT_RUN_AT_MS,
-            lastRunAtMs: FOREIGN_RUNTIME_UPDATED_AT_MS,
-          },
-        })};
-        runOpenClawStateWriteTransaction(({ db }) => {
-          updateCronRuntimeRows(db, cronStoreKey(${JSON.stringify(path.resolve(storePath))}), {
-            version: 1,
-            jobs: [job],
-          });
-        });
-        console.log("scheduler committed");
-      `;
-      const scheduler = spawnSync(
-        process.execPath,
-        [
-          "--import",
-          pathToFileURL(path.resolve(import.meta.dirname, "../../../scripts/tsx.mjs")).href,
-          "--input-type=module",
-          "-e",
-          schedulerScript,
-        ],
-        { encoding: "utf8", timeout: 90_000 },
-      );
-      expect(scheduler.status).toBe(0);
-      expect(scheduler.stdout).toContain("scheduler committed");
-
-      await update(managementGateway, "shared-job-b", {
-        description: "edited by management gateway",
-      });
-
-      const persistedJobA = await loadPersistedJob(storePath, "shared-job-a");
-      expect(persistedJobA.state.nextRunAtMs).toBe(FOREIGN_NEXT_RUN_AT_MS);
-      expect(persistedJobA.state.lastRunAtMs).toBe(FOREIGN_RUNTIME_UPDATED_AT_MS);
-      const persistedJobB = await loadPersistedJob(storePath, "shared-job-b");
-      expect(persistedJobB.description).toBe("edited by management gateway");
-    });
-  });
-
-  it("does not resurrect a job a separate gateway process deleted between reload and write", async () => {
-    const { storePath } = await makeStorePath();
-    const stateDir = path.dirname(path.dirname(storePath));
-    const jobA = createSharedStoreJob({ id: "shared-job-a" });
-    const jobB = createSharedStoreJob({ id: "shared-job-b" });
-
-    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      await saveCronStore(storePath, { version: 1, jobs: [jobA, jobB] });
-      const managementGateway = createGatewayState(storePath, false);
-      await ensureLoaded(managementGateway, { skipRecompute: true });
-
-      // A real peer gateway is a separate OS process: spawn one that deletes
-      // job A through its own state database connection inside the management
-      // gateway's reload-to-write window.
-      const peerDeleterScript = `
-        import { runOpenClawStateWriteTransaction } from ${JSON.stringify(pathToFileURL(path.resolve(import.meta.dirname, "../../state/openclaw-state-db.js")).href)};
-        import { cronStoreKey } from ${JSON.stringify(pathToFileURL(path.resolve(import.meta.dirname, "../store/key.js")).href)};
-        import { deleteCronJobRowInDatabase } from ${JSON.stringify(pathToFileURL(path.resolve(import.meta.dirname, "../store/row-codec.js")).href)};
-        runOpenClawStateWriteTransaction(({ db }) => {
-          deleteCronJobRowInDatabase(db, cronStoreKey(${JSON.stringify(path.resolve(storePath))}), ${JSON.stringify(jobA.id)});
-        });
-        console.log("peer deleted");
-      `;
-      const spawnPeerDeleter = () =>
-        spawnSync(
-          process.execPath,
-          [
-            "--import",
-            pathToFileURL(path.resolve(import.meta.dirname, "../../../scripts/tsx.mjs")).href,
-            "--input-type=module",
-            "-e",
-            peerDeleterScript,
-          ],
-          { encoding: "utf8", timeout: 90_000 },
-        );
-
-      await updateWithPrecondition(
-        managementGateway,
-        "shared-job-b",
-        { description: "edited by management gateway" },
-        async () => {
-          const peerDeleter = spawnPeerDeleter();
-          expect(peerDeleter.status).toBe(0);
-          expect(peerDeleter.stdout).toContain("peer deleted");
-        },
-      );
-
-      // SQLite: the peer's deletion survives the management gateway's stale
-      // snapshot while the edit to job B lands.
-      const loaded = await loadCronJobsStoreWithConfigJobs(storePath);
-      const ids = loaded.store.jobs.map((job) => job.id);
-      expect(ids).not.toContain("shared-job-a");
-      expect(ids).toContain("shared-job-b");
-      const persistedJobB = await loadPersistedJob(storePath, "shared-job-b");
-      expect(persistedJobB.description).toBe("edited by management gateway");
-
-      // Service memory: the management gateway's snapshot drops the stale row.
-      const memoryIds = managementGateway.store?.jobs.map((job) => job.id) ?? [];
-      expect(memoryIds).not.toContain("shared-job-a");
-      expect(memoryIds).toContain("shared-job-b");
-    });
+    ).rejects.toThrow("changed after it was read");
+    const persisted = (await loadCronStore(storePath)).jobs.find((job) => job.id === target.id);
+    expect(persisted?.name).toBe("peer-update");
+    expect(persisted?.delivery).toBeUndefined();
+    cron.stop();
   });
 });

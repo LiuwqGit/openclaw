@@ -14,7 +14,7 @@ import type { CronActiveJobMarker } from "../active-jobs.js";
 import { toPublicCronJob } from "../public-job.js";
 import type { CronRuntimeAuthority } from "../runtime-authority.js";
 import type { CronScheduledToolPolicy } from "../scheduled-tool-policy.js";
-import type { QuarantinedCronConfigJob, CronRuntimeBaseline } from "../store.js";
+import type { QuarantinedCronConfigJob } from "../store.js";
 import type { CronRunReceiptHandle } from "../store/run-receipt-store.js";
 import type {
   CronCompletionStatus,
@@ -368,14 +368,6 @@ export type CronServiceState = {
   pendingQuarantineConfigJobs: QuarantinedCronConfigJob[];
   lastQuarantineFailureWarnKey: string | null;
   storeLoadedAtMs: number | null;
-  /**
-   * Load-time runtime snapshot per job, captured when scheduler-disabled CRUD
-   * reloads the shared store. The CRUD write compares persisted rows against
-   * this baseline to preserve foreign runtime commits (#131401). `null` until
-   * a mutation-time reload captures it; rows the baseline never saw were
-   * inserted by another gateway after the reload and survive the write.
-   */
-  mutationRuntimeBaseline: Map<string, CronRuntimeBaseline> | null;
 };
 
 /** Creates mutable cron service state with a concrete clock dependency. */
@@ -406,7 +398,6 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     pendingQuarantineConfigJobs: [],
     lastQuarantineFailureWarnKey: null,
     storeLoadedAtMs: null,
-    mutationRuntimeBaseline: null,
   };
 }
 

@@ -59,10 +59,8 @@ import { emit } from "./state.js";
 import {
   ensureLoaded,
   ensureLoadedForMutation,
-  persist,
   persistOrRestore,
   pruneCronJobScratchAfterCommit,
-  restoreCronStoreSnapshotForRollback,
   runPostPersistCronNotifications,
   snapshotStoreForRollback,
   type CronRollbackSnapshot,
@@ -235,14 +233,6 @@ async function persistUpdatedJob(params: {
       ? cronRunReceiptOwnerMutationHooks({ state, jobId: nextJob.id })
       : undefined,
   });
-  if (!state.store?.jobs.some((job) => job.id === nextJob.id)) {
-    // Another gateway deleted the edited job between the mutation-time
-    // reload and the write, and the durable write skipped the vanished row.
-    // Memory is already hydrated to that reality; surface the failure
-    // instead of reporting an update that did not land (#131401).
-    armTimer(state);
-    throw new Error(`cron job ${nextJob.id} was deleted before the update could be persisted`);
-  }
   if (!cronSchedulingInputsEqual(previousJob, nextJob)) {
     // Mark only committed edits; a failed SQLite write cannot retire the run's
     // schedule ownership, and idempotent re-saves must not create a new claim.
@@ -494,9 +484,7 @@ async function updateLoadedJob(params: {
   if (patch.payload && isSystemOwnedCronPayloadKind(patch.payload.kind)) {
     throw new Error("system-owned payloads cannot be patched by cron clients");
   }
-  // An explicit state patch owns this row's runtime; foreign runtime
-  // preservation must not silently replace caller-requested fields (#131401).
-  await ensureLoadedForMutation(state, { runtimeOwnerId: patch.state ? id : undefined });
+  await ensureLoadedForMutation(state);
   const job = findJobOrThrow(state, id);
   // Existing monitors are config-driven: any patch (disable, reschedule,
   // repurpose) would silently diverge from its owner until the next reconcile,
@@ -621,7 +609,6 @@ export async function remove(
     await persistOrRestore(state, snapshot, {
       postPersistNotifications,
       suppressScheduledJobId: id,
-      locallyRemovedJobIds: new Set([id]),
     });
     const activeMarker = noteActiveCronJobRemoval(id);
     const agentId = resolveEffectiveJobAgentId(removedJob, resolveCurrentDefaultAgentId(state));
@@ -687,7 +674,6 @@ export async function removeAgentJobsTransactional<T>(
   state: CronServiceState,
   agentId: string,
   commit: () => Promise<T>,
-  opts?: { commitGuard?: () => void },
 ): Promise<T> {
   return await locked(state, async () => {
     warnIfDisabled(state, "remove agent jobs");
@@ -703,7 +689,6 @@ export async function removeAgentJobsTransactional<T>(
     if (removedJobs.length === 0) {
       return await commit();
     }
-    opts?.commitGuard?.();
     const snapshot = snapshotStoreForRollback(state);
     state.store.jobs = state.store.jobs.filter(
       (job) => resolveEffectiveJobAgentId(job, defaultAgentId) !== id,
@@ -711,8 +696,7 @@ export async function removeAgentJobsTransactional<T>(
     const postPersistNotifications: DeferredCronNotifications = [];
     recomputeNextRunsForMaintenance(state, { deferredNotifications: postPersistNotifications });
     // Cron is durable first, but notifications stay speculative until the roster commits.
-    const locallyRemovedJobIds = new Set(removedJobs.map((job) => job.id));
-    await persistOrRestore(state, snapshot, { locallyRemovedJobIds });
+    await persistOrRestore(state, snapshot);
     let result: T;
     try {
       result = await commit();
@@ -733,11 +717,11 @@ export async function removeAgentJobsTransactional<T>(
         }
         throw error;
       }
-      restoreCronStoreSnapshotForRollback(state, snapshot, { locallyRemovedJobIds });
+      const deletedSnapshot = snapshotStoreForRollback(state);
+      state.store = snapshot.store;
+      state.durableNextRunAtMsByJobId = snapshot.durableNextRunAtMsByJobId;
       try {
-        if (!(await persist(state))) {
-          throw new Error("cron: rollback store write did not complete", { cause: error });
-        }
+        await persistOrRestore(state, deletedSnapshot, { preserveConcurrentAdds: true });
         armTimer(state);
       } catch (rollbackError) {
         throw new AgentDeletionAuthorityRollbackError(
