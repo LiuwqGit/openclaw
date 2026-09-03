@@ -155,9 +155,31 @@ test("rejects malformed direct actions before requiring a session id", async () 
   expect(result.details).toMatchObject({ status: "failed" });
 });
 
-test.skipIf(process.platform === "win32")(
-  "renders the no-output placeholder before a real foreground nonzero exit",
-  async () => {
+test.each([
+  {
+    name: "empty nonzero exit",
+    source: "process.exit(1)",
+    expectedText: "(no output)\n\n(Command exited with code 1)",
+    expectedAggregated: "(no output)\n\n(Command exited with code 1)",
+    exitCode: 1,
+  },
+  {
+    name: "nonzero exit with output",
+    source: 'process.stdout.write("VISIBLE"); process.exit(1)',
+    expectedText: "VISIBLE\n\n(Command exited with code 1)",
+    expectedAggregated: "VISIBLE\n\n(Command exited with code 1)",
+    exitCode: 1,
+  },
+  {
+    name: "empty successful exit",
+    source: "process.exit(0)",
+    expectedText: "(no output)",
+    expectedAggregated: "",
+    exitCode: 0,
+  },
+])(
+  "renders a real foreground $name with the expected structured output",
+  async ({ source, expectedText, expectedAggregated, exitCode }) => {
     const execTool = createExecTool({
       host: "gateway",
       security: "full",
@@ -165,16 +187,15 @@ test.skipIf(process.platform === "win32")(
       allowBackground: false,
       timeoutSec: 10,
     });
-    const result = await execTool.execute("foreground-empty-nonzero", {
-      command: "sh -c 'exit 1'",
+    const result = await execTool.execute(`foreground-exit-${exitCode}`, {
+      command: currentNodeEvalCommand(source),
     });
-    const expected = "(no output)\n\n(Command exited with code 1)";
 
-    expect(textContent(result)).toBe(expected);
+    expect(textContent(result)).toBe(expectedText);
     expect(result.details).toMatchObject({
       status: "completed",
-      exitCode: 1,
-      aggregated: expected,
+      exitCode,
+      aggregated: expectedAggregated,
     });
   },
 );

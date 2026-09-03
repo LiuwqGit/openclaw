@@ -570,7 +570,7 @@ function buildExecExitOutcome(params: {
       exitSignal: params.exit.exitSignal,
       exitReason: params.exit.reason,
       durationMs: params.durationMs,
-      aggregated: renderExecOutputText(params.aggregated) + exitMsg,
+      aggregated: (exitMsg ? renderExecOutputText(params.aggregated) : params.aggregated) + exitMsg,
       timedOut: false,
       noOutputTimedOut: params.exit.noOutputTimedOut,
     };
