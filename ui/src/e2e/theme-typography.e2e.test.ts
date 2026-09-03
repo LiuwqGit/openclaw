@@ -301,6 +301,68 @@ suite.define(() => {
     },
   );
 
+  // JetBrains Mono routes through --font-body in both themes, so the native
+  // composer textarea inherits contextual ligatures. Chromium mispaints those
+  // at the caret boundary (issue #137473): typing a trailing space after `>=`
+  // or `...` makes parts of the already-typed sequence vanish while
+  // textarea.value stays correct. The composer opts out of contextual
+  // ligatures; rendered chat keeps them.
+  it.each(["crt", "phosphor"])(
+    "keeps caret-adjacent mono input legible in the %s composer",
+    async (theme) => {
+      const timestamp = Date.now();
+      const { page } = await openThemedChat(theme, "dark", {
+        historyMessages: [
+          {
+            content: [{ text: "say something", type: "text" }],
+            role: "user",
+            timestamp: timestamp - 1,
+          },
+          {
+            content: [{ text: "a >= b and keep ... going", type: "text" }],
+            role: "assistant",
+            timestamp,
+          },
+        ],
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await expect.poll(() => page.locator(".chat-text").last().textContent()).toContain("keep");
+
+      const textarea = page.locator(".agent-chat__composer-combobox textarea");
+      await expect.poll(() => textarea.isEditable()).toBe(true);
+      await textarea.click();
+      // The reported failure sequence: an operator sequence followed by a
+      // trailing space at the caret.
+      await textarea.pressSequentially(">= ");
+      await textarea.pressSequentially("... ");
+      expect(await textarea.inputValue()).toBe(">= ... ");
+
+      const report = await page.evaluate(async () => {
+        await document.fonts.ready;
+        const composer = document.querySelector<HTMLTextAreaElement>(
+          ".agent-chat__composer-combobox textarea",
+        );
+        const chat = document.querySelector(".chat-text");
+        return {
+          composerLigatures: composer ? getComputedStyle(composer).fontVariantLigatures : null,
+          chatLigatures: chat ? getComputedStyle(chat).fontVariantLigatures : null,
+          composerFontFamily: composer
+            ? (getComputedStyle(composer).fontFamily.split(",")[0] ?? "")
+                .trim()
+                .replace(/^["']|["']$/gu, "")
+            : null,
+        };
+      });
+      // The composer is still in the theme's mono face…
+      expect(report.composerFontFamily).toBe("JetBrains Mono");
+      // …but contextual ligatures are off there, so the caret-adjacent paint
+      // bug cannot drop glyphs of typed operator sequences.
+      expect(report.composerLigatures).toMatch(/no-contextual|none/u);
+      // Rendered chat keeps the theme's ligature rendering.
+      expect(report.chatLigatures).toBe("normal");
+    },
+  );
+
   it("keeps Phosphor shortcut modifier glyphs on the system UI stack", async () => {
     const { page } = await openThemedChat("phosphor", "dark");
     await page.goto(`${suite.server.baseUrl}chat`);

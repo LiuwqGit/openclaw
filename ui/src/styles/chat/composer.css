@@ -426,6 +426,12 @@
   border: none;
   background: transparent;
   color: var(--text-strong);
+  /* Chromium can mispaint contextual ligatures at the caret boundary of a
+     focused native text control (issue #137473): typing a trailing space after
+     `>=` or `...` visually drops already-typed glyphs while the value stays
+     correct. Opt out of contextual shaping in the composer only; rendered
+     chat keeps the theme's ligatures. */
+  font-variant-ligatures: no-contextual;
   font-size: var(--chat-composer-editor-size);
   line-height: var(--chat-composer-editor-line);
   outline: none;
