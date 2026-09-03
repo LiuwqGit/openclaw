@@ -9,6 +9,10 @@ import {
 } from "../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  ASSISTANT_DISPLAY_CONTENT_FIELD,
+  retainAssistantModelContent,
+} from "../shared/assistant-display-content.js";
+import {
   OPENCLAW_TRANSCRIPT_ARTIFACT_API,
   OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
 } from "../shared/transcript-only-openclaw-assistant.js";
@@ -38,6 +42,11 @@ export async function commitBackgroundResultToSession(params: {
   /** Pins output to the conversation generation that admitted the background run. */
   expectedGeneration: { sessionId: string; lifecycleRevision: string | undefined };
   text: string;
+  /**
+   * Structured assistant content (text plus managed media blocks) to persist in the
+   * transcript. Falls back to a text-only block when omitted.
+   */
+  content?: readonly Record<string, unknown>[];
   idempotencyKey: string;
   provenance: BackgroundSessionResultProvenance;
   config: OpenClawConfig;
@@ -88,9 +97,16 @@ export async function commitBackgroundResultToSession(params: {
       if (unavailable) {
         return { ok: false, reason: unavailable };
       }
+      const displayContent = params.content?.length
+        ? params.content.map((block) => ({ ...block }))
+        : undefined;
+      // Media blocks belong to the Control UI display projection; model content
+      // keeps only text-shaped blocks, falling back to the text projection.
+      const modelContent = displayContent ? retainAssistantModelContent(displayContent) : [];
       const message = {
         role: "assistant",
-        content: [{ type: "text", text }],
+        content: modelContent.length > 0 ? modelContent : [{ type: "text", text }],
+        ...(displayContent ? { [ASSISTANT_DISPLAY_CONTENT_FIELD]: displayContent } : {}),
         api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
         provider: OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
         model: AUTOMATION_RESULT_MODEL,

@@ -115,6 +115,50 @@ describe("commitBackgroundResultToSession", () => {
     unsubscribe();
   });
 
+  it("persists structured content blocks instead of a text-only projection", async () => {
+    const target = await createTarget();
+    const content = [
+      { type: "text", text: "Example report" },
+      {
+        type: "image",
+        url: "/api/chat/media/outgoing/source-session/attachment-1/full",
+        alt: "report.png",
+      },
+    ] as Array<Record<string, unknown>>;
+    const commit = await commitBackgroundResultToSession({
+      agentId: "main",
+      sessionKey: target.sessionKey,
+      expectedGeneration: target.generation,
+      text: "Example report",
+      content,
+      idempotencyKey: "cron-current-completion:cron:job-media:4000",
+      provenance: { kind: "cron", jobId: "job-media", runId: "cron:job-media:4000" },
+      config: target.config,
+    });
+    expect(commit).toMatchObject({ ok: true });
+
+    const events = (await loadTranscriptEvents({
+      agentId: "main",
+      sessionId: target.sessionId,
+      sessionKey: target.sessionKey,
+      storePath: target.storePath,
+    })) as Array<{
+      type?: string;
+      message?: {
+        idempotencyKey?: string;
+        content?: unknown[];
+        openclawDisplayContent?: unknown[];
+      };
+    }>;
+    const messageEvent = events.find(
+      (event) =>
+        event.type === "message" &&
+        event.message?.idempotencyKey === "cron-current-completion:cron:job-media:4000",
+    );
+    expect(messageEvent?.message?.content).toEqual([{ type: "text", text: "Example report" }]);
+    expect(messageEvent?.message?.openclawDisplayContent).toEqual(content);
+  });
+
   it("refuses an archived target conversation", async () => {
     const target = await createTarget();
     await replaceSessionEntry(
