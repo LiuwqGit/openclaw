@@ -535,7 +535,11 @@ export function createReadToolDefinition(
                     : `File contains no readable text (${buffer.length} bytes).`;
               } else if (startLine >= totalFileLines) {
                 outputText = `Offset ${offset} is beyond end of file (${totalFileLines} lines total). Retry with offset <= ${totalFileLines}.`;
-              } else if (cursor !== undefined && cursor >= allLines[startLine]!.length) {
+              } else if (
+                cursor !== undefined &&
+                cursor > 0 &&
+                cursor >= allLines[startLine]!.length
+              ) {
                 const nextLine =
                   startLine + 1 < totalFileLines
                     ? ` Use offset=${startLineDisplay + 1} to continue.`

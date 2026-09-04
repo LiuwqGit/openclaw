@@ -568,6 +568,27 @@ describe("read tool", () => {
     expect(textContent(result)).toMatch(/cursor.*(?:end|beyond).*line 1/i);
   });
 
+  it("accepts cursor 0 on an empty first line instead of rejecting it as past EOF", async () => {
+    const tool = createReadToolDefinition("/workspace", {
+      operations: {
+        access: async () => {},
+        readFile: async () => Buffer.from("\nsecond line\n"),
+      },
+    });
+
+    const result = await tool.execute(
+      "call-cursor-zero-empty-line",
+      { path: "synthetic.txt", offset: 1, limit: 2000, cursor: 0 },
+      undefined,
+      undefined,
+      {} as never,
+    );
+
+    const output = textContent(result);
+    expect(output).not.toMatch(/cursor.*(?:end|beyond).*line/i);
+    expect(output).toContain("second line");
+  });
+
   it("finishes an oversized selected line before continuing at the next line", async () => {
     const longLine = "x".repeat(DEFAULT_MAX_BYTES + 100);
     const tool = createReadToolDefinition("/workspace", {
