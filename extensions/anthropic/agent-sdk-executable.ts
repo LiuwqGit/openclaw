@@ -4,6 +4,12 @@ import { resolveWindowsSpawnProgram } from "openclaw/plugin-sdk/windows-spawn";
 
 const CLAUDE_CODE_PACKAGE_NAME = "@anthropic-ai/claude-code";
 const DEFAULT_WINDOWS_PATH_EXT = [".exe", ".cmd", ".bat", ".com"];
+/**
+ * Script extensions the Agent SDK runs through its own Node executable: it
+ * prepends `node` to `pathToClaudeCodeExecutable` only for these extensions
+ * and spawns anything else directly. Keep in sync with the SDK's launcher.
+ */
+const AGENT_SDK_NODE_SCRIPT_EXTENSIONS = [".js", ".mjs", ".ts", ".tsx", ".jsx"];
 
 function isExistingFile(candidate: string): boolean {
   try {
@@ -81,8 +87,21 @@ export function resolveClaudeAgentSdkExecutable(params: {
       env: params.env,
       packageName: CLAUDE_CODE_PACKAGE_NAME,
     });
-    if (program.resolution === "node-entrypoint" && program.leadingArgv[0]) {
-      return program.leadingArgv[0];
+    if (program.resolution === "node-entrypoint") {
+      // The SDK represents a Node-script launcher as its own Node executable
+      // plus the script argument, but pathToClaudeCodeExecutable is a single
+      // path. Hand the SDK only scripts it knows how to run via Node; any
+      // other entrypoint shape falls back to the host-provided command.
+      const script = program.leadingArgv[0];
+      if (
+        script &&
+        AGENT_SDK_NODE_SCRIPT_EXTENSIONS.some((extension) =>
+          script.toLowerCase().endsWith(extension),
+        )
+      ) {
+        return script;
+      }
+      return params.command;
     }
     return program.command;
   } catch {

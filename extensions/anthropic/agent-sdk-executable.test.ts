@@ -173,4 +173,69 @@ describe("resolveClaudeAgentSdkExecutable", () => {
       }),
     ).toBe(portableTool);
   });
+
+  it("hands the SDK the JS entrypoint when only a Node-script launcher exists", async () => {
+    const prefix = await mkdtemp(path.join(os.tmpdir(), "openclaw-claude-win-"));
+    cleanupDirs.push(prefix);
+    const jsEntrypoint = path.join(
+      prefix,
+      "node_modules",
+      "@anthropic-ai",
+      "claude-code",
+      "cli.js",
+    );
+    await mkdir(path.dirname(jsEntrypoint), { recursive: true });
+    await writeFile(jsEntrypoint, "// fake js entrypoint");
+    const cmdShim = NPM_CMD_SHIM.replace("bin\\claude.exe", "cli.js");
+    const cmdShimPath = path.join(prefix, "claude.cmd");
+    await writeFile(cmdShimPath, cmdShim);
+
+    expect(
+      resolveClaudeAgentSdkExecutable({
+        command: cmdShimPath,
+        env: {},
+        platform: "win32",
+      }),
+    ).toBe(jsEntrypoint);
+  });
+
+  it("passes a bare .js command through as the SDK node-script entrypoint on Windows", async () => {
+    const prefix = await mkdtemp(path.join(os.tmpdir(), "openclaw-claude-win-"));
+    cleanupDirs.push(prefix);
+    const jsEntrypoint = path.join(prefix, "claude.js");
+    await writeFile(jsEntrypoint, "// fake js entrypoint");
+
+    expect(
+      resolveClaudeAgentSdkExecutable({
+        command: jsEntrypoint,
+        env: {},
+        platform: "win32",
+      }),
+    ).toBe(jsEntrypoint);
+  });
+
+  it("falls back to the host command for a Node entrypoint the SDK cannot run directly", async () => {
+    const prefix = await mkdtemp(path.join(os.tmpdir(), "openclaw-claude-win-"));
+    cleanupDirs.push(prefix);
+    const cjsEntrypoint = path.join(
+      prefix,
+      "node_modules",
+      "@anthropic-ai",
+      "claude-code",
+      "cli.cjs",
+    );
+    await mkdir(path.dirname(cjsEntrypoint), { recursive: true });
+    await writeFile(cjsEntrypoint, "// fake cjs entrypoint");
+    const cmdShim = NPM_CMD_SHIM.replace("bin\\claude.exe", "cli.cjs");
+    const cmdShimPath = path.join(prefix, "claude.cmd");
+    await writeFile(cmdShimPath, cmdShim);
+
+    expect(
+      resolveClaudeAgentSdkExecutable({
+        command: cmdShimPath,
+        env: {},
+        platform: "win32",
+      }),
+    ).toBe(cmdShimPath);
+  });
 });
