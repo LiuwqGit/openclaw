@@ -1232,6 +1232,49 @@ describe("RealtimeCallHandler path routing", () => {
     );
   });
 
+  it("supplies item-relative telephony playout state to the provider bridge", async () => {
+    await withBargeInHarness(
+      { providerCallId: "CA-playback-state", handlesProviderBargeIn: true },
+      async ({ callbacks, outboundMessages, ws }) => {
+        expect(callbacks.getPlaybackState).toBeTypeOf("function");
+        expect(callbacks.getPlaybackState?.()).toEqual([]);
+
+        callbacks?.onAudio?.(Buffer.alloc(8 * 160, 0xff), { itemId: "item-1" });
+        await waitForRealtimeTest(() => {
+          expect(outboundMessages.some((message) => message.event === "media")).toBe(true);
+        });
+        // One lead window was sent synchronously but still buffers at the carrier
+        // edge, so playout has consumed almost none of it yet.
+        const drainedPlayback = callbacks.getPlaybackState?.();
+        expect(drainedPlayback).toHaveLength(1);
+        expect(drainedPlayback?.[0]?.itemId).toBe("item-1");
+        expect(drainedPlayback?.[0]?.audioEndMs ?? 160).toBeLessThan(40);
+
+        // A provider mark travels through the pacing queue to the carrier.
+        let markAcknowledged = false;
+        callbacks?.onMark?.("mark-1", () => {
+          markAcknowledged = true;
+        });
+        await waitForRealtimeTest(() => {
+          expect(outboundMessages.some((message) => message.event === "mark")).toBe(true);
+        });
+
+        // The carrier acknowledgement retires the played prefix and confirms playout.
+        ws.send(JSON.stringify({ event: "mark", mark: { name: "mark-1" } }));
+        await waitForRealtimeTest(() => {
+          expect(markAcknowledged).toBe(true);
+        });
+        expect(callbacks.getPlaybackState?.()).toEqual([]);
+
+        callbacks?.onClearAudio("barge-in");
+        await waitForRealtimeTest(() => {
+          expect(outboundMessages.some((message) => message.event === "clear")).toBe(true);
+        });
+        expect(callbacks.getPlaybackState?.()).toEqual([]);
+      },
+    );
+  });
+
   it("keeps local barge-in fallback for providers without speech-started events", async () => {
     await withBargeInHarness(
       { providerCallId: "CA-local-barge-in" },
