@@ -63,6 +63,23 @@ describe("fallback-state", () => {
       expected: { active: true, reason: "rate limit" },
     },
     {
+      name: "does not discover runtime aliases without a recorded fallback notice",
+      state: undefined,
+      expected: { active: false, reason: undefined },
+    },
+    {
+      name: "does not discover runtime aliases when the recorded active ref is stale",
+      state: {
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "demo-primary/model-a",
+          activeModel: "other-provider/other-model",
+          reason: "rate limit",
+        },
+      } satisfies FallbackNoticeState,
+      expected: { active: false, reason: undefined },
+    },
+    {
       name: "does not treat runtime drift as fallback when persisted state does not match",
       state: {
         fallbackNotice: {
@@ -75,13 +92,42 @@ describe("fallback-state", () => {
       expected: { active: false, reason: undefined },
     },
   ])("$name", ({ state, expected }) => {
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [],
+      resolvePluginSetupCliBackend: () => {
+        if (!expected.active) {
+          throw new Error("an ineligible fallback notice must not load plugin setup");
+        }
+        return undefined;
+      },
+    });
     const resolved = resolveActiveFallbackState({
       selectedModelRef: "demo-primary/model-a",
       activeModelRef: "demo-fallback/model-b",
       state,
+      config: {},
     });
 
     expect(resolved).toEqual(expected);
+  });
+
+  it("does not project a matching recorded notice for equivalent runtime aliases", () => {
+    registerAnthropicCliBackendForTest();
+
+    expect(
+      resolveActiveFallbackState({
+        selectedModelRef: "anthropic/claude-opus-4-7",
+        activeModelRef: "claude-cli/claude-opus-4-7",
+        state: {
+          fallbackNotice: {
+            kind: "active",
+            selectedModel: "anthropic/claude-opus-4-7",
+            activeModel: "claude-cli/claude-opus-4-7",
+            reason: "selected model unavailable",
+          },
+        },
+      }),
+    ).toEqual({ active: false, reason: undefined });
   });
 
   it("marks fallback transition when selected->active pair changes", () => {

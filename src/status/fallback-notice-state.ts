@@ -18,11 +18,11 @@ export function resolveActiveFallbackState(params: {
   const active = normalizeOptionalString(params.state?.fallbackNotice?.activeModel);
   const reason = normalizeOptionalString(params.state?.fallbackNotice?.reason);
   const fallbackActive =
+    selected === params.selectedModelRef &&
+    active === params.activeModelRef &&
     !areRuntimeModelRefsEquivalent(params.selectedModelRef, params.activeModelRef, {
       config: params.config,
-    }) &&
-    selected === params.selectedModelRef &&
-    active === params.activeModelRef;
+    });
   return {
     active: fallbackActive,
     reason: fallbackActive ? reason : undefined,
