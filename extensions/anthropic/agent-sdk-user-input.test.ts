@@ -128,21 +128,43 @@ describe("Claude Agent SDK user input adapter", () => {
     });
   });
 
-  it("rejects malformed questions before invoking the host, naming the failed field", async () => {
-    const requestUserInput = vi.fn();
+  it("guides a malformed question retry without replaying the rejected call", async () => {
+    const requestUserInput = vi.fn(async () => ({
+      status: "answered" as const,
+      answers: { question_1: ["Vitest"], question_2: ["Unit tests"] },
+    }));
     const authorizer = createClaudeAgentSdkUserInputAuthorizer(createContext(requestUserInput));
-
-    const result = await authorizer.authorize({
-      input: { questions: [{ header: "Too long for Claude", question: "Missing options" }] },
-      signal: new AbortController().signal,
-    });
-
-    expect(result).toEqual({
+    const signal = new AbortController().signal;
+    const rejected = {
       behavior: "deny",
       message:
-        "OpenClaw rejected malformed Claude user questions: questions[0].header must be at most 12 characters.",
-    });
+        "OpenClaw rejected malformed Claude user questions: questions[0].header must be at most 12 characters. Correct the invalid field and retry AskUserQuestion.",
+    };
+
+    await expect(
+      authorizer.authorize({
+        input: { questions: [{ ...input.questions[0], header: "Too long for Claude" }] },
+        signal,
+        toolUseId: "rejected-question",
+      }),
+    ).resolves.toEqual(rejected);
+    await expect(
+      authorizer.authorize({ input, signal, toolUseId: "rejected-question" }),
+    ).resolves.toEqual(rejected);
     expect(requestUserInput).not.toHaveBeenCalled();
+
+    await expect(
+      authorizer.authorize({ input, signal, toolUseId: "corrected-question" }),
+    ).resolves.toMatchObject({
+      behavior: "allow",
+      updatedInput: {
+        answers: {
+          "Which test runner should we use?": "Vitest",
+          "Which proof should we collect?": "Unit tests",
+        },
+      },
+    });
+    expect(requestUserInput).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -226,7 +248,7 @@ describe("Claude Agent SDK user input adapter", () => {
 
       expect(result).toEqual({
         behavior: "deny",
-        message: `OpenClaw rejected malformed Claude user questions: ${expectedDetail}.`,
+        message: `OpenClaw rejected malformed Claude user questions: ${expectedDetail}. Correct the invalid field and retry AskUserQuestion.`,
       });
       expect(requestUserInput).not.toHaveBeenCalled();
     },
