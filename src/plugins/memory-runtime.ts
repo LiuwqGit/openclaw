@@ -57,17 +57,27 @@ function normalizeRegisteredMemoryManager(
   }
   const readFile: MemorySearchManager["readFile"] = async (params) =>
     normalizeRegisteredMemoryReadResult(await manager.readFile(params));
-  const adapter = new Proxy(manager, {
-    get(target, property) {
+  // Frozen or sealed managers expose read-only, non-configurable properties, and
+  // a Proxy `get` trap must return the exact stored value for those. Copy members
+  // onto a fresh writable target so bound functions stay invariant-safe.
+  // SAFETY: Object.create(proto) yields a fresh, writable object shaped by the manager's prototype.
+  const target = Object.create(Object.getPrototypeOf(manager)) as RegisteredMemorySearchManager;
+  for (const key of Reflect.ownKeys(manager)) {
+    // SAFETY: target is a plain writable object created above, so every own key can be assigned.
+    (target as Record<PropertyKey, unknown>)[key] = Reflect.get(manager, key, manager);
+  }
+  const adapter = new Proxy(target, {
+    get(object, property) {
       if (property === "readFile") {
         return readFile;
       }
-      const value = Reflect.get(target, property, target) as unknown;
+      const value = Reflect.get(object, property, manager) as unknown;
       if (typeof value !== "function") {
         return value;
       }
-      // Registered managers may use class/private state, so calls retain the target receiver.
-      return value.bind(target);
+      // Registered managers may use class/private state, so calls retain the original receiver.
+      // SAFETY: value was checked as a function immediately above this line.
+      return (value as (...args: unknown[]) => unknown).bind(manager);
     },
     // SAFETY: readFile is replaced with the canonical adapter; every other member is unchanged.
   }) as MemorySearchManager;

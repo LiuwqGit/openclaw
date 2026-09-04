@@ -358,6 +358,50 @@ describe("memory runtime handles", () => {
     expect(manager.readCalls()).toBe(5);
   });
 
+  it("tolerates frozen registered managers without proxy invariant failures", async () => {
+    const closed = { value: false };
+    const manager = Object.freeze({
+      async search(): Promise<MemorySearchResult[]> {
+        return [];
+      },
+      async readFile({ relPath }: { relPath: string }): Promise<LegacyMemoryReadResult> {
+        return { text: "legacy", path: relPath };
+      },
+      status(): MemoryProviderStatus {
+        return { backend: "builtin", provider: "example" };
+      },
+      async probeEmbeddingAvailability() {
+        return { ok: true as const };
+      },
+      async probeVectorAvailability() {
+        return true;
+      },
+      async close() {
+        closed.value = true;
+      },
+    });
+    const runtime = {
+      ...createRuntime(),
+      getMemorySearchManager: vi.fn(async () => ({ manager })),
+    } satisfies MemoryPluginRuntime;
+    mocks.getMemoryRuntime.mockReturnValue(runtime);
+
+    const first = await getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" });
+
+    expect(first.manager).not.toBeNull();
+    expect(first.manager?.status()).toEqual({ backend: "builtin", provider: "example" });
+    await expect(first.manager?.probeEmbeddingAvailability()).resolves.toEqual({ ok: true });
+    await expect(
+      first.manager?.readFile({ relPath: "memory/legacy-nonempty.md" }),
+    ).resolves.toEqual({
+      status: "ok",
+      text: "legacy",
+      path: "memory/legacy-nonempty.md",
+    });
+    await first.manager?.close?.();
+    expect(closed.value).toBe(true);
+  });
+
   it("authorizes raw hits inside the selected plugin runtime scope", async () => {
     const { registry, runtime } = createRegistry();
     runtime.authorizeSearchHits.mockImplementationOnce(async ({ hits }) => {
