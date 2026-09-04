@@ -9,6 +9,7 @@ import {
 import { finishElementAnimations } from "../test-helpers/animations.ts";
 import {
   controlUiBundledGatewayUrl,
+  defaultControlUiFeatureMethods,
   installMockGateway,
   type ControlUiMockGatewayScenario,
   waitForControlUiRoute,
@@ -54,7 +55,10 @@ function themeConfigResponse(theme: string, mode: "dark" | "light") {
 async function openThemedChat(
   theme: string,
   mode: "dark" | "light",
-  scenario: Pick<ControlUiMockGatewayScenario, "basePath" | "historyMessages"> = {},
+  scenario: Pick<
+    ControlUiMockGatewayScenario,
+    "basePath" | "featureMethods" | "historyMessages" | "methodResponses"
+  > = {},
 ) {
   const context = await suite.newBrowserContext({
     colorScheme: mode,
@@ -89,7 +93,10 @@ async function openThemedChat(
   });
   const gateway = await installMockGateway(page, {
     ...scenario,
-    methodResponses: { "config.get": themeConfigResponse(theme, mode) },
+    methodResponses: {
+      ...scenario.methodResponses,
+      "config.get": themeConfigResponse(theme, mode),
+    },
   });
   return { themeRequests, gateway, page };
 }
@@ -380,6 +387,83 @@ suite.define(() => {
       expect(report.chatLigatures).toBe("normal");
     },
   );
+
+  // The opt-out belongs to native text controls, which the browser shapes
+  // incrementally as you type. CodeMirror owns its own text layer, so it keeps
+  // whatever the theme gives it and edit mode renders a file exactly like the
+  // read view — a divergence there would be invisible without this assertion.
+  it("scopes the ligature opt-out to native controls, not the file editor", async () => {
+    const { gateway, page } = await openThemedChat("crt", "dark", {
+      featureMethods: [...defaultControlUiFeatureMethods, "sessions.files.set"],
+      historyMessages: [
+        {
+          content: [{ text: `Review \`notes.txt\`: ${COMPOSER_LIGATURE_SEQUENCE}`, type: "text" }],
+          role: "assistant",
+          timestamp: 1,
+        },
+      ],
+      methodResponses: {
+        "sessions.files.get": {
+          cases: [
+            {
+              match: { path: "notes.txt" },
+              response: {
+                file: {
+                  content: COMPOSER_LIGATURE_SEQUENCE,
+                  hash: "a".repeat(64),
+                  kind: "read",
+                  missing: false,
+                  name: "notes.txt",
+                  path: "notes.txt",
+                  workspacePath: "notes.txt",
+                },
+                root: "/workspace",
+              },
+            },
+          ],
+        },
+      },
+    });
+    await page.goto(`${suite.server.baseUrl}chat`);
+
+    const composer = page.locator(".agent-chat__composer-combobox textarea");
+    await composer.waitFor({ state: "visible" });
+
+    // Open the file first: fetching it needs the gateway, and queuing below
+    // deliberately takes the connection offline.
+    await page.locator('a.markdown-file-link[data-file-path="notes.txt"]').click();
+    await page.locator(".cm-content").waitFor({ state: "visible" });
+    await page.getByRole("button", { name: "Edit file" }).first().click();
+    // contenteditable flips on only once the editor is actually editable.
+    const editableContent = page.locator('.cm-content[contenteditable="true"]');
+    await editableContent.waitFor();
+
+    const ligaturesOf = (locator: Locator) =>
+      locator.evaluate((element) => getComputedStyle(element).fontVariantLigatures);
+    // Read the editor now: dropping the connection below returns the panel to
+    // its read-only view, which would take the editable node with it.
+    const fileEditorLigatures = await ligaturesOf(editableContent);
+    const fileLineLigatures = await ligaturesOf(page.locator(".cm-line").first());
+
+    // A queued draft reopened for editing is a bare textarea outside the
+    // composer wrapper, so it only inherits the opt-out from the shared rule.
+    await gateway.setOnline(false);
+    await gateway.closeLatest();
+    await composer.fill(COMPOSER_LIGATURE_SEQUENCE.trim());
+    await composer.press("Enter");
+    const queueRow = page.locator(".chat-queue__item").first();
+    await queueRow.waitFor();
+    await queueRow.dblclick();
+    const queueEditor = queueRow.locator(".chat-queue__edit-input");
+    await queueEditor.waitFor();
+
+    expect(await ligaturesOf(composer)).toBe("no-contextual");
+    expect(await ligaturesOf(queueEditor)).toBe("no-contextual");
+    // The file editor keeps the theme's ligature rendering, so a file reads the
+    // same whether it is being viewed or edited.
+    expect(fileEditorLigatures).toBe("normal");
+    expect(fileLineLigatures).toBe("normal");
+  });
 
   it("keeps Phosphor shortcut modifier glyphs on the system UI stack", async () => {
     const { page } = await openThemedChat("phosphor", "dark");
