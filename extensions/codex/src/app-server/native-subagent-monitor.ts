@@ -71,7 +71,10 @@ type ParentState = {
   // turn/started can precede bindTurn; retain receipt ownership until the
   // foreground run has finalized its reply and releases this registration.
   turnIds: Set<string>;
-  nativeCompletionReceipts: Set<string>;
+  // Receipts are keyed by the parent turn that observed them: an aborted turn
+  // never consumes queued native completion input, so its receipts must not
+  // strand a yielded parent behind undelivered child results.
+  nativeCompletionReceipts: Map<string, Set<string>>;
   requesterSessionKey?: string;
   taskRuntimeScope?: AgentHarnessTaskRuntimeScope;
   agentId?: string;
@@ -135,7 +138,7 @@ type ThreadStatusRevision = {
 
 type TaskRecoveryCandidate = {
   parentState: ParentState;
-  nativeCompletionReceipts: Set<string>;
+  nativeCompletionReceipts: Map<string, Set<string>>;
   childThreadId: string;
   recoveryAttempt: number;
   requesterSessionKey: string;
@@ -397,7 +400,7 @@ class Monitor {
         parentThreadId,
         owners: new Map(),
         turnIds: new Set(),
-        nativeCompletionReceipts: new Set(),
+        nativeCompletionReceipts: new Map(),
       };
       this.parentStates.set(parentThreadId, state);
     }
@@ -462,7 +465,7 @@ class Monitor {
             current.turnIds.clear();
             // In-flight recovery retains this run's receipts; a later run must
             // not inherit them merely because it reuses an agent path.
-            current.nativeCompletionReceipts = new Set();
+            current.nativeCompletionReceipts = new Map();
           }
           this.clearUnconsumablePendingDirectSpawnEvidence();
           this.deliverDetachedCompletions(current);
@@ -533,6 +536,9 @@ class Monitor {
         parent.turnIds.add(turnId);
       }
     }
+    if (parent && notification.method === "turn/completed") {
+      this.handleParentTurnTermination(parent, notification);
+    }
     const tracksRecoveryRevision = Boolean(threadId && this.threadStatusRevisions.has(threadId));
     if (
       RECOVERY_REVISION_NOTIFICATION_METHODS.has(notification.method) &&
@@ -567,12 +573,15 @@ class Monitor {
     if (notification.method === "turn/started" && childState) {
       childState.nativeCompletionDelivered = false;
       for (const key of childState.agentPathKeys) {
-        state?.nativeCompletionReceipts.delete(key);
+        for (const receipts of state?.nativeCompletionReceipts.values() ?? []) {
+          receipts.delete(key);
+        }
       }
       this.resumeChild(childState);
     }
-    if (parent && parent.turnIds.has(readString(params, "turnId") ?? "")) {
-      this.recordNativeCompletionDelivery(parent, notification);
+    const parentTurnId = readString(params, "turnId");
+    if (parent && parentTurnId && parent.turnIds.has(parentTurnId)) {
+      this.recordNativeCompletionDelivery(parent, notification, parentTurnId);
     }
     if (childState && !childState.terminal) {
       this.emitChildTaskActivity(notification, childState);
@@ -1262,8 +1271,9 @@ class Monitor {
       return;
     }
     // Codex owns completion input from registration through reply finalization,
-    // including turn startup before its id is bound. Only wake detached parents.
-    if (state.owners.size > 0) {
+    // including turn startup before its id is bound. Only wake parents without
+    // a foreground turn that can still consume the native completion input.
+    if (this.foregroundTurnMayConsumeCompletion(state)) {
       return;
     }
     if (childState.deliveringCompletion || childState.completionDeliveryTimer) {
@@ -1325,15 +1335,71 @@ class Monitor {
     }
   }
 
+  /** Returns true while a registered parent turn can still consume native completion input. */
+  private foregroundTurnMayConsumeCompletion(state: ParentState): boolean {
+    for (const owner of state.owners.values()) {
+      // An owner without a bound turn may still be starting one; its startup
+      // owns the completion input until the turn id is known.
+      if (owner.turnId === undefined || state.turnIds.has(owner.turnId)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** Drops a terminated parent turn and re-arms receipts it never consumed. */
+  private handleParentTurnTermination(
+    state: ParentState,
+    notification: CodexServerNotification,
+  ): void {
+    const params = isJsonObject(notification.params) ? notification.params : undefined;
+    const turn = isJsonObject(params?.turn) ? params.turn : undefined;
+    const turnId = readString(turn, "id")?.trim();
+    if (!turnId || !state.turnIds.has(turnId)) {
+      return;
+    }
+    state.turnIds.delete(turnId);
+    if (normalizeIdentifier(readString(turn, "status")) === "completed") {
+      // A finalized turn consumed its queued input; later completions need a
+      // fresh requester turn, but the observed receipts stay deduplicated.
+      return;
+    }
+    // An aborted or failed turn never reads its queued completion input. Codex
+    // native completion messages do not trigger a turn, so a yielded parent's
+    // receipts must not count as delivery: re-arm those children and deliver.
+    const receipts = state.nativeCompletionReceipts.get(turnId);
+    state.nativeCompletionReceipts.delete(turnId);
+    if (!receipts) {
+      return;
+    }
+    for (const key of receipts) {
+      const childThreadId = this.childThreadIdsByAgentPath.get(key);
+      const child = childThreadId ? this.childStates.get(childThreadId) : undefined;
+      if (!child || child.parentThreadId !== state.parentThreadId) {
+        continue;
+      }
+      child.nativeCompletionDelivered = false;
+      if (child.pendingCompletion) {
+        void this.deliverPendingCompletion(state, child);
+      }
+    }
+  }
+
   private recordNativeCompletionDelivery(
     state: ParentState,
     notification: CodexServerNotification,
+    turnId: string,
   ): void {
     for (const agentPath of nativeSubagentNotifications.deliveredAgentPaths(notification)) {
       const key = buildParentAgentPathKey(state.parentThreadId, agentPath);
       // Native input can arrive before asynchronous history restores the child
       // mapping. Preserve the observed delivery, not a guess from task status.
-      state.nativeCompletionReceipts.add(key);
+      let observed = state.nativeCompletionReceipts.get(turnId);
+      if (!observed) {
+        observed = new Set();
+        state.nativeCompletionReceipts.set(turnId, observed);
+      }
+      observed.add(key);
       const childThreadId = this.childThreadIdsByAgentPath.get(key);
       const child = childThreadId ? this.childStates.get(childThreadId) : undefined;
       if (!child || child.parentThreadId !== state.parentThreadId) {
@@ -1608,7 +1674,8 @@ class Monitor {
     }
     this.childThreadIdsByAgentPath.set(key, childState.childThreadId);
     childState.agentPathKeys.add(key);
-    if (this.parentStates.get(childState.parentThreadId)?.nativeCompletionReceipts.has(key)) {
+    const receipts = this.parentStates.get(childState.parentThreadId)?.nativeCompletionReceipts;
+    if (receipts && hasNativeCompletionReceipt(receipts, key)) {
       childState.nativeCompletionDelivered = true;
     }
   }
@@ -2010,7 +2077,7 @@ class Monitor {
           parentThreadId,
           owners: new Map(),
           turnIds: new Set(),
-          nativeCompletionReceipts: new Set(),
+          nativeCompletionReceipts: new Map(),
           requesterSessionKey: candidate.requesterSessionKey,
           taskRuntimeScope: candidate.taskRuntimeScope,
           agentId: candidate.agentId,
@@ -2029,7 +2096,9 @@ class Monitor {
         return;
       }
       if (
-        [...childState.agentPathKeys].some((key) => candidate.nativeCompletionReceipts.has(key))
+        [...childState.agentPathKeys].some((key) =>
+          hasNativeCompletionReceipt(candidate.nativeCompletionReceipts, key),
+        )
       ) {
         childState.nativeCompletionDelivered = true;
       }
@@ -2242,6 +2311,16 @@ function readLastAgentMessage(turn: JsonObject): string | undefined {
 
 function buildParentAgentPathKey(parentThreadId: string, agentPath: string): string {
   return `${parentThreadId}\0${agentPath}`;
+}
+
+/** Returns true when any remembered parent turn observed a completion receipt. */
+function hasNativeCompletionReceipt(receipts: Map<string, Set<string>>, key: string): boolean {
+  for (const observed of receipts.values()) {
+    if (observed.has(key)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function isNoFinalCompletion(completion: CodexNativeSubagentCompletion): boolean {

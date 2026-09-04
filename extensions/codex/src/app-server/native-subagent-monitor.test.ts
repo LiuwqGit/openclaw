@@ -522,6 +522,133 @@ describe("CodexNativeSubagentMonitor", () => {
       },
     );
 
+    it("wakes a yielded parent exactly once when its native child completes after the foreground owner releases", async () => {
+      const client = createClient();
+      const runtime = createRuntime();
+      const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
+      const owner = registerParent(monitor);
+      owner.bindTurn("parent-turn");
+      await notifyChildStarted(client, "parent-thread", "child-thread", "/root/worker");
+      // sessions_yield aborts the parent turn and releases the foreground owner
+      // while the native child is still running.
+      await client.notify({
+        method: "turn/completed",
+        params: {
+          threadId: "parent-thread",
+          turn: { id: "parent-turn", status: "interrupted", items: [], error: null },
+        },
+      } as CodexServerNotification);
+      owner.unregister();
+      // The child completes long after the parent yielded: Codex mirrors the
+      // completion activity into the dormant parent thread and emits the native
+      // inter-agent completion notification.
+      await client.notify(completedChild());
+      await client.notify(
+        nativeCompletionNotification({ agentPath: "/root/worker", turnId: "parent-turn" }),
+      );
+      try {
+        expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(1);
+        expect(runtime.setDetachedTaskDeliveryStatusByRunId).toHaveBeenLastCalledWith({
+          runId: "codex-thread:child-thread",
+          deliveryStatus: "delivered",
+        });
+      } finally {
+        owner.unregister();
+        client.close();
+      }
+    });
+
+    it("wakes a yielded parent when its child completes while the aborted parent turn still holds registration", async () => {
+      const client = createClient();
+      const runtime = createRuntime();
+      const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
+      const owner = registerParent(monitor);
+      owner.bindTurn("parent-turn");
+      await notifyChildStarted(client, "parent-thread", "child-thread", "/root/worker");
+      // sessions_yield aborts the parent turn, but its foreground registration is
+      // still releasing; the parent Codex thread is already dormant.
+      await client.notify({
+        method: "turn/completed",
+        params: {
+          threadId: "parent-thread",
+          turn: { id: "parent-turn", status: "interrupted", items: [], error: null },
+        },
+      } as CodexServerNotification);
+      await client.notify(
+        nativeCompletionNotification({ agentPath: "/root/worker", turnId: "parent-turn" }),
+      );
+      await client.notify(completedChild());
+      try {
+        expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(1);
+        expect(runtime.setDetachedTaskDeliveryStatusByRunId).toHaveBeenLastCalledWith({
+          runId: "codex-thread:child-thread",
+          deliveryStatus: "delivered",
+        });
+      } finally {
+        owner.unregister();
+        client.close();
+      }
+    });
+
+    it("re-arms a native receipt when its parent turn aborts before consuming it", async () => {
+      const client = createClient();
+      const runtime = createRuntime();
+      const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
+      const owner = registerParent(monitor);
+      owner.bindTurn("parent-turn");
+      await notifyChildStarted(client, "parent-thread", "child-thread", "/root/worker");
+      // The child's native completion receipt arrives while the parent turn is
+      // still live, but sessions_yield aborts the turn before it consumes the
+      // queued completion input.
+      await client.notify(deliveredNativeCompletion());
+      await client.notify({
+        method: "turn/completed",
+        params: {
+          threadId: "parent-thread",
+          turn: { id: "parent-turn", status: "interrupted", items: [], error: null },
+        },
+      } as CodexServerNotification);
+      await client.notify(completedChild());
+      try {
+        expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(1);
+        expect(runtime.setDetachedTaskDeliveryStatusByRunId).toHaveBeenLastCalledWith({
+          runId: "codex-thread:child-thread",
+          deliveryStatus: "delivered",
+        });
+      } finally {
+        owner.unregister();
+        client.close();
+      }
+    });
+
+    it("keeps trusting a native receipt after its parent turn finalizes normally", async () => {
+      const client = createClient();
+      const runtime = createRuntime();
+      const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
+      const owner = registerParent(monitor);
+      owner.bindTurn("parent-turn");
+      await notifyChildStarted(client, "parent-thread", "child-thread", "/root/worker");
+      await client.notify(deliveredNativeCompletion());
+      await client.notify({
+        method: "turn/completed",
+        params: {
+          threadId: "parent-thread",
+          turn: { id: "parent-turn", status: "completed", items: [], error: null },
+        },
+      } as CodexServerNotification);
+      await client.notify(completedChild());
+      try {
+        expect(runtime.deliverAgentHarnessTaskCompletion).not.toHaveBeenCalled();
+        expect(runtime.setDetachedTaskDeliveryStatusByRunId).toHaveBeenLastCalledWith({
+          runId: "codex-thread:child-thread",
+          deliveryStatus: "delivered",
+        });
+      } finally {
+        owner.unregister();
+        client.close();
+      }
+    });
+
     it("defers delivery during unbound parent startup and drains it if startup is released", async () => {
       const client = createClient();
       const runtime = createRuntime();
