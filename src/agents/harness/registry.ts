@@ -114,6 +114,22 @@ export function resolveCodexAgentHarnessNativeCompaction(
     : undefined;
 }
 
+export function resolveHostByteAuthority(
+  harnessId: string | undefined,
+  expectedHarness?: AgentHarness,
+) {
+  const harness = getRegisteredAgentHarness(harnessId ?? "")?.harness;
+  if (!harness || (expectedHarness && harness !== expectedHarness)) {
+    return undefined;
+  }
+  try {
+    const nativeCompaction = resolveCodexAgentHarnessNativeCompaction(harness);
+    return nativeCompaction ? { harness, nativeCompaction } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Lists registered harness records for selection and lifecycle fan-out. */
 export function listRegisteredAgentHarnesses(): RegisteredAgentHarness[] {
   return getAgentHarnesses().map((entry) => ({

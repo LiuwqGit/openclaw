@@ -30,6 +30,7 @@ import { resolveUserPath } from "../../utils.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { isRecoverableNativeHarnessBindingFailure } from "../harness/compaction-recovery.js";
 import { maybeCompactAgentHarnessSession } from "../harness/compaction.js";
+import { resolveHostByteAuthority } from "../harness/registry.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
 import {
   acquireAgentRunPreparedModelRuntime,
@@ -357,13 +358,23 @@ async function compactEmbeddedAgentSessionImpl(
         })
       : null;
   const preparedParams = placementSandbox ? { ...params, sandbox: placementSandbox } : params;
-  const runtimeSelection = resolveCompactionRuntimeSelection({
-    ...preparedParams,
-    modelId: preparedParams.model,
-    boundHarnessRuntime: preparedParams.agentHarnessId,
-    preparedRuntimePlan: preparedParams.runtimePlan,
-    selectedHarnessRuntime: resolveSessionPinnedHarnessId(preparedParams.sessionEntry),
-  });
+  // Host intent may retain the route, but only the exact prepared registry object can authorize it.
+  const hostBytePreflightHarnessId =
+    params.preflightRequired === true &&
+    params.preflightCompactionTrigger === "transcript_bytes" &&
+    params.trigger === "budget"
+      ? host.hostTranscriptBytePreflightIntent
+      : undefined;
+  const runtimeSelection = resolveCompactionRuntimeSelection(
+    {
+      ...preparedParams,
+      modelId: preparedParams.model,
+      boundHarnessRuntime: preparedParams.agentHarnessId,
+      preparedRuntimePlan: preparedParams.runtimePlan,
+      selectedHarnessRuntime: resolveSessionPinnedHarnessId(preparedParams.sessionEntry),
+    },
+    Boolean(hostBytePreflightHarnessId),
+  );
   if (params.abortSignal?.aborted) {
     return createCompactionAbortedResult();
   }
@@ -420,6 +431,7 @@ async function compactEmbeddedAgentSessionImpl(
         resolvedWorkspaceDir,
         lease.snapshot,
         contextEngineSessionKey,
+        hostBytePreflightHarnessId,
         () => {
           disposeContextEngineOnExit = false;
         },
@@ -446,6 +458,7 @@ async function compactResolvedContextEngine(
   resolvedWorkspaceDir: string,
   preparedModelRuntime: PreparedModelRuntimeSnapshot,
   contextEngineSessionKey: string | undefined,
+  hostBytePreflightHarnessId: string | undefined,
   releaseContextEngineOwnership: () => void,
 ): Promise<EmbeddedAgentCompactResult> {
   const runtimeTarget = params.sessionTarget;
@@ -466,13 +479,16 @@ async function compactResolvedContextEngine(
     contextConfigProvider: ceContextConfigProvider,
     modelId: ceModelId,
     attemptNativeHarnessCompaction: selectedNativeHarnessCompaction,
-  } = resolveCompactionRuntimeSelection({
-    ...params,
-    modelId: params.model,
-    boundHarnessRuntime: params.agentHarnessId,
-    preparedRuntimePlan: params.runtimePlan,
-    selectedHarnessRuntime: lockedHarnessRuntime,
-  });
+  } = resolveCompactionRuntimeSelection(
+    {
+      ...params,
+      modelId: params.model,
+      boundHarnessRuntime: params.agentHarnessId,
+      preparedRuntimePlan: params.runtimePlan,
+      selectedHarnessRuntime: lockedHarnessRuntime,
+    },
+    Boolean(hostBytePreflightHarnessId),
+  );
   const lockedNativeHarness = Boolean(lockedHarnessRuntime && lockedHarnessRuntime !== "openclaw");
   // Ensure the policy-selected harness plugin so selection can pick implicit codex.
   await ensureSelectedAgentHarnessPlugin({
@@ -519,6 +535,13 @@ async function compactResolvedContextEngine(
     convergenceErrorPrefix: "Prepared queued compaction",
   });
   const preparedHarnessRuntime = selectedPreparedHarness.id;
+  const hostByteAuthority =
+    hostBytePreflightHarnessId === preparedHarnessRuntime
+      ? resolveHostByteAuthority(preparedHarnessRuntime, selectedPreparedHarness)
+      : undefined;
+  if (hostBytePreflightHarnessId && !hostByteAuthority) {
+    return lockedCompactionRuntimeFailure(hostBytePreflightHarnessId);
+  }
   const attemptNativeHarnessCompaction =
     selectedNativeHarnessCompaction && preparedHarnessRuntime !== "openclaw";
   const runtimeAuthPlan = runtimeAuthPreparation.plan;
@@ -600,7 +623,9 @@ async function compactResolvedContextEngine(
   const contextEngineOwnsCompaction = contextEngine.info.ownsCompaction === true;
   let requiredPreflightNativeCapabilityUsed = false;
   const harnessResult =
-    attemptNativeHarnessCompaction && (!contextEngineOwnsCompaction || lockedNativeHarness)
+    attemptNativeHarnessCompaction &&
+    !hostByteAuthority &&
+    (!contextEngineOwnsCompaction || lockedNativeHarness)
       ? await runPrimaryNativeCompactionInLanes(preparedParams, expectedEntry, host, async () => {
           if (params.abortSignal?.aborted) {
             return createCompactionAbortedResult();
@@ -631,6 +656,7 @@ async function compactResolvedContextEngine(
   // fallback for a locked harness; public result fields cannot escape the lock.
   if (
     lockedNativeHarness &&
+    !hostByteAuthority &&
     !(
       preparedParams.preflightRequired === true &&
       requiredPreflightNativeCapabilityUsed &&
@@ -685,6 +711,7 @@ async function compactResolvedContextEngine(
     preparedHarnessRuntime,
     contextTokenBudget,
     attemptNativeHarnessCompaction,
+    hostByteAuthority,
   });
 }
 

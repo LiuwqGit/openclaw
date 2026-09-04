@@ -55,6 +55,7 @@ export type PreparedCompactEmbeddedAgentSessionParams = CompactEmbeddedAgentSess
 
 export async function prepareDirectCompactionAttempt(
   params: PreparedCompactEmbeddedAgentSessionParams,
+  retainRequestedModel = false,
 ) {
   const startedAt = Date.now();
   const diagId = params.diagId?.trim() || createDirectCompactionDiagId();
@@ -90,12 +91,15 @@ export async function prepareDirectCompactionAttempt(
     runtimeProvider,
     contextConfigProvider,
     modelId,
-  } = resolveCompactionRuntimeSelection({
-    ...params,
-    modelId: params.model,
-    boundHarnessRuntime: params.agentHarnessId,
-    preparedRuntimePlan: params.runtimePlan,
-  });
+  } = resolveCompactionRuntimeSelection(
+    {
+      ...params,
+      modelId: params.model,
+      boundHarnessRuntime: params.agentHarnessId,
+      preparedRuntimePlan: params.runtimePlan,
+    },
+    retainRequestedModel,
+  );
   // Keep the configured provider for harness policy, while auth/model loading below can
   // route OpenAI compaction through Codex OAuth when that runtime owns the session credentials.
   // Ensure the policy-selected harness plugin so selection can pick implicit codex.

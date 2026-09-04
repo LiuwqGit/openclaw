@@ -504,12 +504,19 @@ bundle.
 
 ## Compaction and transcript mirror
 
-When the selected model uses the Codex harness, native thread compaction
-belongs to Codex app-server. OpenClaw does not run preflight compaction for
-Codex turns, replace Codex compaction with context-engine compaction, or fall
-back to OpenClaw or public OpenAI summarization when native compaction cannot
-be started. OpenClaw keeps a transcript mirror for channel history, search,
-`/new`, `/reset`, and future model or harness switching.
+When the selected model uses the Codex harness, Codex app-server owns native
+token-pressure and manual thread compaction. OpenClaw keeps a transcript mirror
+for channel history, search, `/new`, `/reset`, and future model or harness
+switching. `maxActiveTranscriptBytes` is a host-owned byte fuse on that mirror,
+checked before ordinary and heartbeat turns. When it trips, OpenClaw compacts
+the mirror through its local or configured context-engine semantic compaction
+path before admitting the turn.
+
+After successful host compaction, OpenClaw attempts private native
+synchronization when available. This is secondary: restricted or host-isolated
+Codex bindings do not issue the forbidden primary native compaction RPC, and a
+failed or unavailable native synchronization does not undo successful host
+compaction.
 
 Explicit compaction requests, such as `/compact` or a plugin-requested manual
 compact operation, start native Codex compaction with `thread/compact/start`.
@@ -523,9 +530,10 @@ period, OpenClaw retires the connection before releasing the fence. Remote
 connections also detach the matching thread binding so later work cannot
 overlap an unconfirmed remote turn. Other turns on a retired connection fail
 and can retry on a fresh client. Client closure, request cancellation, or a
-failed compaction turn returns a failed operation. Automatic context-pressure
-compaction is Codex's job; OpenClaw only starts native compaction for manually
-requested triggers.
+failed compaction turn returns a failed operation. Automatic native
+token-pressure compaction is Codex's job. Outside the secondary mirror
+synchronization described above, OpenClaw starts native compaction only for
+manually requested triggers.
 
 A standalone cold compact operation does not run prompt-build hooks or establish
 ordinary-turn configuration. It releases its subscription after the operation;

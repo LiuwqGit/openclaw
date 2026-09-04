@@ -32,21 +32,24 @@ import {
 } from "./compaction-runtime-context.js";
 
 /** Resolves the shared policy, target, and harness ownership for either compaction entry point. */
-export function resolveCompactionRuntimeSelection(params: {
-  config?: OpenClawConfig;
-  provider?: string | null;
-  modelId?: string | null;
-  authProfileId?: string | null;
-  modelSelectionLocked?: boolean;
-  sandboxSessionKey?: string | null;
-  sandboxAgentId?: string;
-  sessionKey?: string | null;
-  agentId?: string;
-  boundHarnessRuntime?: string | null;
-  preparedRuntimePlan?: AgentRuntimePlan;
-  runtimeAuthPlan?: AgentRuntimeAuthPlan;
-  selectedHarnessRuntime?: string;
-}) {
+export function resolveCompactionRuntimeSelection(
+  params: {
+    config?: OpenClawConfig;
+    provider?: string | null;
+    modelId?: string | null;
+    authProfileId?: string | null;
+    modelSelectionLocked?: boolean;
+    sandboxSessionKey?: string | null;
+    sandboxAgentId?: string;
+    sessionKey?: string | null;
+    agentId?: string;
+    boundHarnessRuntime?: string | null;
+    preparedRuntimePlan?: AgentRuntimePlan;
+    runtimeAuthPlan?: AgentRuntimeAuthPlan;
+    selectedHarnessRuntime?: string;
+  },
+  retainRequestedModel = false,
+) {
   const runtimePolicySessionKey = params.sandboxSessionKey ?? params.sessionKey ?? undefined;
   const runtimePolicyAgentId =
     params.sandboxAgentId ??
@@ -58,7 +61,7 @@ export function resolveCompactionRuntimeSelection(params: {
     provider: params.provider,
     modelId: params.modelId,
     authProfileId: params.authProfileId,
-    modelSelectionLocked: params.modelSelectionLocked,
+    modelSelectionLocked: params.modelSelectionLocked || retainRequestedModel,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
@@ -93,7 +96,7 @@ export function resolveCompactionRuntimeSelection(params: {
     modelId: params.modelId,
     authProfileId: params.authProfileId,
     harnessRuntime: selectedHarnessRuntime,
-    modelSelectionLocked: params.modelSelectionLocked,
+    modelSelectionLocked: params.modelSelectionLocked || retainRequestedModel,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });

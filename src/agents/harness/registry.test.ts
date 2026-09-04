@@ -16,6 +16,7 @@ import {
   getRegisteredAgentHarness,
   listRegisteredAgentHarnesses,
   registerAgentHarness,
+  resolveHostByteAuthority,
   resolveAgentHarnessOwnerPluginId,
   resolveCodexAgentHarnessNativeCompaction,
   resetRegisteredAgentHarnessSessions,
@@ -130,6 +131,10 @@ describe("agent harness registry", () => {
     expect(resolveCodexAgentHarnessNativeCompaction(registered as AgentHarness)).toBe(
       nativeCompaction,
     );
+    const authority = resolveHostByteAuthority("codex");
+    expect(authority).toEqual({ harness: registered, nativeCompaction });
+    expect(resolveHostByteAuthority("custom")).toBeUndefined();
+    expect(registered).not.toHaveProperty("transcriptBytePreflight");
     expect(() => resolveCodexAgentHarnessNativeCompaction(makeHarness("codex"))).toThrow(
       "Agent harness codex changed during native compaction resolution",
     );

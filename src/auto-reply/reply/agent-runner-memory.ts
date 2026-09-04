@@ -2,13 +2,11 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import { resolveEffectiveCompactionReserveTokens } from "../../agents/agent-compaction-constants.js";
+import { normalizeOptionalAgentRuntimeId } from "../../agents/agent-runtime-id.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
@@ -720,10 +718,17 @@ export async function runSessionCompactionIfNeeded(params: {
   const runtimeId = resolveFollowupAgentRuntimeId(runtimeParams);
   const isCli = followupUsesCliRuntime(runtimeParams, runtimeId);
   const ownsNativeCompaction = followupOwnsNativeCompaction(runtimeParams, runtimeId);
-  if (params.isHeartbeat || isCli || ownsNativeCompaction) {
+  if (isCli || ownsNativeCompaction) {
     return entry ?? params.sessionEntry;
   }
-  const isCodexRuntime = normalizeLowercaseStringOrEmpty(runtimeId) === "codex";
+  const resolveCompactionHarnessId = (current: SessionEntry) =>
+    current.sessionId === params.followupRun.run.sessionId && current.modelSelectionLocked === true
+      ? resolvePersistedSessionRuntimeId(current)
+      : (params.agentHarnessId ??
+        (current.sessionId === params.followupRun.run.sessionId ? runtimeId : undefined));
+  let compactionHarnessId = resolveCompactionHarnessId(entry);
+  let hostBytePreflightHarnessId: "codex" | undefined =
+    normalizeOptionalAgentRuntimeId(compactionHarnessId) === "codex" ? "codex" : undefined;
 
   const compactionSessionKey = params.sessionKey ?? params.followupRun.run.sessionKey;
   if (!compactionSessionKey) {
@@ -780,7 +785,9 @@ export async function runSessionCompactionIfNeeded(params: {
   const maxActiveTranscriptBytes = resolveMaxActiveTranscriptBytes(params.cfg);
   const shouldCheckActiveTranscriptBytes = typeof maxActiveTranscriptBytes === "number";
   const transcriptUsageTokens =
-    isCodexRuntime || (typeof freshPersistedTokens === "number" && !freshNeedsOutputRead)
+    params.isHeartbeat ||
+    hostBytePreflightHarnessId ||
+    (typeof freshPersistedTokens === "number" && !freshNeedsOutputRead)
       ? undefined
       : await estimatePromptTokensFromSessionTranscript({
           agentId: compactionAgentId,
@@ -806,9 +813,9 @@ export async function runSessionCompactionIfNeeded(params: {
     typeof activeTranscriptBytes === "number" &&
     typeof maxActiveTranscriptBytes === "number" &&
     activeTranscriptBytes >= maxActiveTranscriptBytes;
-  // Codex re-evaluates its native rollout fuse every turn; this latch only suppresses local retries.
+  // Local byte compaction can leave the active transcript oversized, so latch
+  // the exact unchanged projection instead of retrying it every turn.
   let transcriptByteCompactionLatched =
-    !isCodexRuntime &&
     exceedsTranscriptByteThreshold &&
     hasMatchingTranscriptByteCompactionLatch(
       entry,
@@ -838,8 +845,11 @@ export async function runSessionCompactionIfNeeded(params: {
       throw new Error("Session changed before byte-compaction progress could be cleared");
     }
     entry = compactionStore[compactionSessionKey] ?? entry;
+    // Latch clearing can publish a newer same-session owner; do not carry stale intent onward.
+    compactionHarnessId = resolveCompactionHarnessId(entry);
+    hostBytePreflightHarnessId =
+      normalizeOptionalAgentRuntimeId(compactionHarnessId) === "codex" ? "codex" : undefined;
     transcriptByteCompactionLatched =
-      !isCodexRuntime &&
       exceedsTranscriptByteThreshold &&
       hasMatchingTranscriptByteCompactionLatch(
         entry,
@@ -849,12 +859,10 @@ export async function runSessionCompactionIfNeeded(params: {
   }
   const shouldCompactByTranscriptBytes =
     exceedsTranscriptByteThreshold && !transcriptByteCompactionLatched;
-  if (isCodexRuntime && !shouldCompactByTranscriptBytes) {
-    // Codex owns native-thread token pressure; OpenClaw owns the host transcript byte fuse
-    // that bounds fresh-thread bootstrap seeds.
+  if ((params.isHeartbeat || hostBytePreflightHarnessId) && !shouldCompactByTranscriptBytes) {
     logVerbose(
-      `preflightCompaction skipped: sessionKey=${params.sessionKey} runtime=codex ` +
-        `reason=codex_native_auto_compaction ` +
+      `preflightCompaction skipped: sessionKey=${params.sessionKey} ` +
+        `reason=${params.isHeartbeat ? "heartbeat" : "native_auto_compaction"} ` +
         `activeTranscriptBytes=${activeTranscriptBytes ?? "undefined"} ` +
         `maxActiveTranscriptBytes=${maxActiveTranscriptBytes ?? "undefined"}`,
     );
@@ -956,77 +964,73 @@ export async function runSessionCompactionIfNeeded(params: {
   try {
     await notifyStartCompaction();
     assertActive();
-    const result = await compactEmbeddedAgentSession(
-      {
+    const compactParams: Parameters<typeof compactEmbeddedAgentSession>[0] = {
+      sessionId: entry.sessionId,
+      sessionKey: compactionSessionKey,
+      sessionTarget: {
+        agentId: compactionAgentId,
         sessionId: entry.sessionId,
         sessionKey: compactionSessionKey,
-        sessionTarget: {
-          agentId: compactionAgentId,
-          sessionId: entry.sessionId,
-          sessionKey: compactionSessionKey,
-          storePath: compactionStorePath,
-        },
-        sandboxSessionKey: params.runtimePolicySessionKey,
-        allowGatewaySubagentBinding: true,
-        messageChannel: params.followupRun.run.messageProvider,
-        clientCaps: params.followupRun.run.clientCaps,
-        conversationToolPolicy: params.followupRun.run.conversationToolPolicy,
-        groupId: entry.groupId ?? params.followupRun.run.groupId,
-        groupChannel: entry.groupChannel ?? params.followupRun.run.groupChannel,
-        groupSpace: entry.space ?? params.followupRun.run.groupSpace,
-        senderId: params.followupRun.run.senderId,
-        senderName: params.followupRun.run.senderName,
-        senderUsername: params.followupRun.run.senderUsername,
-        senderE164: params.followupRun.run.senderE164,
-        inputProvenance: params.followupRun.run.inputProvenance,
-        sessionFile: compactionSessionKey,
-        workspaceDir: params.followupRun.run.workspaceDir,
-        cwd: params.followupRun.run.cwd,
-        agentDir: params.followupRun.run.agentDir,
-        config: params.cfg,
-        // Group session keys do not encode account identity, so without this the
-        // preflight path resolves the root history limit after prompt preparation
-        // already used the account limit.
-        agentAccountId: params.followupRun.run.agentAccountId,
-        conversationRoutePeerId: params.followupRun.run.conversationRoutePeerId,
-        chatType: params.followupRun.run.chatType,
-        skillsSnapshot: entry.skillsSnapshot ?? params.followupRun.run.skillsSnapshot,
-        provider: params.followupRun.run.provider,
-        model: params.followupRun.run.model,
-        authProfileId: params.followupRun.run.authProfileId,
-        authProfileIdSource: params.followupRun.run.authProfileIdSource,
-        sessionEntry: entry,
-        agentHarnessId:
-          params.agentHarnessId ??
-          (entry.sessionId === params.followupRun.run.sessionId
-            ? entry.modelSelectionLocked === true
-              ? resolvePersistedSessionRuntimeId(entry)
-              : runtimeId
-            : undefined),
-        modelSelectionLocked: entry.modelSelectionLocked === true,
-        thinkLevel: params.followupRun.run.thinkLevel,
-        bashElevated: params.followupRun.run.bashElevated,
-        trigger: "budget",
-        force: true,
-        forcePreflight: true,
-        preflightRequired: true,
-        preflightCompactionTrigger: compactionTrigger,
-        deferOwningContextEngineCompaction: false,
-        contextTokenBudget: contextWindowTokens,
-        currentTokenCount: tokenCountForCompaction ?? freshPersistedTokens,
-        ownerNumbers: params.followupRun.run.ownerNumbers,
-        abortSignal: params.abortSignal,
+        storePath: compactionStorePath,
       },
-      {
-        assertActive,
-        onCommitted: (accepted) => {
-          expectedSession = accepted.entry;
-          entry = accepted.entry;
-          compactionStore[compactionSessionKey] = accepted.entry;
-          params.onCompactionCommitted?.(accepted);
-        },
+      sandboxSessionKey: params.runtimePolicySessionKey,
+      allowGatewaySubagentBinding: true,
+      messageChannel: params.followupRun.run.messageProvider,
+      clientCaps: params.followupRun.run.clientCaps,
+      conversationToolPolicy: params.followupRun.run.conversationToolPolicy,
+      groupId: entry.groupId ?? params.followupRun.run.groupId,
+      groupChannel: entry.groupChannel ?? params.followupRun.run.groupChannel,
+      groupSpace: entry.space ?? params.followupRun.run.groupSpace,
+      senderId: params.followupRun.run.senderId,
+      senderName: params.followupRun.run.senderName,
+      senderUsername: params.followupRun.run.senderUsername,
+      senderE164: params.followupRun.run.senderE164,
+      inputProvenance: params.followupRun.run.inputProvenance,
+      sessionFile: compactionSessionKey,
+      workspaceDir: params.followupRun.run.workspaceDir,
+      cwd: params.followupRun.run.cwd,
+      agentDir: params.followupRun.run.agentDir,
+      config: params.cfg,
+      // Group session keys do not encode account identity, so without this the
+      // preflight path resolves the root history limit after prompt preparation
+      // already used the account limit.
+      agentAccountId: params.followupRun.run.agentAccountId,
+      conversationRoutePeerId: params.followupRun.run.conversationRoutePeerId,
+      chatType: params.followupRun.run.chatType,
+      skillsSnapshot: entry.skillsSnapshot ?? params.followupRun.run.skillsSnapshot,
+      provider: params.followupRun.run.provider,
+      model: params.followupRun.run.model,
+      authProfileId: params.followupRun.run.authProfileId,
+      authProfileIdSource: params.followupRun.run.authProfileIdSource,
+      sessionEntry: entry,
+      agentHarnessId: compactionHarnessId,
+      modelSelectionLocked: entry.modelSelectionLocked === true,
+      thinkLevel: params.followupRun.run.thinkLevel,
+      bashElevated: params.followupRun.run.bashElevated,
+      trigger: "budget",
+      force: true,
+      forcePreflight: true,
+      preflightRequired: true,
+      preflightCompactionTrigger: compactionTrigger,
+      deferOwningContextEngineCompaction: false,
+      contextTokenBudget: contextWindowTokens,
+      currentTokenCount: tokenCountForCompaction ?? freshPersistedTokens,
+      ownerNumbers: params.followupRun.run.ownerNumbers,
+      abortSignal: params.abortSignal,
+    };
+    const compactHost: NonNullable<Parameters<typeof compactEmbeddedAgentSession>[1]> = {
+      assertActive,
+      ...(compactionTrigger === "transcript_bytes" && hostBytePreflightHarnessId
+        ? { hostTranscriptBytePreflightIntent: hostBytePreflightHarnessId }
+        : {}),
+      onCommitted: (accepted: AcceptedCompactionSuccessor) => {
+        expectedSession = accepted.entry;
+        entry = accepted.entry;
+        compactionStore[compactionSessionKey] = accepted.entry;
+        params.onCompactionCommitted?.(accepted);
       },
-    );
+    };
+    const result = await compactEmbeddedAgentSession(compactParams, compactHost);
 
     if (!result?.ok) {
       assertActive();
@@ -1055,9 +1059,7 @@ export async function runSessionCompactionIfNeeded(params: {
     }
 
     const postCompactionBytes =
-      !isCodexRuntime &&
-      compactionTrigger === "transcript_bytes" &&
-      typeof maxActiveTranscriptBytes === "number"
+      compactionTrigger === "transcript_bytes" && typeof maxActiveTranscriptBytes === "number"
         ? readSessionLogSnapshot({
             agentId: compactionAgentId,
             sessionId: entry.sessionId,
