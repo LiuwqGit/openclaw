@@ -1,9 +1,11 @@
 // Regression tests for requester yield claims: isolated automation (cron)
-// requesters must be rejected before yield intent is recorded (#135282).
-// The registry-backed tests exercise the real production registry with no
-// mocks: the completion-required child row is the exact state that the
-// pre-fix claim path accepted (proven by the control test below), and the
-// assembled tool must reject the yield without touching it.
+// requesters must never record yield intent (#135282). sessions_yield is not
+// assembled for them at all (the documented effective-tool contract stays
+// truthful), and the lifecycle-boundary rejection remains as a backstop for
+// any future re-introduction path. The registry-backed tests exercise the real
+// production registry with no mocks: the completion-required child row is the
+// exact state that the pre-fix claim path accepted (proven by the control test
+// below).
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
@@ -55,17 +57,6 @@ function createTestOpenClawTools(
       agents: options.config?.agents ?? { entries: { main: { default: true } } },
     } satisfies OpenClawConfig,
   });
-}
-
-function expectToolNamed(
-  tools: ReturnType<typeof createOpenClawTools>,
-  name: string,
-): ReturnType<typeof createOpenClawTools>[number] {
-  const tool = tools.find((candidate) => candidate.name === name);
-  if (!tool) {
-    throw new Error(`Expected tool ${name} to be registered`);
-  }
-  return tool;
 }
 
 describe("createRequesterYieldCallback isolated automation rejection", () => {
@@ -157,41 +148,65 @@ describe("sessions_yield isolated automation ownership", () => {
   });
 
   // Real registry, real tool assembly, no mocks: the isolated automation turn
-  // owns a genuinely pending completion-required child, and the rejection must
-  // leave the run record free of any yield intent or settle-wake state.
-  it("rejects an isolated automation requester and records no yield intent in the real registry", async () => {
+  // owns a genuinely pending completion-required child, and the unsupported
+  // yield capability must not even be assembled, leaving the run record free
+  // of any yield intent or settle-wake state.
+  it("does not assemble sessions_yield for an isolated automation requester and records no yield intent", () => {
     seedCompletionRequiredCronChild();
-    const onYield = vi.fn(async () => undefined);
 
-    const tool = expectToolNamed(
-      createTestOpenClawTools({
-        agentSessionKey: "agent:main:telegram:default:direct:1234",
-        runSessionKey: CRON_RUN_KEY,
-        sessionId: "cron-requester-session",
-        runId: "run-requester",
-        onYield,
-        disableMessageTool: true,
-        disablePluginTools: true,
-        wrapBeforeToolCallHook: false,
-      }),
-      "sessions_yield",
-    );
-
-    const result = await tool.execute("yield-cron-requester", {});
-
-    expect(result.details).toMatchObject({
-      status: "error",
-      error: ISOLATED_AUTOMATION_YIELD_UNSUPPORTED_ERROR,
+    const tools = createTestOpenClawTools({
+      agentSessionKey: "agent:main:telegram:default:direct:1234",
+      runSessionKey: CRON_RUN_KEY,
+      sessionId: "cron-requester-session",
+      runId: "run-requester",
+      onYield: async () => undefined,
+      disableMessageTool: true,
+      disablePluginTools: true,
+      wrapBeforeToolCallHook: false,
     });
-    expect(onYield).not.toHaveBeenCalled();
+
+    expect(tools.map((tool) => tool.name)).not.toContain("sessions_yield");
 
     const childRun = getSubagentRunByRunId("run-child");
     expect(childRun).toBeDefined();
     // The turn still owns its pending child completion; no durable yield intent
-    // or settle-wake handoff may exist after the rejection.
+    // or settle-wake handoff may exist because the capability is absent.
     expect(childRun?.requesterTurnYielded).toBeUndefined();
     expect(childRun?.requesterSettleWake).toBeUndefined();
     expect(childRun?.requesterTurnRunId).toBe("run-requester");
     expect(childRun?.execution.status).toBe("running");
+  });
+
+  it("does not assemble sessions_yield when only the controller session key is cron", () => {
+    const tools = createTestOpenClawTools({
+      agentSessionKey: "agent:main:cron:daily-report",
+      sessionId: "cron-controller-session",
+      runId: "run-requester",
+      disableMessageTool: true,
+      disablePluginTools: true,
+      wrapBeforeToolCallHook: false,
+    });
+
+    expect(tools.map((tool) => tool.name)).not.toContain("sessions_yield");
+  });
+
+  // Ordinary yield flows are unchanged: interactive and subagent requesters
+  // keep the documented waiting capability.
+  it.each([
+    "agent:main:telegram:default:direct:1234",
+    "agent:main:subagent:worker",
+    "agent:main:main",
+  ])("still assembles sessions_yield for requester %s", (agentSessionKey) => {
+    const tools = createTestOpenClawTools({
+      agentSessionKey,
+      sessionId: "requester-session",
+      runId: "run-requester",
+      onYield: async () => undefined,
+      disableMessageTool: true,
+      disablePluginTools: true,
+      wrapBeforeToolCallHook: false,
+    });
+
+    expect(tools.map((tool) => tool.name)).toContain("sessions_yield");
   });
 });

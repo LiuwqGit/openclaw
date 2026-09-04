@@ -20,9 +20,10 @@ export function createRequesterYieldCallback(params: {
   requesterTurnRunId?: string;
   claimYieldCompletion?: () => boolean | Promise<boolean>;
 }): YieldCompletionClaim | undefined {
-  // Reject unsupported isolated automation yields before any durable registry
-  // state records the intent; the scheduler-owned descendant wait still covers
-  // ordinary spawned work in these turns.
+  // Backstop: createOpenClawTools does not assemble sessions_yield for cron
+  // requesters at all (the capability is unavailable, not merely rejected), so
+  // this lifecycle-boundary rejection guards against any future
+  // re-introduction path recording a stranded durable yield intent.
   if (isCronSessionKey(params.requesterSessionKey)) {
     return () => ({ error: ISOLATED_AUTOMATION_YIELD_UNSUPPORTED_ERROR });
   }
