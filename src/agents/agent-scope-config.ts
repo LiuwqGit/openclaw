@@ -152,7 +152,7 @@ export function readOrComputeAgentRosterFact<T>(
   if (!derived.has(key)) {
     derived.set(key, compute());
   }
-  return derived.get(key) as T;
+  return derived.get(key) as T; // SAFETY: entries at `key` are only written by this function's compute() for the same key, so the stored value is a T (or undefined).
 }
 
 /** Lists valid configured agent entries from config. */
