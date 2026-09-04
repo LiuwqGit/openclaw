@@ -61,23 +61,13 @@ describe("fallback-state", () => {
       name: "treats fallback as active only when state matches selected and active refs",
       state: activeFallbackState,
       expected: { active: true, reason: "rate limit" },
+      expectedSetupLookups: 2,
     },
     {
-      name: "does not discover runtime aliases without a recorded fallback notice",
+      name: "does not discover runtime aliases without persisted fallback state",
       state: undefined,
       expected: { active: false, reason: undefined },
-    },
-    {
-      name: "does not discover runtime aliases when the recorded active ref is stale",
-      state: {
-        fallbackNotice: {
-          kind: "active",
-          selectedModel: "demo-primary/model-a",
-          activeModel: "other-provider/other-model",
-          reason: "rate limit",
-        },
-      } satisfies FallbackNoticeState,
-      expected: { active: false, reason: undefined },
+      expectedSetupLookups: 0,
     },
     {
       name: "does not treat runtime drift as fallback when persisted state does not match",
@@ -90,44 +80,64 @@ describe("fallback-state", () => {
         },
       } satisfies FallbackNoticeState,
       expected: { active: false, reason: undefined },
+      expectedSetupLookups: 0,
     },
-  ])("$name", ({ state, expected }) => {
+    {
+      name: "does not discover runtime aliases when the recorded active ref differs",
+      state: {
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "demo-primary/model-a",
+          activeModel: "other-provider/other-model",
+          reason: "rate limit",
+        },
+      } satisfies FallbackNoticeState,
+      expected: { active: false, reason: undefined },
+      expectedSetupLookups: 0,
+    },
+    {
+      name: "does not report a matching persisted CLI runtime alias as fallback",
+      selectedModelRef: "anthropic/claude-opus-4-7",
+      activeModelRef: "claude-cli/claude-opus-4-7",
+      state: {
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "anthropic/claude-opus-4-7",
+          activeModel: "claude-cli/claude-opus-4-7",
+          reason: "selected model unavailable",
+        },
+      } satisfies FallbackNoticeState,
+      expected: { active: false, reason: undefined },
+      expectedSetupLookups: 2,
+    },
+  ])("$name", ({ state, expected, expectedSetupLookups, selectedModelRef, activeModelRef }) => {
+    let setupLookups = 0;
     cliBackendsTesting.setDepsForTest({
       resolveRuntimeCliBackends: () => [],
-      resolvePluginSetupCliBackend: () => {
-        if (!expected.active) {
-          throw new Error("an ineligible fallback notice must not load plugin setup");
-        }
-        return undefined;
+      resolvePluginSetupCliBackend: ({ backend }) => {
+        setupLookups += 1;
+        return backend === "claude-cli"
+          ? {
+              pluginId: "anthropic",
+              backend: {
+                id: "claude-cli",
+                modelProvider: "anthropic",
+                config: { command: "claude" },
+                bundleMcp: false,
+              },
+            }
+          : undefined;
       },
     });
     const resolved = resolveActiveFallbackState({
-      selectedModelRef: "demo-primary/model-a",
-      activeModelRef: "demo-fallback/model-b",
-      state,
+      selectedModelRef: selectedModelRef ?? "demo-primary/model-a",
+      activeModelRef: activeModelRef ?? "demo-fallback/model-b",
       config: {},
+      state,
     });
 
     expect(resolved).toEqual(expected);
-  });
-
-  it("does not project a matching recorded notice for equivalent runtime aliases", () => {
-    registerAnthropicCliBackendForTest();
-
-    expect(
-      resolveActiveFallbackState({
-        selectedModelRef: "anthropic/claude-opus-4-7",
-        activeModelRef: "claude-cli/claude-opus-4-7",
-        state: {
-          fallbackNotice: {
-            kind: "active",
-            selectedModel: "anthropic/claude-opus-4-7",
-            activeModel: "claude-cli/claude-opus-4-7",
-            reason: "selected model unavailable",
-          },
-        },
-      }),
-    ).toEqual({ active: false, reason: undefined });
+    expect(setupLookups).toBe(expectedSetupLookups);
   });
 
   it("marks fallback transition when selected->active pair changes", () => {
