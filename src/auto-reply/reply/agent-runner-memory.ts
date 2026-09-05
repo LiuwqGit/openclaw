@@ -956,6 +956,7 @@ export async function runSessionCompactionIfNeeded(params: {
     acceptedEntry: SessionEntry,
     tokensAfter: number | undefined,
     compactionKind: Parameters<typeof incrementCompactionCount>[0]["compactionKind"],
+    amount = 1,
   ) => {
     const postCompactionBytes =
       compactionTrigger === "transcript_bytes" && typeof maxActiveTranscriptBytes === "number"
@@ -979,6 +980,7 @@ export async function runSessionCompactionIfNeeded(params: {
     const compactionCount = await incrementCompactionCount({
       ...compactionTarget,
       sessionStore: compactionStore,
+      amount,
       tokensAfter,
       compactionKind,
       expectedSession: acceptedEntry,
@@ -1059,6 +1061,9 @@ export async function runSessionCompactionIfNeeded(params: {
                   commit.compactionKind,
                 );
                 hostAccountingCommitted = true;
+              },
+              onHostCompactionTranscriptSettled: async (commit) => {
+                await recordCompactionAccounting(commit.entry, undefined, undefined, 0);
               },
             }
           : {}),

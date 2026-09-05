@@ -51,16 +51,19 @@ import {
 } from "./transcript-byte-preflight-authority.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
 
+type QueuedCompactionHostCommit = {
+  entry: AcceptedCompactionSuccessor["entry"];
+  tokensAfter?: number;
+  compactionKind: "context-engine" | "server-endpoint";
+};
+
 /** Host-only bookkeeping, deliberately separate from plugin compaction parameters. */
 export type QueuedCompactionHostOptions = {
   assertActive?: () => void;
   transcriptBytePreflightHarness?: "codex";
   onCommitted?: (accepted: AcceptedCompactionSuccessor) => void;
-  onHostCompactionCommitted?: (commit: {
-    entry: AcceptedCompactionSuccessor["entry"];
-    tokensAfter?: number;
-    compactionKind: "context-engine" | "server-endpoint";
-  }) => Promise<void> | void;
+  onHostCompactionCommitted?: (commit: QueuedCompactionHostCommit) => Promise<void> | void;
+  onHostCompactionTranscriptSettled?: (commit: QueuedCompactionHostCommit) => Promise<void> | void;
 };
 
 export function createQueuedCompactionAbortedResult(): EmbeddedAgentCompactResult {
@@ -394,8 +397,10 @@ export async function executeQueuedContextEngineCompaction(input: {
           typeof tokensAfter === "number"
             ? "server-endpoint"
             : "context-engine";
-        if (successor.entry) {
-          const hostCommit = { entry: successor.entry, tokensAfter, compactionKind };
+        const hostCommit = successor.entry
+          ? { entry: successor.entry, tokensAfter, compactionKind }
+          : undefined;
+        if (hostCommit) {
           await host.onHostCompactionCommitted?.(hostCommit);
         }
         const postCompactionSessionId = successor.sessionId;
@@ -437,7 +442,7 @@ export async function executeQueuedContextEngineCompaction(input: {
               postCompactionSessionTarget,
               resolvedWorkspaceDir,
             );
-            await runContextEngineMaintenance({
+            const maintenance = runContextEngineMaintenance({
               contextEngine,
               sessionId: postCompactionSessionId,
               sessionKey: contextEngineSessionKey ?? params.sessionKey,
@@ -464,6 +469,15 @@ export async function executeQueuedContextEngineCompaction(input: {
               assertActive: rewriteContext.assertCommitAllowed,
               abortSignal: params.abortSignal,
             });
+            try {
+              await maintenance;
+            } finally {
+              if (hostCommit) {
+                // A rewrite can commit before cancellation is observed. Reconcile transcript
+                // state before hooks or native sync; the host callback keeps the writer fence.
+                await host.onHostCompactionTranscriptSettled?.(hostCommit);
+              }
+            }
           }
           if (engineOwnsCompaction && result.ok && result.compacted && canContinue()) {
             await runPostCompactionSideEffects({
