@@ -806,9 +806,8 @@ export async function runSessionCompactionIfNeeded(params: {
     typeof activeTranscriptBytes === "number" &&
     typeof maxActiveTranscriptBytes === "number" &&
     activeTranscriptBytes >= maxActiveTranscriptBytes;
-  // Codex re-evaluates its native rollout fuse every turn; this latch only suppresses local retries.
+  // Codex still re-evaluates its native rollout fuse every turn; this only latches host-byte retries.
   let transcriptByteCompactionLatched =
-    !isCodexRuntime &&
     exceedsTranscriptByteThreshold &&
     hasMatchingTranscriptByteCompactionLatch(
       entry,
@@ -839,7 +838,6 @@ export async function runSessionCompactionIfNeeded(params: {
     }
     entry = compactionStore[compactionSessionKey] ?? entry;
     transcriptByteCompactionLatched =
-      !isCodexRuntime &&
       exceedsTranscriptByteThreshold &&
       hasMatchingTranscriptByteCompactionLatch(
         entry,
@@ -1060,9 +1058,7 @@ export async function runSessionCompactionIfNeeded(params: {
     }
 
     const postCompactionBytes =
-      !isCodexRuntime &&
-      compactionTrigger === "transcript_bytes" &&
-      typeof maxActiveTranscriptBytes === "number"
+      compactionTrigger === "transcript_bytes" && typeof maxActiveTranscriptBytes === "number"
         ? readSessionLogSnapshot({
             agentId: compactionAgentId,
             sessionId: entry.sessionId,

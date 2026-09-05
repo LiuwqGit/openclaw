@@ -3736,7 +3736,7 @@ describe("runMemoryFlushIfNeeded", () => {
     ["fresh session selected from the outset", "fresh", "codex"],
     ["upgraded session with historical embedded ownership", "upgraded", "openclaw"],
   ])(
-    "byte-guards a Codex runtime %s through native preflight",
+    "latches Codex byte preflight for a %s until the transcript grows by one threshold",
     async (_label, fixtureId, agentHarnessId) => {
       const storePath = path.join(rootDir, `sqlite-codex-byte-guard-${fixtureId}.json`);
       const sessionKey = "agent:main:main";
@@ -3759,10 +3759,8 @@ describe("runMemoryFlushIfNeeded", () => {
       };
       const sessionStore = { [sessionKey]: sessionEntry };
       const replyOperation = createReplyOperation();
-
-      let entry: SessionEntry | undefined = sessionEntry;
-      for (let turn = 0; turn < 2; turn += 1) {
-        entry = await runSessionCompactionIfNeeded({
+      const run = async (entry: SessionEntry | undefined) =>
+        await runSessionCompactionIfNeeded({
           cfg: {
             agents: {
               defaults: {
@@ -3785,12 +3783,14 @@ describe("runMemoryFlushIfNeeded", () => {
           isHeartbeat: false,
           ...createCompactionLifecycle(replyOperation),
         });
-      }
 
-      expect(entry?.compactionCount).toBe(2);
+      let entry = await run(sessionEntry);
+      entry = await run(entry);
+
+      expect(entry?.compactionCount).toBe(1);
       expect(replyOperation.setPhase).toHaveBeenCalledWith("preflight_compacting");
-      expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(2);
-      expect(requireCompactEmbeddedAgentSessionCall(1)).toMatchObject({
+      expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
+      expect(requireCompactEmbeddedAgentSessionCall()).toMatchObject({
         agentHarnessId: "codex",
         contextTokenBudget: 1_000_000,
         deferOwningContextEngineCompaction: false,
@@ -3800,10 +3800,27 @@ describe("runMemoryFlushIfNeeded", () => {
         sessionKey,
         trigger: "budget",
       });
-      expect(compactEmbeddedAgentSessionMock.mock.calls[1]?.[1]).toMatchObject({
+      expect(compactEmbeddedAgentSessionMock.mock.calls[0]?.[1]).toMatchObject({
         transcriptBytePreflightHarness: "codex",
       });
-      expect(loadMainSessionEntry(storePath).transcriptByteCompactionLatch).toBeUndefined();
+      const latchedEntry = loadSessionEntry({ storePath, sessionKey });
+      expect(latchedEntry?.transcriptByteCompactionLatch).toMatchObject({
+        sessionId: "session",
+        maxBytes: 10,
+      });
+      const latchedBytes = latchedEntry?.transcriptByteCompactionLatch?.activeBytes ?? 0;
+      expect(latchedBytes).toBeGreaterThan(0);
+
+      await replaceTranscriptEvents(scope, [
+        { message: { role: "user", content: "x".repeat(512) }, type: "message" },
+      ]);
+      entry = await run(entry);
+
+      expect(entry?.compactionCount).toBe(2);
+      expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(2);
+      expect(
+        loadSessionEntry({ storePath, sessionKey })?.transcriptByteCompactionLatch?.activeBytes,
+      ).toBeGreaterThan(latchedBytes);
     },
   );
 

@@ -89,6 +89,17 @@ describe("transcript-byte preflight authority", () => {
     clearClaim();
   });
 
+  it("rejects the same runtime context after its session target changes", () => {
+    const runtimeContext: ContextEngineRuntimeContext = {
+      sessionTarget: { ...sessionTarget },
+    };
+    setTranscriptBytePreflightClaim(runtimeContext, authority);
+    const replacementTarget = { ...sessionTarget, sessionId: "session-2" };
+    runtimeContext.sessionTarget = replacementTarget;
+
+    expect(consume(runtimeContext, { sessionTarget: replacementTarget })).toBeUndefined();
+  });
+
   it.each([
     ["forged public state", { hostOwnsTranscriptBytePreflight: true }],
     ["wrong owner", {}, { lockedHarnessRuntime: "openclaw" }],

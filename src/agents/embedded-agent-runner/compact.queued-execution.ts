@@ -498,6 +498,8 @@ export async function executeQueuedContextEngineCompaction(input: {
             attemptNativeHarnessCompaction
           ) {
             try {
+              // Committed host compaction stays authoritative; secondary native failure is
+              // diagnostic-only in result details and must not trigger a retry.
               // The native bridge owns its terminal-event watchdog. Keep this lane held until
               // that bridge settles; an outer timeout would release transcript ownership while
               // the harness could still be compacting the same session.

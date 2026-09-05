@@ -7,8 +7,13 @@ import type { CompactEmbeddedAgentSessionRuntimeParams } from "./compact.types.j
 
 export type TranscriptBytePreflightAuthority = AgentHarness;
 
+type TranscriptBytePreflightClaim = {
+  authority: TranscriptBytePreflightAuthority;
+  sessionTarget: Partial<SessionTranscriptRuntimeTarget>;
+};
+
 const claims = resolveGlobalSingleton<
-  WeakMap<ContextEngineRuntimeContext, TranscriptBytePreflightAuthority>
+  WeakMap<ContextEngineRuntimeContext, TranscriptBytePreflightClaim>
 >(Symbol.for("openclaw.transcriptBytePreflightClaims"), () => new WeakMap());
 
 export function resolveTranscriptBytePreflightAuthority(
@@ -28,9 +33,19 @@ export function setTranscriptBytePreflightClaim(
   if (!runtimeContext || !authority) {
     return () => {};
   }
-  claims.set(runtimeContext, authority);
+  const target = runtimeContext.sessionTarget;
+  const claim = {
+    authority,
+    sessionTarget: {
+      agentId: target?.agentId,
+      sessionId: target?.sessionId,
+      sessionKey: target?.sessionKey,
+      storePath: target?.storePath,
+    },
+  };
+  claims.set(runtimeContext, claim);
   return () => {
-    if (claims.get(runtimeContext) === authority) {
+    if (claims.get(runtimeContext) === claim) {
       claims.delete(runtimeContext);
     }
   };
@@ -42,12 +57,12 @@ export function consumeTranscriptBytePreflightClaim(
   lockedHarnessRuntime: string | undefined,
 ): TranscriptBytePreflightAuthority | undefined {
   const runtimeContext = params.contextEngineRuntimeContext;
-  const authority = runtimeContext ? claims.get(runtimeContext) : undefined;
-  if (!runtimeContext || !authority) {
+  const claim = runtimeContext ? claims.get(runtimeContext) : undefined;
+  if (!runtimeContext || !claim) {
     return undefined;
   }
   claims.delete(runtimeContext);
-  const expected = runtimeContext.sessionTarget;
+  const { authority, sessionTarget: expected } = claim;
   const active = resolveTranscriptBytePreflightAuthority(authority);
   return (lockedHarnessRuntime ?? params.agentHarnessId) === authority.id &&
     params.preflightRequired === true &&

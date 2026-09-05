@@ -4366,7 +4366,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     });
   });
 
-  it("compacts the host transcript before secondary Codex compaction for byte preflight", async () => {
+  it("keeps authorized host byte compaction successful when secondary Codex sync fails", async () => {
     const order: string[] = [];
     const registry = requireActivePluginRegistry();
     const harness: AgentHarness = {
@@ -4414,7 +4414,16 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     });
     maybeCompactAgentHarnessSessionMock.mockImplementationOnce(async () => {
       order.push("native");
-      return { ok: true, compacted: true };
+      return {
+        ok: false,
+        compacted: false,
+        reason: "provider_error_4xx",
+        failure: {
+          reason: "provider_error_4xx",
+          status: 400,
+          rawError: "provider_error_4xx",
+        },
+      };
     });
 
     const result = await compactEmbeddedAgentSession(
@@ -4431,7 +4440,21 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     );
 
     expect(result.reason).toBeUndefined();
-    expect(result).toMatchObject({ ok: true, compacted: true });
+    expect(result).toMatchObject({
+      ok: true,
+      compacted: true,
+      result: {
+        summary: "host-summary",
+        details: {
+          codexNativeCompaction: {
+            ok: false,
+            compacted: false,
+            reason: "provider_error_4xx",
+            failure: { reason: "provider_error_4xx", status: 400 },
+          },
+        },
+      },
+    });
     expect(order).toEqual(["host", "native"]);
     expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledWith(
       expect.objectContaining({ agentHarnessId: "codex" }),
