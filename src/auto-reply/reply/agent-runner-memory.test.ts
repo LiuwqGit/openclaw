@@ -3958,7 +3958,11 @@ describe("runMemoryFlushIfNeeded", () => {
     compactEmbeddedAgentSessionMock.mockImplementationOnce(async (_params, host) => {
       const accepted = await acceptCompactionSuccessor({
         currentTarget: scope,
-        expectedEntry: sessionEntry,
+        expectedEntry: {
+          sessionId: sessionEntry.sessionId,
+          lifecycleRevision: sessionEntry.lifecycleRevision,
+          activeWriterRunId: sessionEntry.activeWriterRunId,
+        },
         assertActive: () => {},
         result: {
           ok: true,
