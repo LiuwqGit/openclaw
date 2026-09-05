@@ -24,6 +24,7 @@ vi.mock("../../agents/run-wait.js", async () => {
   return {
     ...actual,
     readLatestAssistantReply: vi.fn().mockResolvedValue(undefined),
+    readLatestAssistantReplySnapshot: vi.fn().mockResolvedValue({}),
   };
 });
 
@@ -33,7 +34,8 @@ vi.mock("../../gateway/call.js", () => ({
 
 const { listDescendantRunsForRequester } =
   await import("../../agents/subagents/registry/subagent-registry-read.js");
-const { readLatestAssistantReply } = await import("../../agents/run-wait.js");
+const { readLatestAssistantReply, readLatestAssistantReplySnapshot } =
+  await import("../../agents/run-wait.js");
 const { callGateway } = await import("../../gateway/call.js");
 
 async function resolveAfterAdvancingTimers<T>(promise: Promise<T>, advanceMs = 100): Promise<T> {
@@ -339,6 +341,9 @@ describe("waitForDescendantSubagentSummary", () => {
     vi.useRealTimers();
     vi.mocked(listDescendantRunsForRequester).mockReturnValue([]);
     vi.mocked(readLatestAssistantReply).mockResolvedValue(undefined);
+    vi.mocked(readLatestAssistantReplySnapshot).mockImplementation(async (params) => ({
+      text: await readLatestAssistantReply(params),
+    }));
     vi.mocked(callGateway).mockResolvedValue({ status: "ok" });
   });
 
@@ -398,24 +403,27 @@ describe("waitForDescendantSubagentSummary", () => {
     expect(waitCall?.params?.runId).toBe("run-abc");
   });
 
-  it("returns undefined when descendants finish but only interim text remains after grace period", async () => {
-    vi.useFakeTimers();
-    // No active runs at call time, but observedActiveDescendants=true (saw them before)
-    vi.mocked(listDescendantRunsForRequester).mockReturnValue([]);
-    // readLatestAssistantReply keeps returning interim text
-    vi.mocked(readLatestAssistantReply).mockResolvedValue("on it");
+  it.each(["on it", "on it\n\nMEDIA:/workspace/report.png"])(
+    "does not mistake unchanged parent history for synthesis: %s",
+    async (parentReply) => {
+      vi.useFakeTimers();
+      // No active runs at call time, but observedActiveDescendants=true (saw them before)
+      vi.mocked(listDescendantRunsForRequester).mockReturnValue([]);
+      // readLatestAssistantReply keeps returning interim text
+      vi.mocked(readLatestAssistantReply).mockResolvedValue(parentReply);
 
-    const resultPromise = waitForDescendantSubagentSummary({
-      sessionKey: "cron-session",
-      initialReply: "on it",
-      timeoutMs: 100,
-      observedActiveDescendants: true,
-    });
+      const resultPromise = waitForDescendantSubagentSummary({
+        sessionKey: "cron-session",
+        initialReply: "on it",
+        timeoutMs: 100,
+        observedActiveDescendants: true,
+      });
 
-    const result = await resolveAfterAdvancingTimers(resultPromise);
+      const result = await resolveAfterAdvancingTimers(resultPromise);
 
-    expect(result).toBeUndefined();
-  });
+      expect(result).toBeUndefined();
+    },
+  );
 
   it("returns synthesis even if initial reply was undefined", async () => {
     vi.mocked(listDescendantRunsForRequester)

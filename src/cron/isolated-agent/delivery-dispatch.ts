@@ -700,14 +700,10 @@ export async function dispatchCronDelivery(
     }
     if (requiresCurrentSessionCompletion) {
       deliveryAttempted = true;
-      // The completion mirrors the finalized payload set: descendant
-      // finalization above may have replaced interim media payloads with a
-      // text-only final reply, so the durable transcript must not persist
-      // superseded media attachments from the immutable params set.
+      // Descendant finalization may replace interim media with a text-only reply.
       const completion = await commitCurrentSessionCronCompletion(
-        params,
+        { ...params, deliveryPayloads },
         synthesizedText,
-        deliveryPayloads,
       );
       if (!completion.ok) {
         recordDelivery("not-delivered", completion.reason);

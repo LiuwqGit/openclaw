@@ -26,8 +26,6 @@ const directCronCompletionRetention = {
 
 const {
   appendAssistantMessageToSessionTranscriptMock,
-  attachManagedOutgoingMediaToMessageMock,
-  buildAssistantDisplayContentFromReplyPayloadsMock,
   commitBackgroundResultToSessionMock,
   countActiveDescendantRunsMock,
   deliverOutboundPayloadsMock,
@@ -42,30 +40,6 @@ const {
     sessionFile: "session.jsonl",
     messageId: "mirror-message",
   }),
-  attachManagedOutgoingMediaToMessageMock: vi.fn().mockReturnValue(true),
-  buildAssistantDisplayContentFromReplyPayloadsMock: vi.fn(
-    async (params: { payloads: Array<Record<string, unknown>> }) => {
-      const content: Array<Record<string, unknown>> = [];
-      for (const payload of params.payloads) {
-        const text = typeof payload.text === "string" ? payload.text.trim() : "";
-        if (text) {
-          content.push({ type: "text", text });
-        }
-        const mediaUrls = [
-          ...(typeof payload.mediaUrl === "string" && payload.mediaUrl.trim()
-            ? [payload.mediaUrl]
-            : []),
-          ...(Array.isArray(payload.mediaUrls) ? payload.mediaUrls : []).filter(
-            (url: unknown): url is string => typeof url === "string" && url.trim().length > 0,
-          ),
-        ];
-        for (const url of mediaUrls) {
-          content.push({ type: "image", url });
-        }
-      }
-      return content.length > 0 ? content : undefined;
-    },
-  ),
   commitBackgroundResultToSessionMock: vi.fn().mockResolvedValue({
     ok: true,
     messageId: "current-completion-message",
@@ -167,13 +141,14 @@ vi.mock("../../sessions/background-session-result.js", () => ({
 }));
 
 vi.mock("../../gateway/server-methods/chat-assistant-content.js", () => ({
-  buildAssistantDisplayContentFromReplyPayloads: buildAssistantDisplayContentFromReplyPayloadsMock,
-  hasAssistantDisplayMediaContent: (content: Array<Record<string, unknown>> | undefined) =>
-    Boolean(content?.some((block) => block?.type !== "text")),
+  buildAssistantDisplayContentFromReplyPayloads: vi.fn(),
+  hasAssistantDisplayMediaContent: vi.fn(),
+  hasManagedOutgoingAssistantContent: vi.fn(),
 }));
 
 vi.mock("../../gateway/managed-image-attachments.js", () => ({
-  attachManagedOutgoingMediaToMessage: attachManagedOutgoingMediaToMessageMock,
+  attachManagedOutgoingMediaToMessage: vi.fn(),
+  removeManagedOutgoingMediaBlocks: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("./session.js", () => ({
@@ -3500,19 +3475,21 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
     expect(state.result).toBeUndefined();
     expect(state).toMatchObject({ delivered: true, deliveryAttempted: true });
-    expect(commitBackgroundResultToSessionMock).toHaveBeenCalledWith({
-      agentId: "main",
-      sessionKey: "agent:main:webchat:direct:owner",
-      expectedGeneration: {
-        sessionId: "source-session-id",
-        lifecycleRevision: "source-lifecycle-revision",
-      },
-      text: "durable WebChat completion",
-      idempotencyKey: "cron-current-completion:cron:test-job:1000",
-      provenance: { kind: "cron", jobId: "test-job", runId: "cron:test-job:1000" },
-      config: params.cfgWithAgentDefaults,
-      signal: undefined,
-    });
+    expect(commitBackgroundResultToSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        sessionKey: "agent:main:webchat:direct:owner",
+        expectedGeneration: {
+          sessionId: "source-session-id",
+          lifecycleRevision: "source-lifecycle-revision",
+        },
+        text: "durable WebChat completion",
+        idempotencyKey: "cron-current-completion:cron:test-job:1000",
+        provenance: { kind: "cron", jobId: "test-job", runId: "cron:test-job:1000" },
+        config: params.cfgWithAgentDefaults,
+        signal: undefined,
+      }),
+    );
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
@@ -3651,7 +3628,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(commitBackgroundResultToSessionMock).toHaveBeenCalledWith(
       expect.objectContaining({
         text: "report.png",
-        content: [{ type: "image", url: "https://example.com/report.png?token=redacted" }],
       }),
     );
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
@@ -3660,42 +3636,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     });
   });
 
-  it("commits text plus image content for current-session completions", async () => {
-    const params = makeBaseParams({ sessionTarget: "current", runStartedAt: 3_000 });
-    params.synthesizedText = "Example report";
-    params.summary = "Example report";
-    params.outputText = "Example report";
-    params.deliveryPayloads = [
-      { text: "Example report", mediaUrl: "/tmp/allowed-media/report.png" },
-    ];
-
-    const state = await dispatchCronDelivery(params);
-
-    expect(state).toMatchObject({ delivered: true, deliveryAttempted: true });
-    expect(commitBackgroundResultToSessionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "Example report\nreport.png",
-        content: [
-          { type: "text", text: "Example report" },
-          { type: "image", url: "/tmp/allowed-media/report.png" },
-        ],
-      }),
-    );
-    expect(attachManagedOutgoingMediaToMessageMock).toHaveBeenCalledWith({
-      messageId: "current-completion-message",
-      blocks: [
-        { type: "text", text: "Example report" },
-        { type: "image", url: "/tmp/allowed-media/report.png" },
-      ],
-    });
-    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
-  });
-
   it("uses the finalized descendant payload set when a final reply supersedes media", async () => {
-    // Regression: descendant finalization replaces the interim media-bearing
-    // payloads with a text-only final reply. The current-session completion
-    // must persist that finalized set — not the superseded media payloads —
-    // so durable Control UI history cannot retain a stale image attachment.
     vi.mocked(expectsSubagentFollowup).mockReturnValue(true);
     vi.mocked(waitForDescendantSubagentSummary).mockResolvedValue("Final descendant reply");
 
@@ -3712,8 +3653,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(state).toMatchObject({ delivered: true, deliveryAttempted: true });
     const commitCall = vi.mocked(commitBackgroundResultToSessionMock).mock.calls.at(-1)?.[0];
     expect(commitCall).toMatchObject({ text: "Final descendant reply" });
-    expect(commitCall).not.toHaveProperty("content");
-    expect(attachManagedOutgoingMediaToMessageMock).not.toHaveBeenCalled();
     expect(state.deliveryPayloads).toEqual([{ text: "Final descendant reply" }]);
     expectDeliveryCall(0, { payloads: [{ text: "Final descendant reply" }] });
   });
