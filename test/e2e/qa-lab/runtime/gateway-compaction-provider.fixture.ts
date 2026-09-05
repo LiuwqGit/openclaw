@@ -300,7 +300,10 @@ export async function startCompactionProofProvider(
           });
           recordCompactionProofCheckpoint(proof, "after-hook-held");
           proof.afterHookHeld.resolve();
-          if (proof.mode === "cancelled-after-commit") {
+          if (
+            proof.mode === "cancelled-after-commit" ||
+            proof.mode === "heartbeat-upgraded-native-failure"
+          ) {
             await proof.releaseAfterHook.promise;
           }
         } else {

@@ -13,6 +13,7 @@ import {
   COMPACTION_PROOF_TIMEOUT_MS as CHECKPOINT_TIMEOUT_MS,
   createCompactionProofCase,
   recordCompactionProofCheckpoint,
+  stageCompactionProofHook,
   stageHeartbeatCompactionProofHook,
   startCompactionProofProvider,
   waitForCompactionProofCheckpoint,
@@ -119,6 +120,10 @@ function snapshotProviderCounters(proof: ProofCase) {
     summaryRequests: proof.summaryRequests,
     successorRequests: proof.successorRequests,
   };
+}
+
+function inboundTurnStarts(requests: AppServerRequest[]) {
+  return requests.filter((request) => request.method === "turn/start");
 }
 
 function matchingAppServerReplies(requests: AppServerRequest[], id: unknown) {
@@ -380,14 +385,26 @@ async function runCase(params: {
           path.join(workspaceDir, "HEARTBEAT.md"),
           "Process pending system events and report what was handled.\n",
         );
-        const hookName = stageHeartbeatCompactionProofHook(workspaceDir, provider.baseUrl);
+        const heartbeatHookName = stageHeartbeatCompactionProofHook(workspaceDir, provider.baseUrl);
+        const afterHookName =
+          mode === "heartbeat-upgraded-native-failure"
+            ? stageCompactionProofHook(workspaceDir, provider.baseUrl)
+            : undefined;
         const codexEntry = config.plugins?.entries?.codex;
         return {
           ...config,
           ...(mode === "heartbeat-fresh-restricted"
             ? { tools: { ...config.tools, allow: ["read"] } }
             : {}),
-          hooks: { internal: { enabled: true, entries: { [hookName]: { enabled: true } } } },
+          hooks: {
+            internal: {
+              enabled: true,
+              entries: {
+                [heartbeatHookName]: { enabled: true },
+                ...(afterHookName ? { [afterHookName]: { enabled: true } } : {}),
+              },
+            },
+          },
           memory: { ...config.memory, search: { ...config.memory?.search, enabled: false } },
           plugins: {
             ...config.plugins,
@@ -466,9 +483,10 @@ async function runCase(params: {
     let committingProviderCountersAtHold: ReturnType<typeof snapshotProviderCounters> | undefined;
     let staleProviderCountersAtHold: ReturnType<typeof snapshotProviderCounters> | undefined;
     let staleNativeRequestsAtHold: number | undefined;
+    let staleTurnStartsAtHold: AppServerRequest[] | undefined;
     let resetLifecycleRevision: string | undefined;
     let nativeCompactRequestId: unknown;
-    let nativeCompactHeldSnapshot: ReturnType<typeof snapshotCompactionSession> | undefined;
+    let preNativeDurableSnapshot: ReturnType<typeof snapshotCompactionSession> | undefined;
 
     if (shouldCommit) {
       committingProviderCountersAtHold = snapshotProviderCounters(proof);
@@ -479,9 +497,11 @@ async function runCase(params: {
       staleNativeRequestsAtHold = requestsAtAuthorityHold.filter(
         (request) => request.method === "thread/compact/start",
       ).length;
+      staleTurnStartsAtHold = inboundTurnStarts(requestsAtAuthorityHold);
       evidence.authorityHoldTraffic = {
         provider: staleProviderCountersAtHold,
         nativeCompact: staleNativeRequestsAtHold,
+        turnStarts: staleTurnStartsAtHold,
       };
     }
 
@@ -594,6 +614,67 @@ async function runCase(params: {
       );
       if (mode === "heartbeat-upgraded-native-failure") {
         await waitForCompactionProofCheckpoint(
+          proof.afterHookHeld.promise,
+          "held session:compact:after hook",
+        );
+        assert.equal(proof.afterHookCalls, 1, "Host compaction after hook count changed");
+        assert.equal(proof.afterHookPending, true, "Host compaction after hook was not pending");
+        const preNativeRequests = await readJsonl(appServerLog);
+        assert.equal(
+          preNativeRequests.filter((request) => request.method === "thread/compact/start").length,
+          0,
+          "Native compaction started before the host after hook settled",
+        );
+
+        preNativeDurableSnapshot = snapshotCompactionSession(runtime, gateway, proof);
+        evidence.preNativeDurable = preNativeDurableSnapshot;
+        const priorCompactionIds = new Set(held.compactionIds);
+        const newCompactionIds = preNativeDurableSnapshot.compactionIds.filter(
+          (id) => !priorCompactionIds.has(id),
+        );
+        assert.equal(newCompactionIds.length, 1, "Host compaction event was not durable once");
+        const compactionId = newCompactionIds[0];
+        assert.ok(
+          preNativeDurableSnapshot.activeEntryIds.includes(compactionId),
+          "Durable host compaction was not on the active branch",
+        );
+        const priorCheckpoints = Array.isArray(held.compactionCheckpoints)
+          ? held.compactionCheckpoints
+          : [];
+        const durableCheckpoints = Array.isArray(preNativeDurableSnapshot.compactionCheckpoints)
+          ? preNativeDurableSnapshot.compactionCheckpoints
+          : [];
+        assert.equal(
+          durableCheckpoints.length,
+          priorCheckpoints.length + 1,
+          "Host compaction checkpoint was not persisted once",
+        );
+        const checkpoint = durableCheckpoints.at(-1);
+        assert.ok(runtime.isRecord(checkpoint), "Host compaction checkpoint was malformed");
+        assert.equal(checkpoint.sessionKey, proof.sessionKey, "Checkpoint changed session key");
+        assert.equal(checkpoint.sessionId, proof.sessionId, "Checkpoint changed session identity");
+        assert.ok(
+          runtime.isRecord(checkpoint.postCompaction),
+          "Checkpoint omitted post-compaction identity",
+        );
+        assert.equal(
+          checkpoint.postCompaction.entryId,
+          compactionId,
+          "Checkpoint did not reference the durable compaction",
+        );
+        assert.equal(
+          checkpoint.postCompaction.sessionId,
+          proof.sessionId,
+          "Checkpoint post-compaction session identity changed",
+        );
+
+        recordCompactionProofCheckpoint(proof, "release-after-hook");
+        proof.releaseAfterHook.resolve();
+        await waitForCompactionProofCheckpoint(
+          proof.afterHookSettled.promise,
+          "released session:compact:after hook",
+        );
+        await waitForCompactionProofCheckpoint(
           proof.nativeCompactRequestHeld.promise,
           "held Codex native compaction request",
         );
@@ -617,48 +698,6 @@ async function runCase(params: {
           matchingAppServerReplies(nativeHeldRequests, nativeCompactRequestId).length,
           0,
           "Codex native compaction replied before release",
-        );
-
-        nativeCompactHeldSnapshot = snapshotCompactionSession(runtime, gateway, proof);
-        evidence.nativeCompactHeld = nativeCompactHeldSnapshot;
-        const priorCompactionIds = new Set(held.compactionIds);
-        const newCompactionIds = nativeCompactHeldSnapshot.compactionIds.filter(
-          (id) => !priorCompactionIds.has(id),
-        );
-        assert.equal(newCompactionIds.length, 1, "Host compaction event was not durable once");
-        const compactionId = newCompactionIds[0];
-        assert.ok(
-          nativeCompactHeldSnapshot.activeEntryIds.includes(compactionId),
-          "Durable host compaction was not on the active branch",
-        );
-        const priorCheckpoints = Array.isArray(held.compactionCheckpoints)
-          ? held.compactionCheckpoints
-          : [];
-        const heldCheckpoints = Array.isArray(nativeCompactHeldSnapshot.compactionCheckpoints)
-          ? nativeCompactHeldSnapshot.compactionCheckpoints
-          : [];
-        assert.equal(
-          heldCheckpoints.length,
-          priorCheckpoints.length + 1,
-          "Host compaction checkpoint was not persisted once",
-        );
-        const checkpoint = heldCheckpoints.at(-1);
-        assert.ok(runtime.isRecord(checkpoint), "Host compaction checkpoint was malformed");
-        assert.equal(checkpoint.sessionKey, proof.sessionKey, "Checkpoint changed session key");
-        assert.equal(checkpoint.sessionId, proof.sessionId, "Checkpoint changed session identity");
-        assert.ok(
-          runtime.isRecord(checkpoint.postCompaction),
-          "Checkpoint omitted post-compaction identity",
-        );
-        assert.equal(
-          checkpoint.postCompaction.entryId,
-          compactionId,
-          "Checkpoint did not reference the durable compaction",
-        );
-        assert.equal(
-          checkpoint.postCompaction.sessionId,
-          proof.sessionId,
-          "Checkpoint post-compaction session identity changed",
         );
 
         proof.releaseNativeCompactRequest.resolve();
@@ -726,6 +765,13 @@ async function runCase(params: {
     const nativeCompactRequests = requestsAtTerminal.filter(
       (request) => request.method === "thread/compact/start",
     );
+    if (!shouldCommit) {
+      assert.deepEqual(
+        inboundTurnStarts(requestsAtTerminal),
+        staleTurnStartsAtHold,
+        "Stale heartbeat changed Codex turn/start traffic",
+      );
+    }
     if (shouldCommit) {
       assert.equal(terminal.status, "ok", `heartbeat failed: ${JSON.stringify(terminal)}`);
       assert.ok(
@@ -768,15 +814,15 @@ async function runCase(params: {
         "Native synchronization request count did not match ownership policy",
       );
       if (mode === "heartbeat-upgraded-native-failure") {
-        assert.ok(nativeCompactHeldSnapshot, "Upgraded case omitted its native-held snapshot");
+        assert.ok(preNativeDurableSnapshot, "Upgraded case omitted its pre-native snapshot");
         assert.deepEqual(
           afterTerminal.compactionIds,
-          nativeCompactHeldSnapshot.compactionIds,
+          preNativeDurableSnapshot.compactionIds,
           "Native rejection duplicated the durable compaction event",
         );
         assert.deepEqual(
           afterTerminal.compactionCheckpoints,
-          nativeCompactHeldSnapshot.compactionCheckpoints,
+          preNativeDurableSnapshot.compactionCheckpoints,
           "Native rejection duplicated the durable compaction checkpoint",
         );
         assert.equal(
@@ -786,6 +832,18 @@ async function runCase(params: {
         );
       }
     } else if (mode === "heartbeat-substituted") {
+      assert.equal(terminal.runId, heartbeat.runId, "Cron terminal changed heartbeat run identity");
+      assert.equal(terminal.status, "error", "Substituted heartbeat did not fail");
+      assert.equal(
+        terminal.completionStatus,
+        "failed",
+        "Substituted heartbeat completion status changed",
+      );
+      assert.equal(
+        terminal.error,
+        "heartbeat failed: agent-runner-failure",
+        "Substituted heartbeat reason changed",
+      );
       assert.deepEqual(
         snapshotProviderCounters(proof),
         staleProviderCountersAtHold,
@@ -836,11 +894,35 @@ async function runCase(params: {
     const after = snapshotCompactionSession(runtime, gateway, proof);
     evidence.after = after;
     const finalRequests = await readJsonl(appServerLog);
-    const successorTurns = finalRequests.filter(
-      (request) =>
-        request.method === "turn/start" && JSON.stringify(request.params).includes(successorMarker),
+    const finalTurnStarts = inboundTurnStarts(finalRequests);
+    const successorTurns = finalTurnStarts.filter((request) =>
+      JSON.stringify(request.params).includes(successorMarker),
     );
     assert.equal(successorTurns.length, 1, "Successor Codex turn did not start exactly once");
+    if (!shouldCommit) {
+      assert.ok(staleTurnStartsAtHold, "Stale case omitted its turn/start baseline");
+      assert.deepEqual(
+        finalTurnStarts.slice(0, staleTurnStartsAtHold.length),
+        staleTurnStartsAtHold,
+        "Successor changed the authority-hold turn/start prefix",
+      );
+      assert.equal(
+        finalTurnStarts.length,
+        staleTurnStartsAtHold.length + 1,
+        "Stale case did not add exactly one successor turn/start",
+      );
+      const successorTurn = finalTurnStarts.at(-1);
+      assert.ok(runtime.isRecord(successorTurn?.params), "Successor turn/start omitted its params");
+      assert.equal(
+        successorTurn.params.threadId,
+        CODEX_THREAD_ID,
+        "Successor turn/start targeted the wrong Codex thread",
+      );
+      assert.ok(
+        JSON.stringify(successorTurn.params).includes(successorMarker),
+        "Successor turn/start omitted its marker",
+      );
+    }
     if (shouldCommit) {
       assertCommittedCompactionHistory(afterTerminal, after);
     } else if (mode === "heartbeat-substituted") {
