@@ -112,12 +112,13 @@ function createTranscriptIdentityInserter(
   );
 }
 
+/** Returns the exact committed JSON, or false when an existing identity owns the event. */
 export function appendTranscriptEventInTransaction(
   database: OpenClawAgentDatabase,
   scope: ResolvedTranscriptScope,
   event: TranscriptEvent,
   options: TranscriptAppendOptions = {},
-): boolean {
+): string | false {
   return appendTranscriptEvent(database, scope, event, options);
 }
 
@@ -127,7 +128,7 @@ function appendTranscriptEvent(
   event: TranscriptEvent,
   options: TranscriptAppendOptions,
   cursor: TranscriptAppendCursor = {},
-): boolean {
+): string | false {
   const persistedEvent = canonicalizeTranscriptEventMedia(event);
   const db = getSessionKysely(database.db);
   const createdAt = readEventTimestamp(persistedEvent) ?? Date.now();
@@ -164,7 +165,8 @@ function appendTranscriptEvent(
   }
   const seq = cursor.nextSeq ?? readNextTranscriptSeq(database, scope.sessionId);
   cursor.insertEvent ??= createTranscriptEventInserter(database, scope.sessionId);
-  cursor.insertEvent({ seq, eventJson: JSON.stringify(persistedEvent), createdAt });
+  const eventJson = JSON.stringify(persistedEvent);
+  cursor.insertEvent({ seq, eventJson, createdAt });
   cursor.nextSeq = seq + 1;
   if (options.touchMutation !== false) {
     touchTranscriptMutationInTransaction(database, scope.sessionId);
@@ -200,7 +202,7 @@ function appendTranscriptEvent(
     cursor.insertIdentity({ ...identity, seq, createdAt });
   }
   scheduleTranscriptProjectionReconcile(database, scope.sessionId, projectionNeedsRebuild, options);
-  return true;
+  return eventJson;
 }
 
 function scheduleTranscriptProjectionReconcile(
@@ -251,7 +253,7 @@ export function appendTranscriptEventsInTransaction(
       }
       // Streaming imports acknowledge only inserted rows in their byte-dedupe
       // spool; ordinary array iterators ignore this feedback.
-      next = iterator.next(inserted);
+      next = iterator.next(inserted !== false);
     }
   } catch (error) {
     try {
@@ -548,7 +550,7 @@ export function updateSqliteTranscriptEventJsonInTransaction(
 }
 
 function readIdempotencyKeyOwner(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "db">,
   sessionId: string,
   idempotencyKey: string,
 ): { eventId: string; seq: number } | undefined {
@@ -567,7 +569,7 @@ function readIdempotencyKeyOwner(
 }
 
 function readTranscriptMessageByIdempotencyKey(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "db">,
   scope: ResolvedTranscriptScope,
   idempotencyKey: string,
 ): { messageId: string; message: unknown } | undefined {
@@ -576,7 +578,7 @@ function readTranscriptMessageByIdempotencyKey(
 }
 
 export function readTranscriptMessageByScopedIdempotencyKey(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "db">,
   scope: ResolvedTranscriptScope,
   idempotencyKey: string,
   lookup: TranscriptMessageAppendOptions<unknown>["idempotencyLookup"],
@@ -607,7 +609,7 @@ export function readTranscriptMessageByEventId(
 }
 
 function readTranscriptMessageByIdentity(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "db">,
   scope: ResolvedTranscriptScope,
   identity: { eventId: string; seq: number },
 ): { messageId: string; message: unknown } | undefined {

@@ -24,7 +24,6 @@ vi.mock("../../agents/run-wait.js", async () => {
   return {
     ...actual,
     readLatestAssistantReply: vi.fn().mockResolvedValue(undefined),
-    readLatestAssistantReplySnapshot: vi.fn().mockResolvedValue({}),
   };
 });
 
@@ -34,8 +33,7 @@ vi.mock("../../gateway/call.js", () => ({
 
 const { listDescendantRunsForRequester } =
   await import("../../agents/subagents/registry/subagent-registry-read.js");
-const { readLatestAssistantReply, readLatestAssistantReplySnapshot } =
-  await import("../../agents/run-wait.js");
+const { readLatestAssistantReply } = await import("../../agents/run-wait.js");
 const { callGateway } = await import("../../gateway/call.js");
 
 async function resolveAfterAdvancingTimers<T>(promise: Promise<T>, advanceMs = 100): Promise<T> {
@@ -341,9 +339,6 @@ describe("waitForDescendantSubagentSummary", () => {
     vi.useRealTimers();
     vi.mocked(listDescendantRunsForRequester).mockReturnValue([]);
     vi.mocked(readLatestAssistantReply).mockResolvedValue(undefined);
-    vi.mocked(readLatestAssistantReplySnapshot).mockImplementation(async (params) => ({
-      text: await readLatestAssistantReply(params),
-    }));
     vi.mocked(callGateway).mockResolvedValue({ status: "ok" });
   });
 

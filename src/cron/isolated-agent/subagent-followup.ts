@@ -1,10 +1,5 @@
 /** Reads or waits for descendant subagent summaries after isolated cron orchestration. */
-import {
-  hasUpdatedAssistantReplySnapshot,
-  readLatestAssistantReply,
-  readLatestAssistantReplySnapshot,
-  waitForAgentRunsToDrain,
-} from "../../agents/run-wait.js";
+import { readLatestAssistantReply, waitForAgentRunsToDrain } from "../../agents/run-wait.js";
 import { resolveSubagentCompletionResultText } from "../../agents/subagents/completion/subagent-completion-result.js";
 import { listDescendantRunsForRequester } from "../../agents/subagents/registry/subagent-registry-read.js";
 import { selectDeliverableSessionsReply } from "../../agents/tools/sessions-send-tokens.js";
@@ -120,10 +115,10 @@ export async function waitForDescendantSubagentSummary(params: {
   }
 
   // Delivery text has already lost MEDIA directives. Compare history against
-  // its own snapshot so the unchanged parent cannot masquerade as new synthesis.
-  const initialParentReply = await readLatestAssistantReplySnapshot({
-    sessionKey: params.sessionKey,
-  });
+  // its own text so the unchanged parent cannot masquerade as new synthesis.
+  const initialParentReply = (
+    await readLatestAssistantReply({ sessionKey: params.sessionKey })
+  )?.trim();
   // Wait until no descendant runs remain active. Descendants can finish and
   // spawn more descendants, so the helper refreshes the run set until it drains.
   await waitForAgentRunsToDrain({
@@ -139,8 +134,7 @@ export async function waitForDescendantSubagentSummary(params: {
   const gracePeriodDeadline = Math.min(Date.now() + timings.finalReplyGraceMs, deadline);
 
   const resolveUsableLatestReply = async () => {
-    const latestReply = await readLatestAssistantReplySnapshot({ sessionKey: params.sessionKey });
-    const latest = latestReply.text?.trim();
+    const latest = (await readLatestAssistantReply({ sessionKey: params.sessionKey }))?.trim();
     if (
       latest &&
       latest.toUpperCase() !== SILENT_REPLY_TOKEN.toUpperCase() &&
@@ -148,8 +142,7 @@ export async function waitForDescendantSubagentSummary(params: {
       // child settles and must not masquerade as descendant output.
       !stripHeartbeatToken(latest, { mode: "heartbeat", maxAckChars: 0 }).shouldSkip &&
       !isSilentReplyPayloadText(latest, HEARTBEAT_TOKEN) &&
-      (hasUpdatedAssistantReplySnapshot(latestReply, initialParentReply) ||
-        !isLikelyInterimCronMessage(latest))
+      (latest !== initialParentReply || !isLikelyInterimCronMessage(latest))
     ) {
       // Ignore the original interim acknowledgement; only a new synthesis or a
       // non-interim reply should replace descendant fallback text.

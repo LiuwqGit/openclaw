@@ -144,6 +144,7 @@ export async function commitBackgroundResultToSession(params: {
         idempotencyKey,
         openclawAutomation: params.provenance,
       } satisfies SessionTranscriptAssistantMessage & {
+        idempotencyKey: string;
         openclawAutomation: BackgroundSessionResultProvenance;
       };
       const committed = await persistSessionTranscriptTurn(scope, {
