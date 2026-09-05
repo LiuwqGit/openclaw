@@ -3853,7 +3853,7 @@ describe("runMemoryFlushIfNeeded", () => {
       expect(firstKeptEntryId).toBeTruthy();
       host?.withCompactionPersistence?.(
         () => manager.appendCompaction("summary", firstKeptEntryId!, 100),
-        (entryId, appendedText) => {
+        (entryId: string, appendedText: string) => {
           const event = JSON.parse(appendedText.trim()) as { id?: string; type?: string };
           return event.id === entryId && event.type === "compaction";
         },
