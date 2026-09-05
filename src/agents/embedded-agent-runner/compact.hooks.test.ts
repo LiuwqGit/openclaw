@@ -4401,7 +4401,8 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     selectAgentHarnessForPreparedModelProvidersMock.mockReturnValue(registeredHarness);
     resolveContextEngineMock.mockResolvedValue({
       info: { id: "legacy", name: "Legacy", version: "1.0.0" },
-      compact: (params) => delegateCompactionToRuntime(params),
+      compact: (params: Parameters<NonNullable<ContextEngine["compact"]>>[0]) =>
+        delegateCompactionToRuntime(params),
     } as never);
     sessionCompactImpl.mockImplementationOnce(async () => {
       order.push("host");
