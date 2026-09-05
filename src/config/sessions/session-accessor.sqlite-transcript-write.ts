@@ -351,7 +351,8 @@ export function appendTranscriptEventSync(
 
 /** Commits one compaction boundary and its session accounting as one SQLite write. */
 export function persistCompactionBoundaryWithSessionEntrySync(
-  scope: SessionTranscriptRuntimeTarget,
+  scope: SessionTranscriptRuntimeTarget &
+    Pick<SessionTranscriptWriteScope, "expectedLifecycleRevision" | "expectedWriterRunId">,
   params: {
     append: () => string;
     transcriptByteCompactionLatch: NonNullable<
