@@ -388,7 +388,7 @@ export async function executeQueuedContextEngineCompaction(input: {
             }
           }
         }
-        const compactionKind =
+        const compactionKind: "context-engine" | "server-endpoint" =
           isRecord(result.result?.details) &&
           result.result.details.compactionKind === "server-endpoint" &&
           typeof tokensAfter === "number"

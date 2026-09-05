@@ -3860,7 +3860,7 @@ describe("runMemoryFlushIfNeeded", () => {
         result: {
           ok: true,
           compacted: true,
-          result: { sessionId: sessionEntry.sessionId, tokensAfter: 42 },
+          result: { sessionId: sessionEntry.sessionId, tokensBefore: 10, tokensAfter: 42 },
         },
       });
       host?.onCommitted?.(accepted);
