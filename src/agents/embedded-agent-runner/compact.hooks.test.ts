@@ -4402,7 +4402,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     resolveContextEngineMock.mockResolvedValue({
       info: { id: "legacy", name: "Legacy", version: "1.0.0" },
       compact: (params) => delegateCompactionToRuntime(params),
-    });
+    } as never);
     sessionCompactImpl.mockImplementationOnce(async () => {
       order.push("host");
       return {
@@ -4410,6 +4410,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         firstKeptEntryId: "entry-1",
         tokensBefore: 120,
         tokensAfter: 50,
+        details: { ok: true },
       };
     });
     maybeCompactAgentHarnessSessionMock.mockImplementationOnce(async () => {

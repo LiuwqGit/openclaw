@@ -23,6 +23,13 @@ const sessionTarget: SessionTranscriptRuntimeTarget = {
   sessionKey: "agent:main:session-1",
   storePath: "/tmp/sessions.json",
 };
+type ConsumeOverrides = {
+  lockedHarnessRuntime?: string;
+  sessionTarget?: SessionTranscriptRuntimeTarget;
+  preflightRequired?: boolean;
+  preflightCompactionTrigger?: "tokens" | "transcript_bytes";
+};
+
 function makeCodexHarness(): AgentHarness {
   return {
     id: "codex",
@@ -59,18 +66,12 @@ describe("transcript-byte preflight authority", () => {
     restoreActivePluginRegistrySnapshot(snapshot);
   });
 
-  function consume(
-    runtimeContext: ContextEngineRuntimeContext,
-    overrides: {
-      lockedHarnessRuntime?: string;
-      sessionTarget?: SessionTranscriptRuntimeTarget;
-      preflightRequired?: boolean;
-      preflightCompactionTrigger?: "tokens" | "transcript_bytes";
-    } = {},
-  ) {
+  function consume(runtimeContext: ContextEngineRuntimeContext, overrides: ConsumeOverrides = {}) {
     return consumeTranscriptBytePreflightClaim(
       {
         contextEngineRuntimeContext: runtimeContext,
+        sessionId: sessionTarget.sessionId,
+        workspaceDir: "/tmp/workspace",
         preflightRequired: overrides.preflightRequired ?? true,
         preflightCompactionTrigger: overrides.preflightCompactionTrigger ?? "transcript_bytes",
         trigger: "budget",
@@ -101,11 +102,27 @@ describe("transcript-byte preflight authority", () => {
   });
 
   it.each([
-    ["forged public state", { hostOwnsTranscriptBytePreflight: true }],
-    ["wrong owner", {}, { lockedHarnessRuntime: "openclaw" }],
-    ["wrong target", {}, { sessionTarget: { ...sessionTarget, sessionId: "session-2" } }],
-    ["token trigger", {}, { preflightCompactionTrigger: "tokens" as const }],
-  ])("rejects %s", (_name, runtimeContext, overrides = {}) => {
+    { name: "forged public state", runtimeContext: { hostOwnsTranscriptBytePreflight: true } },
+    {
+      name: "wrong owner",
+      runtimeContext: {},
+      overrides: { lockedHarnessRuntime: "openclaw" },
+    },
+    {
+      name: "wrong target",
+      runtimeContext: {},
+      overrides: { sessionTarget: { ...sessionTarget, sessionId: "session-2" } },
+    },
+    {
+      name: "token trigger",
+      runtimeContext: {},
+      overrides: { preflightCompactionTrigger: "tokens" },
+    },
+  ] satisfies Array<{
+    name: string;
+    runtimeContext: ContextEngineRuntimeContext;
+    overrides?: ConsumeOverrides;
+  }>)("rejects $name", ({ runtimeContext, overrides }) => {
     setTranscriptBytePreflightClaim(runtimeContext, authority);
     expect(consume(runtimeContext, overrides)).toBeUndefined();
   });
