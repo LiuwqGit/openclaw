@@ -29,7 +29,6 @@ import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
 import { maybeCompactAgentHarnessSession } from "../harness/compaction.js";
-import type { resolveHostByteAuthority } from "../harness/registry.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
 import { SessionManager } from "../sessions/index.js";
 import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
@@ -46,14 +45,16 @@ import {
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
-import { setHostByteClaim } from "./transcript-byte-preflight-authority.js";
+import {
+  setTranscriptBytePreflightClaim,
+  type TranscriptBytePreflightAuthority,
+} from "./transcript-byte-preflight-authority.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
 
 /** Host-only bookkeeping, deliberately separate from plugin compaction parameters. */
 export type QueuedCompactionHostOptions = {
   assertActive?: () => void;
-  /** Preserves the requested route until the prepared registry generation can mint authority. */
-  hostTranscriptBytePreflightIntent?: "codex";
+  transcriptBytePreflightHarness?: "codex";
   onCommitted?: (accepted: AcceptedCompactionSuccessor) => void;
 };
 
@@ -128,7 +129,7 @@ export async function executeQueuedContextEngineCompaction(input: {
   preparedHarnessRuntime?: string;
   contextTokenBudget?: number;
   attemptNativeHarnessCompaction: boolean;
-  hostByteAuthority?: ReturnType<typeof resolveHostByteAuthority>;
+  transcriptBytePreflightAuthority?: TranscriptBytePreflightAuthority;
 }): Promise<EmbeddedAgentCompactResult> {
   const {
     params,
@@ -146,7 +147,7 @@ export async function executeQueuedContextEngineCompaction(input: {
     preparedHarnessRuntime,
     contextTokenBudget,
     attemptNativeHarnessCompaction,
-    hostByteAuthority,
+    transcriptBytePreflightAuthority,
   } = input;
   let expected = { ...expectedEntry };
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
@@ -284,9 +285,9 @@ export async function executeQueuedContextEngineCompaction(input: {
                 expectedEntry,
                 backendParams.abortSignal,
               );
-              const clearClaim = setHostByteClaim(
+              const clearClaim = setTranscriptBytePreflightClaim(
                 backendParams.runtimeContext,
-                hostByteAuthority,
+                transcriptBytePreflightAuthority,
                 compact,
               );
               return withOwnedSessionTranscriptWrites(writeContext, () =>
@@ -491,7 +492,7 @@ export async function executeQueuedContextEngineCompaction(input: {
             }
           }
           if (
-            (engineOwnsCompaction || hostByteAuthority) &&
+            (engineOwnsCompaction || transcriptBytePreflightAuthority) &&
             result.ok &&
             result.compacted &&
             canContinue() &&

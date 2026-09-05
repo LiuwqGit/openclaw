@@ -973,36 +973,6 @@ describe("Codex app-server startup binding", () => {
     expect(savedBinding).toBeUndefined();
   });
 
-  it("rotates an oversized ordinary binding when native tools are restricted", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    const agentDir = path.join(tempDir, "agent");
-    await writeExistingBinding(sessionFile, workspaceDir, {
-      dynamicToolsFingerprint: "[]",
-      nativeToolPolicyRestricted: true,
-    });
-    await writeSessionRecord(sessionFile, { totalTokens: 12_000 });
-    const rolloutDir = path.join(agentDir, "codex-home", "sessions");
-    await fs.mkdir(rolloutDir, { recursive: true });
-    await fs.writeFile(path.join(rolloutDir, "rollout-thread-existing.jsonl"), "x".repeat(2_000));
-
-    const binding = await rotateOversizedCodexAppServerStartupBinding({
-      binding: await readCodexAppServerBinding(sessionFile),
-      sessionFile,
-      agentDir,
-      config: {
-        agents: {
-          defaults: {
-            compaction: { maxActiveTranscriptBytes: 1_000 },
-          },
-        },
-      } as never,
-    });
-
-    expect(binding).toBeUndefined();
-    await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
-  });
-
   it("clears native rollouts at the configured byte limit", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");

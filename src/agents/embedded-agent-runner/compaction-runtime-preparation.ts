@@ -31,25 +31,44 @@ import {
   resolveEmbeddedCompactionTarget,
 } from "./compaction-runtime-context.js";
 
+export function projectCodexHostTranscriptBytePreflightConfig(
+  config: OpenClawConfig | undefined,
+  active: boolean,
+): OpenClawConfig | undefined {
+  const compaction = config?.agents?.defaults?.compaction;
+  if (
+    !active ||
+    !compaction ||
+    (!Object.hasOwn(compaction, "model") && !Object.hasOwn(compaction, "provider"))
+  ) {
+    return config;
+  }
+  const { model: _model, provider: _provider, ...projectedCompaction } = compaction;
+  return {
+    ...config,
+    agents: {
+      ...config.agents,
+      defaults: { ...config.agents?.defaults, compaction: projectedCompaction },
+    },
+  };
+}
+
 /** Resolves the shared policy, target, and harness ownership for either compaction entry point. */
-export function resolveCompactionRuntimeSelection(
-  params: {
-    config?: OpenClawConfig;
-    provider?: string | null;
-    modelId?: string | null;
-    authProfileId?: string | null;
-    modelSelectionLocked?: boolean;
-    sandboxSessionKey?: string | null;
-    sandboxAgentId?: string;
-    sessionKey?: string | null;
-    agentId?: string;
-    boundHarnessRuntime?: string | null;
-    preparedRuntimePlan?: AgentRuntimePlan;
-    runtimeAuthPlan?: AgentRuntimeAuthPlan;
-    selectedHarnessRuntime?: string;
-  },
-  retainRequestedModel = false,
-) {
+export function resolveCompactionRuntimeSelection(params: {
+  config?: OpenClawConfig;
+  provider?: string | null;
+  modelId?: string | null;
+  authProfileId?: string | null;
+  modelSelectionLocked?: boolean;
+  sandboxSessionKey?: string | null;
+  sandboxAgentId?: string;
+  sessionKey?: string | null;
+  agentId?: string;
+  boundHarnessRuntime?: string | null;
+  preparedRuntimePlan?: AgentRuntimePlan;
+  runtimeAuthPlan?: AgentRuntimeAuthPlan;
+  selectedHarnessRuntime?: string;
+}) {
   const runtimePolicySessionKey = params.sandboxSessionKey ?? params.sessionKey ?? undefined;
   const runtimePolicyAgentId =
     params.sandboxAgentId ??
@@ -61,7 +80,7 @@ export function resolveCompactionRuntimeSelection(
     provider: params.provider,
     modelId: params.modelId,
     authProfileId: params.authProfileId,
-    modelSelectionLocked: params.modelSelectionLocked || retainRequestedModel,
+    modelSelectionLocked: params.modelSelectionLocked,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
@@ -96,7 +115,7 @@ export function resolveCompactionRuntimeSelection(
     modelId: params.modelId,
     authProfileId: params.authProfileId,
     harnessRuntime: selectedHarnessRuntime,
-    modelSelectionLocked: params.modelSelectionLocked || retainRequestedModel,
+    modelSelectionLocked: params.modelSelectionLocked,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });

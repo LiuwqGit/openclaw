@@ -3621,7 +3621,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactCall.sessionFile).toBe("main");
   });
 
-  it("emits Codex host byte intent for the first oversized heartbeat without eager registration", async () => {
+  it("enforces the active transcript byte threshold during heartbeats", async () => {
     const sessionFile = path.join(rootDir, "large-heartbeat-session.jsonl");
     await writeTestSessionTranscript({
       rootDir,
@@ -3634,12 +3634,17 @@ describe("runMemoryFlushIfNeeded", () => {
       totalTokensFresh: true,
       totalTokensVersion: 1,
       compactionCount: 0,
-      agentHarnessId: "codex",
     };
 
     await runSessionCompactionIfNeeded({
       cfg: {
-        agents: { defaults: { compaction: { maxActiveTranscriptBytes: "10b" } } },
+        agents: {
+          defaults: {
+            compaction: {
+              maxActiveTranscriptBytes: "10b",
+            },
+          },
+        },
       },
       followupRun: createTestFollowupRun({
         sessionId: "session",
@@ -3653,36 +3658,14 @@ describe("runMemoryFlushIfNeeded", () => {
       sessionKey: "main",
       storePath: path.join(rootDir, "sessions.json"),
       isHeartbeat: true,
-      agentHarnessId: "codex",
-      ...createCompactionLifecycle(createReplyOperation()),
     });
 
     expect(requireCompactEmbeddedAgentSessionCall()).toMatchObject({
       preflightCompactionTrigger: "transcript_bytes",
       preflightRequired: true,
-    });
-    expect(compactEmbeddedAgentSessionMock.mock.calls[0]?.[1]).toMatchObject({
-      hostTranscriptBytePreflightIntent: "codex",
-    });
-  });
-
-  it("still skips token-pressure compaction during a heartbeat", async () => {
-    const sessionEntry: SessionEntry = {
       sessionId: "session",
-      updatedAt: Date.now(),
-      totalTokens: 90_000,
-      totalTokensFresh: true,
-      totalTokensVersion: 1,
-      compactionCount: 0,
-    };
-
-    const entry = await runDefaultPreflight(sessionEntry, {
-      isHeartbeat: true,
-      modelContextTokens: 100_000,
+      trigger: "budget",
     });
-
-    expect(entry).toBe(sessionEntry);
-    expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
   });
 
   it("does not repeat byte-triggered compaction until an oversized successor grows by one threshold", async () => {
@@ -3738,68 +3721,11 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(requireCompactEmbeddedAgentSessionCall(1).preflightCompactionTrigger).toBe("tokens");
   });
 
-  it("uses the refreshed harness owner after clearing a stale byte latch", async () => {
-    const storePath = path.join(rootDir, "refreshed-byte-owner.json");
-    const sessionKey = "agent:main:main";
-    const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
-    await upsertSessionEntryCore(scope, { sessionId: "session", updatedAt: 10 });
-    await replaceTranscriptEvents(scope, [
-      { type: "message", message: { role: "user", content: "x".repeat(256) } },
-    ]);
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: 10,
-      totalTokens: 10,
-      totalTokensFresh: true,
-      agentHarnessId: "codex",
-      transcriptByteCompactionLatch: { activeBytes: 1, maxBytes: 1, sessionId: "session" },
-    };
-    const sessionStore = { [sessionKey]: sessionEntry };
-    incrementCompactionCountMock.mockImplementationOnce(async (params) => {
-      const refreshed: SessionEntry = {
-        ...sessionEntry,
-        agentHarnessId: "copilot",
-        modelSelectionLocked: true,
-        transcriptByteCompactionLatch: undefined,
-      };
-      params.sessionStore![sessionKey] = refreshed;
-      return refreshed.compactionCount ?? 0;
-    });
-
-    await runSessionCompactionIfNeeded({
-      cfg: { agents: { defaults: { compaction: { maxActiveTranscriptBytes: "10b" } } } },
-      followupRun: createTestFollowupRun({
-        provider: "openai",
-        model: "gpt-5.5",
-        sessionId: "session",
-        sessionKey,
-      }),
-      defaultModel: "gpt-5.5",
-      modelContextTokens: 1_000_000,
-      sessionEntry,
-      sessionStore,
-      sessionKey,
-      storePath,
-      isHeartbeat: false,
-      agentHarnessId: "codex",
-      ...createCompactionLifecycle(createReplyOperation()),
-    });
-
-    expect(requireCompactEmbeddedAgentSessionCall()).toMatchObject({
-      agentHarnessId: "copilot",
-      modelSelectionLocked: true,
-      preflightCompactionTrigger: "transcript_bytes",
-    });
-    expect(compactEmbeddedAgentSessionMock.mock.calls[0]?.[1]).not.toHaveProperty(
-      "hostTranscriptBytePreflightIntent",
-    );
-  });
-
   it.each([
     ["fresh session selected from the outset", "fresh", "codex"],
     ["upgraded session with historical embedded ownership", "upgraded", "openclaw"],
   ])(
-    "byte-guards a host-owned runtime %s through local preflight",
+    "byte-guards a Codex runtime %s through native preflight",
     async (_label, fixtureId, agentHarnessId) => {
       const storePath = path.join(rootDir, `sqlite-codex-byte-guard-${fixtureId}.json`);
       const sessionKey = "agent:main:main";
@@ -3808,8 +3734,7 @@ describe("runMemoryFlushIfNeeded", () => {
       await replaceTranscriptEvents(scope, [
         { message: { role: "user", content: "x".repeat(256) }, type: "message" },
       ]);
-      const preCompactionActiveBytes = readTranscriptStatsSync(scope).sizeBytes;
-      expect(preCompactionActiveBytes).toBeGreaterThan(10);
+      expect(readTranscriptStatsSync(scope).sizeBytes).toBeGreaterThan(10);
 
       const sessionEntry: SessionEntry = {
         sessionId: "session",
@@ -3823,14 +3748,6 @@ describe("runMemoryFlushIfNeeded", () => {
       };
       const sessionStore = { [sessionKey]: sessionEntry };
       const replyOperation = createReplyOperation();
-      compactEmbeddedAgentSessionMock.mockImplementationOnce(async (compactParams, host) => {
-        const target = compactParams.sessionTarget;
-        if (!target?.agentId || !target.sessionKey || !target.storePath) {
-          throw new Error("expected exact transcript target");
-        }
-        expect(host).toMatchObject({ hostTranscriptBytePreflightIntent: "codex" });
-        return { ok: true, compacted: true, result: { tokensAfter: 42 } };
-      });
 
       let entry: SessionEntry | undefined = sessionEntry;
       for (let turn = 0; turn < 2; turn += 1) {
@@ -3859,10 +3776,10 @@ describe("runMemoryFlushIfNeeded", () => {
         });
       }
 
-      expect(entry?.compactionCount).toBe(1);
+      expect(entry?.compactionCount).toBe(2);
       expect(replyOperation.setPhase).toHaveBeenCalledWith("preflight_compacting");
-      expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledOnce();
-      expect(requireCompactEmbeddedAgentSessionCall()).toMatchObject({
+      expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(2);
+      expect(requireCompactEmbeddedAgentSessionCall(1)).toMatchObject({
         agentHarnessId: "codex",
         contextTokenBudget: 1_000_000,
         deferOwningContextEngineCompaction: false,
@@ -3872,12 +3789,10 @@ describe("runMemoryFlushIfNeeded", () => {
         sessionKey,
         trigger: "budget",
       });
-      const postCompactionActiveBytes = readTranscriptStatsSync(scope).sizeBytes;
-      expect(loadMainSessionEntry(storePath).transcriptByteCompactionLatch).toEqual({
-        activeBytes: postCompactionActiveBytes,
-        maxBytes: 10,
-        sessionId: "session",
+      expect(compactEmbeddedAgentSessionMock.mock.calls[1]?.[1]).toMatchObject({
+        transcriptBytePreflightHarness: "codex",
       });
+      expect(loadMainSessionEntry(storePath).transcriptByteCompactionLatch).toBeUndefined();
     },
   );
 

@@ -14,17 +14,15 @@ import {
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { delegateCompactionToRuntime } from "../../context-engine/delegate.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import { markPluginRegistryRetired } from "../../plugins/registry-lifecycle.js";
 import {
-  captureActivePluginRegistrySnapshot,
-  restoreActivePluginRegistrySnapshot,
-  setActivePluginRegistry,
+  requireActivePluginRegistry,
+  withPluginRegistrationContext,
 } from "../../plugins/runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { registerAgentHarness } from "../harness/registry.js";
+import { getRegisteredAgentHarness, registerAgentHarness } from "../harness/registry.js";
 import type { AgentHarness } from "../harness/types.js";
 import {
   createAssistant,
@@ -316,26 +314,6 @@ function createPreparedCodexCompactionPlans(modelId = "gpt-5.5") {
     } as never,
   };
 }
-
-function registerCodexHostByteHarness(): AgentHarness {
-  const harness: AgentHarness = {
-    id: "codex",
-    label: "Codex",
-    supports: () => ({ supported: true }),
-    runAttempt: async () => {
-      throw new Error("not used");
-    },
-  };
-  registerAgentHarness(harness, {
-    ownerPluginId: "codex",
-    nativeCompaction: async () => ({ ok: true, compacted: true }),
-  });
-  selectAgentHarnessMock.mockReturnValue(harness);
-  selectAgentHarnessForPreparedModelProvidersMock.mockReturnValue(harness);
-  return harness;
-}
-
-const hostByteCompactionHost = { hostTranscriptBytePreflightIntent: "codex" as const };
 
 const sessionHook = (action: string): SessionHookEvent | undefined =>
   triggerInternalHookMock.mock.calls.find((call) => {
@@ -740,42 +718,26 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     expect(compactionTimeoutReset).toHaveBeenCalledTimes(6);
   });
 
-  it.each(["codex", "copilot"])(
-    "fails closed before generic compaction for a forged model-locked %s request",
-    async (agentHarnessId) => {
-      const params = await nativeCompactionArgs({
-        provider: "openai",
-        model: "gpt-5.6-luna",
-        agentHarnessId,
-      });
-      const result = await compactEmbeddedAgentSessionDirect({
-        ...params,
-        agentHarnessId: "openclaw",
-        config: {
-          agents: {
-            defaults: { compaction: { model: "github-copilot/gpt-5.6-sol" } },
-          },
-        },
-        contextEngineRuntimeContext: {
-          hostOwnsTranscriptBytePreflight: true,
-          preflightCompactionTrigger: "transcript_bytes",
-          preflightRequired: true,
-        },
-        preflightCompactionTrigger: "transcript_bytes",
-        preflightRequired: true,
-        trigger: "budget",
-        sessionEntry: { sessionId: TEST_SESSION_ID, updatedAt: 1, pluginOwnerId: "stale-owner" },
-      });
+  it("fails closed before generic compaction for a model-locked native session", async () => {
+    const params = await nativeCompactionArgs({
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      agentHarnessId: "codex",
+    });
+    const result = await compactEmbeddedAgentSessionDirect({
+      ...params,
+      agentHarnessId: "openclaw",
+      sessionEntry: { sessionId: TEST_SESSION_ID, updatedAt: 1, pluginOwnerId: "stale-owner" },
+    });
 
-      expect(result).toMatchObject({
-        ok: false,
-        compacted: false,
-        failure: { reason: "model_selection_locked" },
-      });
-      expect(resolveModelMock).not.toHaveBeenCalled();
-      expect(sessionCompactImpl).not.toHaveBeenCalled();
-    },
-  );
+    expect(result).toMatchObject({
+      ok: false,
+      compacted: false,
+      failure: { reason: "model_selection_locked" },
+    });
+    expect(resolveModelMock).not.toHaveBeenCalled();
+    expect(sessionCompactImpl).not.toHaveBeenCalled();
+  });
 
   it("preserves prepared runtime plans for the normalized primary compaction candidate", async () => {
     const { modelRoute, runtimeAuthPlan, runtimePlan } = createPreparedCodexCompactionPlans();
@@ -2566,62 +2528,39 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     });
   });
 
-  it.each([
-    ["overflow", { trigger: "overflow" }],
-    ["manual", { trigger: "manual" }],
-    [
-      "token preflight",
-      {
-        trigger: "budget",
-        preflightRequired: true,
-        preflightCompactionTrigger: "tokens",
-      },
-    ],
-    [
-      "unclaimed byte preflight",
-      {
-        trigger: "budget",
-        preflightRequired: true,
-        preflightCompactionTrigger: "transcript_bytes",
-      },
-    ],
-  ] as const)(
-    "uses the compaction model override for %s with a pinned Codex harness",
-    async (_case, mode) => {
-      resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "codex" });
+  it("uses the compaction model override with a pinned Codex harness", async () => {
+    resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "codex" });
 
-      const result = await compactEmbeddedAgentSessionDirect({
-        sessionId: "session-1",
-        sessionKey: TEST_SESSION_KEY,
-        sessionFile: TEST_SESSION_KEY,
-        workspaceDir: join(TEST_WORKSPACE_DIR, "workspace"),
-        provider: "openai",
-        model: "gpt-5.5",
-        agentHarnessId: "codex",
-        config: {
-          models: {
-            providers: {
-              openai: {
-                models: [{ id: "gpt-5.5" }, { id: "gpt-5.4-mini", contextWindow: 350_000 }],
-              },
+    const result = await compactEmbeddedAgentSessionDirect({
+      sessionId: "session-1",
+      sessionKey: TEST_SESSION_KEY,
+      sessionFile: TEST_SESSION_KEY,
+      workspaceDir: join(TEST_WORKSPACE_DIR, "workspace"),
+      provider: "openai",
+      model: "gpt-5.5",
+      agentHarnessId: "codex",
+      config: {
+        models: {
+          providers: {
+            openai: {
+              models: [{ id: "gpt-5.5" }, { id: "gpt-5.4-mini", contextWindow: 350_000 }],
             },
           },
-          agents: {
-            defaults: { compaction: { model: "openai/gpt-5.4-mini" } },
-          },
-        } as never,
-        ...mode,
-      });
+        },
+        agents: {
+          defaults: { compaction: { model: "openai/gpt-5.4-mini" } },
+        },
+      } as never,
+    });
 
-      expect(result.ok).toBe(true);
-      expect(mockCallArg(resolveModelMock)).toBe("openai");
-      expect(mockCallArg(resolveModelMock, 0, 1)).toBe("gpt-5.4-mini");
-      expectRecordFields(mockCallArg(resolveContextWindowInfoMock), {
-        provider: "openai",
-        modelId: "gpt-5.4-mini",
-      });
-    },
-  );
+    expect(result.ok).toBe(true);
+    expect(mockCallArg(resolveModelMock)).toBe("openai");
+    expect(mockCallArg(resolveModelMock, 0, 1)).toBe("gpt-5.4-mini");
+    expectRecordFields(mockCallArg(resolveContextWindowInfoMock), {
+      provider: "openai",
+      modelId: "gpt-5.4-mini",
+    });
+  });
 
   it("does not reuse a source-provider profile for cross-provider compaction", async () => {
     const result = await compactEmbeddedAgentSessionDirect({
@@ -4427,6 +4366,79 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     });
   });
 
+  it("compacts the host transcript before secondary Codex compaction for byte preflight", async () => {
+    const order: string[] = [];
+    const registry = requireActivePluginRegistry();
+    const harness: AgentHarness = {
+      id: "codex",
+      label: "Codex",
+      supports: () => ({ supported: true }),
+      runAttempt: async () => {
+        throw new Error("not used");
+      },
+    };
+    withPluginRegistrationContext(registry, "codex", () => {
+      registerAgentHarness(harness, {
+        nativeCompaction: vi.fn(async () => ({ ok: true, compacted: true })),
+      });
+    });
+    const registeredHarness = expectDefined(
+      getRegisteredAgentHarness("codex")?.harness,
+      "registered Codex harness",
+    );
+    const acquirePreparedRuntime = expectDefined(
+      acquireAgentRunPreparedModelRuntimeMock.getMockImplementation(),
+      "prepared runtime acquisition",
+    );
+    acquireAgentRunPreparedModelRuntimeMock.mockImplementationOnce(async (input) => {
+      const lease = await acquirePreparedRuntime(input);
+      return {
+        ...lease,
+        snapshot: { ...lease.snapshot, pluginRegistry: registry },
+      };
+    });
+    selectAgentHarnessMock.mockReturnValue(registeredHarness);
+    selectAgentHarnessForPreparedModelProvidersMock.mockReturnValue(registeredHarness);
+    resolveContextEngineMock.mockResolvedValue({
+      info: { id: "legacy", name: "Legacy", version: "1.0.0" },
+      compact: delegateCompactionToRuntime,
+    });
+    sessionCompactImpl.mockImplementationOnce(async () => {
+      order.push("host");
+      return {
+        summary: "host-summary",
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 120,
+        tokensAfter: 50,
+      };
+    });
+    maybeCompactAgentHarnessSessionMock.mockImplementationOnce(async () => {
+      order.push("native");
+      return { ok: true, compacted: true };
+    });
+
+    const result = await compactEmbeddedAgentSession(
+      await nativeCompactionArgs({
+        provider: "openai",
+        model: "gpt-5.5",
+        agentHarnessId: "codex",
+        trigger: "budget",
+        forcePreflight: true,
+        preflightRequired: true,
+        preflightCompactionTrigger: "transcript_bytes",
+      }),
+      { transcriptBytePreflightHarness: "codex" },
+    );
+
+    expect(result.reason).toBeUndefined();
+    expect(result).toMatchObject({ ok: true, compacted: true });
+    expect(order).toEqual(["host", "native"]);
+    expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({ agentHarnessId: "codex" }),
+      expectedNativeCompactionOptions("after_context_engine"),
+    );
+  });
+
   it("falls back to the context engine when required-preflight native compaction reports a binding change", async () => {
     resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "codex" });
     resolveContextEngineMock.mockResolvedValue({
@@ -4479,173 +4491,6 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     );
     expect(contextEngineCompactMock).toHaveBeenCalledTimes(1);
   });
-
-  it("runs locked Codex byte preflight through the default Legacy engine", async () => {
-    registerCodexHostByteHarness();
-    const { LegacyContextEngine } = await vi.importActual<
-      typeof import("../../context-engine/legacy.js")
-    >("../../context-engine/legacy.js");
-    resolveContextEngineMock.mockResolvedValue(new LegacyContextEngine());
-    resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "codex" });
-    maybeCompactAgentHarnessSessionMock.mockResolvedValueOnce({
-      ok: false,
-      compacted: false,
-      reason: "native compaction is unavailable for a host-isolated Codex session",
-    });
-
-    const compactParams = await nativeCompactionArgs({
-      provider: "openai",
-      model: "gpt-5.5",
-      agentHarnessId: "codex",
-      trigger: "budget",
-      preflightRequired: true,
-      preflightCompactionTrigger: "transcript_bytes",
-    });
-    const result = await compactEmbeddedAgentSession(compactParams, hostByteCompactionHost);
-
-    expect(result).toMatchObject({
-      ok: true,
-      compacted: true,
-      result: {
-        summary: "summary",
-        details: {
-          codexNativeCompaction: {
-            ok: false,
-            compacted: false,
-            reason: "native compaction is unavailable for a host-isolated Codex session",
-          },
-        },
-      },
-    });
-    expect(sessionCompactImpl).toHaveBeenCalledOnce();
-    expect(contextEngineCompactMock).not.toHaveBeenCalled();
-    expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledOnce();
-    expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledWith(
-      expect.objectContaining({ agentHarnessId: "codex" }),
-      expectedNativeCompactionOptions("after_context_engine"),
-    );
-  });
-
-  it("mints host byte authority from the prepared Codex generation without eager registration", async () => {
-    const { LegacyContextEngine } = await vi.importActual<
-      typeof import("../../context-engine/legacy.js")
-    >("../../context-engine/legacy.js");
-    resolveContextEngineMock.mockResolvedValue(new LegacyContextEngine());
-    resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "codex" });
-    selectAgentHarnessMock.mockImplementationOnce(() => registerCodexHostByteHarness());
-    await patchSessionEntryCore(
-      {
-        agentId: "main",
-        sessionKey: TEST_SESSION_KEY,
-        storePath: join(TEST_WORKSPACE_DIR, "sessions.json"),
-      },
-      (entry) => ({
-        ...entry,
-        agentHarnessId: "codex",
-        modelSelectionLocked: false,
-      }),
-    );
-    maybeCompactAgentHarnessSessionMock.mockResolvedValueOnce({
-      ok: true,
-      compacted: true,
-    });
-    const compactParams = wrappedCompactionArgs({
-      provider: "openai",
-      model: "gpt-5.5",
-      agentHarnessId: "codex",
-      trigger: "budget",
-      preflightRequired: true,
-      preflightCompactionTrigger: "transcript_bytes",
-      config: {
-        agents: {
-          defaults: { compaction: { model: "github-copilot/gpt-5.6-sol" } },
-        },
-        models: {
-          providers: {
-            openai: { models: [{ id: "gpt-5.5", contextWindow: 1_000_000 }] },
-            "github-copilot": { models: [{ id: "gpt-5.6-sol", contextWindow: 1_000_000 }] },
-          },
-        },
-      },
-    });
-
-    const result = await compactEmbeddedAgentSession(compactParams, hostByteCompactionHost);
-
-    expect(result).toMatchObject({ ok: true, compacted: true });
-    expect(sessionCompactImpl).toHaveBeenCalledOnce();
-    expect(resolveModelMock.mock.calls).toContainEqual(
-      expect.arrayContaining(["openai", "gpt-5.5"]),
-    );
-    expect(resolveModelMock.mock.calls.some(([provider]) => provider === "github-copilot")).toBe(
-      false,
-    );
-    expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledOnce();
-    expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentHarnessId: "codex",
-        provider: "openai",
-        model: "gpt-5.5",
-      }),
-      expectedNativeCompactionOptions("after_context_engine"),
-    );
-  });
-
-  it.each(["mismatch", "replacement", "retirement"] as const)(
-    "fails closed when the prepared Codex host byte authority has a %s",
-    async (failure) => {
-      const registrySnapshot = captureActivePluginRegistrySnapshot();
-      const registry = createEmptyPluginRegistry();
-      setActivePluginRegistry(registry);
-      try {
-        const selectedHarness = registerCodexHostByteHarness();
-        if (failure === "mismatch") {
-          const mismatchedHarness = { ...selectedHarness, id: "copilot" };
-          selectAgentHarnessMock.mockReturnValue(mismatchedHarness);
-          selectAgentHarnessForPreparedModelProvidersMock.mockReturnValue(mismatchedHarness);
-        } else {
-          selectAgentHarnessForPreparedModelProvidersMock.mockImplementation(() => {
-            if (failure === "replacement") {
-              registerCodexHostByteHarness();
-            } else {
-              markPluginRegistryRetired(registry);
-            }
-            return selectedHarness;
-          });
-        }
-
-        const compactParams =
-          failure === "mismatch"
-            ? await nativeCompactionArgs({
-                provider: "openai",
-                model: "gpt-5.5",
-                agentHarnessId: "copilot",
-                trigger: "budget",
-                preflightRequired: true,
-                preflightCompactionTrigger: "transcript_bytes",
-              })
-            : wrappedCompactionArgs({
-                provider: "openai",
-                model: "gpt-5.5",
-                agentHarnessId: "codex",
-                trigger: "budget",
-                preflightRequired: true,
-                preflightCompactionTrigger: "transcript_bytes",
-              });
-        const result = await compactEmbeddedAgentSession(compactParams, hostByteCompactionHost);
-
-        expect(result).toMatchObject({
-          ok: false,
-          compacted: false,
-          failure: { reason: "model_selection_locked" },
-        });
-        expect(maybeCompactAgentHarnessSessionMock).not.toHaveBeenCalled();
-        expect(sessionCompactImpl).not.toHaveBeenCalled();
-        expect(contextEngineCompactMock).not.toHaveBeenCalled();
-      } finally {
-        restoreActivePluginRegistrySnapshot(registrySnapshot);
-      }
-    },
-  );
 
   it("keeps queued native auth candidates uncollapsed until native resolution", async () => {
     resolveAgentHarnessPolicyMock.mockReturnValue({
@@ -5928,7 +5773,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(contextEngineCompactMock).not.toHaveBeenCalled();
   });
 
-  it("runs locked native manual compaction before generic model auth preparation", async () => {
+  it("runs native manual compaction before generic model auth preparation", async () => {
     const agentDir = await realpath(
       await mkdtemp(join(tmpdir(), "openclaw-native-compaction-authless-")),
     );
@@ -5958,7 +5803,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
           sessionMode: "existing",
         },
       });
-      const result = await compactEmbeddedAgentSessionDirect(
+      const result = await compactEmbeddedAgentSession(
         await nativeCompactionArgs({
           agentDir,
           sessionTarget: {
@@ -5984,7 +5829,6 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         }),
       );
       expect(acquireAgentRunPreparedModelRuntimeMock).not.toHaveBeenCalled();
-      expect(resolveModelMock).not.toHaveBeenCalled();
       expect(contextEngineCompactMock).not.toHaveBeenCalled();
     } finally {
       closeOpenClawAgentDatabasesForTest();

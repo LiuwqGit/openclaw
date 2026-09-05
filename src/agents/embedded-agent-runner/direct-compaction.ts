@@ -12,9 +12,8 @@ import {
 
 export async function compactEmbeddedAgentSessionDirectOnce(
   params: PreparedCompactEmbeddedAgentSessionParams,
-  retainRequestedModel = false,
 ) {
-  const preparation = await prepareDirectCompactionAttempt(params, retainRequestedModel);
+  const preparation = await prepareDirectCompactionAttempt(params);
   if (!preparation.ok) {
     return preparation.result;
   }

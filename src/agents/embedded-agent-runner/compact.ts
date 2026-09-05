@@ -51,14 +51,17 @@ import {
   runPostCompactionSideEffects,
 } from "./compaction-hooks.js";
 import { resolveEmbeddedCompactionTarget } from "./compaction-runtime-context.js";
-import { resolveCompactionRuntimeSelection } from "./compaction-runtime-preparation.js";
+import {
+  projectCodexHostTranscriptBytePreflightConfig,
+  resolveCompactionRuntimeSelection,
+} from "./compaction-runtime-preparation.js";
 import { resolveCompactionTimeoutMs } from "./compaction-safety-timeout.js";
 import { prepareCompactionSessionAgent } from "./compaction-session-agent.js";
 import type { PreparedCompactEmbeddedAgentSessionParams } from "./direct-compaction-preparation.js";
 import { compactEmbeddedAgentSessionDirectOnce } from "./direct-compaction.js";
 import { readCompactionAccountingRecorder } from "./run/compaction-accounting-bridge.js";
 import { prepareEmbeddedSessionActiveProjectKeys } from "./session-prompt-state.js";
-import { consumeHostByteClaim } from "./transcript-byte-preflight-authority.js";
+import { consumeTranscriptBytePreflightClaim } from "./transcript-byte-preflight-authority.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
 
 export type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
@@ -260,13 +263,17 @@ export async function compactEmbeddedAgentSessionDirect(
     }));
   const entry = loadSessionEntryReadOnly({ ...runSessionTarget, readConsistency: "latest" });
   const lockedHarnessRuntime = resolveSessionPinnedHarnessId(entry);
-  const hostByteAuthority = consumeHostByteClaim(
+  const transcriptBytePreflightAuthority = consumeTranscriptBytePreflightClaim(
     paramsBase,
     runSessionTarget,
     lockedHarnessRuntime,
   );
   const requestedParams: CompactEmbeddedAgentSessionParamsWithSessionFile = {
     ...paramsBase,
+    config: projectCodexHostTranscriptBytePreflightConfig(
+      paramsBase.config,
+      Boolean(transcriptBytePreflightAuthority),
+    ),
     sessionEntry: entry ? projectPublicSessionEntry(entry) : undefined,
     agentHarnessId: lockedHarnessRuntime ?? paramsBase.agentHarnessId,
     modelSelectionLocked: entry?.modelSelectionLocked ?? paramsBase.modelSelectionLocked,
@@ -297,16 +304,12 @@ export async function compactEmbeddedAgentSessionDirect(
   const canonicalWorkspaceDir = resolveUserPath(
     resolveAgentWorkspaceDir(requestedParams.config ?? {}, requestedAgentIds.sessionAgentId),
   );
-  const retainRequestedModel = Boolean(hostByteAuthority);
-  const runtimeSelection = resolveCompactionRuntimeSelection(
-    {
-      ...requestedParams,
-      modelId: requestedParams.model,
-      boundHarnessRuntime: requestedParams.agentHarnessId,
-      preparedRuntimePlan: requestedParams.runtimePlan,
-    },
-    retainRequestedModel,
-  );
+  const runtimeSelection = resolveCompactionRuntimeSelection({
+    ...requestedParams,
+    modelId: requestedParams.model,
+    boundHarnessRuntime: requestedParams.agentHarnessId,
+    preparedRuntimePlan: requestedParams.runtimePlan,
+  });
   // Native control operations reuse the backend's existing authenticated session.
   // Run them before generic model preparation so subscription-only CLI sessions do
   // not incorrectly require an OpenClaw model API credential.
@@ -321,7 +324,11 @@ export async function compactEmbeddedAgentSessionDirect(
   if (nativeCliResult) {
     return nativeCliResult;
   }
-  if (lockedHarnessRuntime && lockedHarnessRuntime !== "openclaw" && !hostByteAuthority) {
+  if (
+    lockedHarnessRuntime &&
+    lockedHarnessRuntime !== "openclaw" &&
+    !transcriptBytePreflightAuthority
+  ) {
     return lockedHarnessCompactionFailure(lockedHarnessRuntime);
   }
   const pluginPlanCompactionTarget = resolveEmbeddedCompactionTarget({
@@ -329,7 +336,7 @@ export async function compactEmbeddedAgentSessionDirect(
     provider: requestedParams.provider,
     modelId: requestedParams.model,
     authProfileId: requestedParams.authProfileId,
-    modelSelectionLocked: requestedParams.modelSelectionLocked || retainRequestedModel,
+    modelSelectionLocked: requestedParams.modelSelectionLocked,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
@@ -346,7 +353,9 @@ export async function compactEmbeddedAgentSessionDirect(
     provider: pluginPlanCompactionTarget.provider ?? DEFAULT_PROVIDER,
     model: pluginPlanCompactionTarget.model ?? DEFAULT_MODEL,
     requestedRouteResolution: "resolved",
-    fallbacksOverride: resolveCompactionFallbacksOverride(requestedParams),
+    fallbacksOverride: transcriptBytePreflightAuthority
+      ? []
+      : resolveCompactionFallbacksOverride(requestedParams),
   });
   const runtimePluginSelections = [
     {
@@ -389,11 +398,16 @@ export async function compactEmbeddedAgentSessionDirect(
   });
   try {
     const preparedModelRuntimeOwnerSnapshot = preparedModelRuntimeLease.snapshot;
+    const preparedConfig =
+      projectCodexHostTranscriptBytePreflightConfig(
+        preparedModelRuntimeOwnerSnapshot.config,
+        Boolean(transcriptBytePreflightAuthority),
+      ) ?? preparedModelRuntimeOwnerSnapshot.config;
     const preparedWorkspaceDir =
       preparedModelRuntimeOwnerSnapshot.workspaceDir ?? requestedWorkspaceDir;
     const repoRoot =
       resolveSystemPromptRepoRoot({
-        config: preparedModelRuntimeOwnerSnapshot.config,
+        config: preparedConfig,
         workspaceDir: preparedWorkspaceDir,
         cwd: requestedParams.cwd,
       }) ?? null;
@@ -404,6 +418,7 @@ export async function compactEmbeddedAgentSessionDirect(
     );
     const preparedModelRuntime = Object.freeze({
       ...preparedModelRuntimeOwnerSnapshot,
+      config: preparedConfig,
       repoRoot,
       projectKey,
       activeProjectKeys,
@@ -412,22 +427,26 @@ export async function compactEmbeddedAgentSessionDirect(
     // A reload may have committed while session targeting was resolved above.
     const params: PreparedCompactEmbeddedAgentSessionParams = {
       ...requestedParams,
-      config: preparedModelRuntime.config,
+      config: preparedConfig,
       agentId: preparedModelRuntime.agentId ?? requestedAgentIds.sessionAgentId,
       agentDir: preparedModelRuntime.agentDir,
       workspaceDir: preparedWorkspaceDir,
       preparedModelRuntime,
     };
     const compactPrepared = async () => {
-      if (hasExplicitCompactionModel(params) || !hasCompactionModelFallbackCandidates(params)) {
-        return await compactEmbeddedAgentSessionDirectOnce(params, retainRequestedModel);
+      if (
+        transcriptBytePreflightAuthority ||
+        hasExplicitCompactionModel(params) ||
+        !hasCompactionModelFallbackCandidates(params)
+      ) {
+        return await compactEmbeddedAgentSessionDirectOnce(params);
       }
       const resolvedCompactionTarget = resolveEmbeddedCompactionTarget({
         config: params.config,
         provider: params.provider,
         modelId: params.model,
         authProfileId: params.authProfileId,
-        modelSelectionLocked: params.modelSelectionLocked || retainRequestedModel,
+        modelSelectionLocked: params.modelSelectionLocked,
         defaultProvider: DEFAULT_PROVIDER,
         defaultModel: DEFAULT_MODEL,
       });
@@ -494,20 +513,17 @@ export async function compactEmbeddedAgentSessionDirect(
           const preservesPrimaryAuth =
             isPrimaryCandidate || primaryAuthProviders.has(resolveAuthProvider(provider));
           const authProfileId = preservesPrimaryAuth ? params.authProfileId : undefined;
-          return await compactEmbeddedAgentSessionDirectOnce(
-            {
-              ...params,
-              provider,
-              model,
-              authProfileId,
-              authProfileIdSource: preservesPrimaryAuth ? params.authProfileIdSource : undefined,
-              // The primary attempt retains its already prepared atomic plan. An
-              // actual fallback may change route/auth class and must rebuild it.
-              runtimeAuthPlan: isPrimaryCandidate ? params.runtimeAuthPlan : undefined,
-              runtimePlan: isPrimaryCandidate ? params.runtimePlan : undefined,
-            },
-            retainRequestedModel,
-          );
+          return await compactEmbeddedAgentSessionDirectOnce({
+            ...params,
+            provider,
+            model,
+            authProfileId,
+            authProfileIdSource: preservesPrimaryAuth ? params.authProfileIdSource : undefined,
+            // The primary attempt retains its already prepared atomic plan. An
+            // actual fallback may change route/auth class and must rebuild it.
+            runtimeAuthPlan: isPrimaryCandidate ? params.runtimeAuthPlan : undefined,
+            runtimePlan: isPrimaryCandidate ? params.runtimePlan : undefined,
+          });
         },
       });
       return fallbackResult.result;
