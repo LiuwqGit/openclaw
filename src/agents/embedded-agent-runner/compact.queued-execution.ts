@@ -56,6 +56,11 @@ export type QueuedCompactionHostOptions = {
   assertActive?: () => void;
   transcriptBytePreflightHarness?: "codex";
   onCommitted?: (accepted: AcceptedCompactionSuccessor) => void;
+  onHostCompactionCommitted?: (commit: {
+    entry: AcceptedCompactionSuccessor["entry"];
+    tokensAfter?: number;
+    compactionKind: "context-engine" | "server-endpoint";
+  }) => Promise<void> | void;
 };
 
 export function createQueuedCompactionAbortedResult(): EmbeddedAgentCompactResult {
@@ -383,6 +388,16 @@ export async function executeQueuedContextEngineCompaction(input: {
             }
           }
         }
+        const compactionKind =
+          isRecord(result.result?.details) &&
+          result.result.details.compactionKind === "server-endpoint" &&
+          typeof tokensAfter === "number"
+            ? "server-endpoint"
+            : "context-engine";
+        if (successor.entry) {
+          const hostCommit = { entry: successor.entry, tokensAfter, compactionKind };
+          await host.onHostCompactionCommitted?.(hostCommit);
+        }
         const postCompactionSessionId = successor.sessionId;
         const postCompactionSessionFile = successor.sessionFile;
         const postCompactionSessionTarget = successor.sessionTarget;
@@ -551,18 +566,14 @@ export async function executeQueuedContextEngineCompaction(input: {
           normalizeOptionalAgentRuntimeId(preparedHarnessRuntime) === "codex"
             ? "codexNativeCompaction"
             : "nativeHarnessCompaction";
-        const serverEndpointCompaction =
-          isRecord(result.result?.details) &&
-          result.result.details.compactionKind === "server-endpoint" &&
-          typeof tokensAfter === "number";
         return {
           ok: result.ok,
           compacted: result.compacted,
-          compactionKind: serverEndpointCompaction ? "server-endpoint" : "context-engine",
+          compactionKind,
           reason: result.reason,
           result: result.result
             ? {
-                ...(serverEndpointCompaction
+                ...(compactionKind === "server-endpoint"
                   ? { kind: "server-endpoint" as const }
                   : {
                       summary: result.result.summary ?? "",

@@ -20,6 +20,7 @@ type CaseMode =
   | "success"
   | "heartbeat-fresh-restricted"
   | "heartbeat-upgraded-native-failure"
+  | "heartbeat-upgraded-restart"
   | "heartbeat-substituted"
   | "heartbeat-revoked";
 type TimelineEntry = { sequence: number; event: string; [key: string]: unknown };
@@ -260,9 +261,9 @@ export async function startCompactionProofProvider(
         return;
       }
       if (request.url === "/v1/qa/native-compact/held") {
-        assert.equal(
-          proof.mode,
-          "heartbeat-upgraded-native-failure",
+        assert.ok(
+          proof.mode === "heartbeat-upgraded-native-failure" ||
+            proof.mode === "heartbeat-upgraded-restart",
           "Native compaction barrier reached outside the upgraded case",
         );
         assert.equal(

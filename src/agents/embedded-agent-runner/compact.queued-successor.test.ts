@@ -16,6 +16,7 @@ import {
   resetCompactHooksHarnessMocks,
   resolveContextEngineMock,
 } from "./compact.hooks.harness.js";
+import type { QueuedCompactionHostOptions } from "./compact.queued-execution.js";
 import type { AcceptedCompactionSuccessor } from "./compaction-successor.js";
 
 const { compactEmbeddedAgentSession: compact } = await loadCompactHooksHarness();
@@ -312,6 +313,9 @@ describe("queued compaction successor ownership", () => {
     "commits the successor before observers, with caller abort=%s",
     async (abortAfterCommit) => {
       const controller = new AbortController();
+      const hostCommitHeld = createDeferred();
+      const releaseHostCommit = createDeferred();
+      let observerReturned = false;
       const onCommitted = vi.fn((accepted: AcceptedCompactionSuccessor) => {
         expect(loadSessionEntry(target())).toMatchObject({
           ...owner,
@@ -326,28 +330,68 @@ describe("queued compaction successor ownership", () => {
         if (abortAfterCommit) {
           controller.abort(new Error("caller closed after commit"));
         }
+        observerReturned = true;
       });
+      const onHostCompactionCommitted = vi.fn<
+        NonNullable<QueuedCompactionHostOptions["onHostCompactionCommitted"]>
+      >(async (commit) => {
+        expect(observerReturned).toBe(true);
+        expect(commit).toMatchObject({
+          entry: {
+            ...owner,
+            sessionId: "successor",
+            previousSessionId: owner.sessionId,
+          },
+          tokensAfter: 40,
+          compactionKind: "context-engine",
+        });
+        hostCommitHeld.resolve();
+        await releaseHostCommit.promise;
+      });
+      const persistCheckpoint = vi.spyOn(compactionCheckpointStore, "persistCheckpoint");
+      const pending = compact(compactParams(controller.signal), {
+        onCommitted,
+        onHostCompactionCommitted,
+      });
+      try {
+        await Promise.race([
+          hostCommitHeld.promise,
+          pending.then(() => {
+            throw new Error("Queued compaction settled before host accounting");
+          }),
+        ]);
+        expect(onHostCompactionCommitted).toHaveBeenCalledOnce();
+        expect(persistCheckpoint).not.toHaveBeenCalled();
+        expect(maintain).not.toHaveBeenCalled();
+        expect(hookRunner.runAfterCompaction).not.toHaveBeenCalled();
+        expect(maybeCompactAgentHarnessSessionMock).not.toHaveBeenCalled();
+        releaseHostCommit.resolve();
 
-      const result = await compact(compactParams(controller.signal), { onCommitted });
-
-      expect(result).toMatchObject({
-        ok: true,
-        compacted: true,
-        result: { sessionId: "successor", tokensAfter: 40 },
-      });
-      expect(onCommitted).toHaveBeenCalledOnce();
-      expect(loadSessionEntry(target())).toMatchObject({
-        ...owner,
-        sessionId: "successor",
-        previousSessionId: owner.sessionId,
-      });
-      expect(maintain).toHaveBeenCalledTimes(abortAfterCommit ? 0 : 1);
-      expect(hookRunner.runAfterCompaction).toHaveBeenCalledTimes(abortAfterCommit ? 0 : 1);
-      expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledTimes(abortAfterCommit ? 0 : 1);
-      const engineInput = contextEngineCompactMock.mock.calls[0]?.[0];
-      expect(engineInput).toBeDefined();
-      expect(engineInput?.runtimeContext).not.toHaveProperty("onCommitted");
-      expect(engineInput?.runtimeContext?.sessionEntry).not.toHaveProperty("activeWriterRunId");
+        const result = await pending;
+        expect(result).toMatchObject({
+          ok: true,
+          compacted: true,
+          result: { sessionId: "successor", tokensAfter: 40 },
+        });
+        expect(onCommitted).toHaveBeenCalledOnce();
+        expect(onHostCompactionCommitted).toHaveBeenCalledOnce();
+        expect(loadSessionEntry(target())).toMatchObject({
+          ...owner,
+          sessionId: "successor",
+          previousSessionId: owner.sessionId,
+        });
+        expect(maintain).toHaveBeenCalledTimes(abortAfterCommit ? 0 : 1);
+        expect(hookRunner.runAfterCompaction).toHaveBeenCalledTimes(abortAfterCommit ? 0 : 1);
+        expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledTimes(abortAfterCommit ? 0 : 1);
+        const engineInput = contextEngineCompactMock.mock.calls[0]?.[0];
+        expect(engineInput).toBeDefined();
+        expect(engineInput?.runtimeContext).not.toHaveProperty("onCommitted");
+        expect(engineInput?.runtimeContext?.sessionEntry).not.toHaveProperty("activeWriterRunId");
+      } finally {
+        releaseHostCommit.resolve();
+        await pending.catch(() => undefined);
+        persistCheckpoint.mockRestore();
+      }
     },
   );
 
