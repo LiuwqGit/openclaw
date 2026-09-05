@@ -69,7 +69,7 @@ it.each(["embedded_run", "model_call"] as const)(
     logSessionStateChange({ ...context.params, state: "processing" });
     markDiagnosticEmbeddedRunStarted({ ...context.params, owner });
     if (activeWorkKind === "model_call") {
-      markDiagnosticModelStartedForTest(context.params);
+      markDiagnosticModelStartedForTest({ ...context.params, model: context.modelId });
     }
     const run = wrapPreparedCliRunWithTestAdmission(executePreparedCliRun)(context);
     try {
