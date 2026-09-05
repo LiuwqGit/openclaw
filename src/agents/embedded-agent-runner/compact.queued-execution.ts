@@ -288,7 +288,6 @@ export async function executeQueuedContextEngineCompaction(input: {
               const clearClaim = setTranscriptBytePreflightClaim(
                 backendParams.runtimeContext,
                 transcriptBytePreflightAuthority,
-                compact,
               );
               return withOwnedSessionTranscriptWrites(writeContext, () =>
                 compact(backendParams),

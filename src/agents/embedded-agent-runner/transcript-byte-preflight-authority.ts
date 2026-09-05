@@ -1,6 +1,5 @@
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
-import { isRuntimeCompactionDelegate } from "../../context-engine/compaction-watchdog.js";
-import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
+import type { ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { resolveCodexAgentHarnessNativeCompaction } from "../harness/registry.js";
 import type { AgentHarness } from "../harness/types.js";
@@ -25,9 +24,8 @@ export function resolveTranscriptBytePreflightAuthority(
 export function setTranscriptBytePreflightClaim(
   runtimeContext: ContextEngineRuntimeContext | undefined,
   authority: TranscriptBytePreflightAuthority | undefined,
-  compact: ContextEngine["compact"],
 ): () => void {
-  if (!runtimeContext || !authority || !isRuntimeCompactionDelegate(compact)) {
+  if (!runtimeContext || !authority) {
     return () => {};
   }
   claims.set(runtimeContext, authority);

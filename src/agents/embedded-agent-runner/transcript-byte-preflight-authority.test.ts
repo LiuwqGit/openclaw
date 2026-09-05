@@ -1,8 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
-import { markRuntimeCompactionDelegate } from "../../context-engine/compaction-watchdog.js";
-import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
+import type { ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   captureActivePluginRegistrySnapshot,
@@ -24,10 +23,6 @@ const sessionTarget: SessionTranscriptRuntimeTarget = {
   sessionKey: "agent:main:session-1",
   storePath: "/tmp/sessions.json",
 };
-const compact = markRuntimeCompactionDelegate(
-  vi.fn<ContextEngine["compact"]>(async () => ({ ok: true, compacted: true })),
-);
-
 function makeCodexHarness(): AgentHarness {
   return {
     id: "codex",
@@ -85,9 +80,9 @@ describe("transcript-byte preflight authority", () => {
     );
   }
 
-  it("consumes the exact runtime-delegate claim once", () => {
+  it("consumes the exact runtime-context claim once", () => {
     const runtimeContext = { sessionTarget };
-    const clearClaim = setTranscriptBytePreflightClaim(runtimeContext, authority, compact);
+    const clearClaim = setTranscriptBytePreflightClaim(runtimeContext, authority);
 
     expect(consume(runtimeContext)).toBe(authority);
     expect(consume(runtimeContext)).toBeUndefined();
@@ -100,13 +95,16 @@ describe("transcript-byte preflight authority", () => {
     ["wrong target", {}, { sessionTarget: { ...sessionTarget, sessionId: "session-2" } }],
     ["token trigger", {}, { preflightCompactionTrigger: "tokens" as const }],
   ])("rejects %s", (_name, runtimeContext, overrides = {}) => {
-    setTranscriptBytePreflightClaim(runtimeContext, authority, compact);
+    setTranscriptBytePreflightClaim(runtimeContext, authority);
     expect(consume(runtimeContext, overrides)).toBeUndefined();
   });
 
-  it("rejects claims from a custom context engine", () => {
+  it("retains the exact claim across wrapper delegation", () => {
     const runtimeContext = { sessionTarget };
-    setTranscriptBytePreflightClaim(runtimeContext, authority, vi.fn());
-    expect(consume(runtimeContext)).toBeUndefined();
+    const wrapper = () => consume(runtimeContext);
+
+    setTranscriptBytePreflightClaim(runtimeContext, authority);
+    expect(wrapper()).toBe(authority);
+    expect(wrapper()).toBeUndefined();
   });
 });
