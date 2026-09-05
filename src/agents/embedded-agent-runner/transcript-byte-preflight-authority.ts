@@ -6,10 +6,15 @@ import type { AgentHarness } from "../harness/types.js";
 import type { CompactEmbeddedAgentSessionRuntimeParams } from "./compact.types.js";
 
 export type TranscriptBytePreflightAuthority = AgentHarness;
+export type TranscriptByteCompactionPersistence = (
+  append: () => string,
+  validateAppend: (entryId: string, appendedText: string) => boolean,
+) => string;
 
-type TranscriptBytePreflightClaim = {
+export type TranscriptBytePreflightClaim = {
   authority: TranscriptBytePreflightAuthority;
   sessionTarget: Partial<SessionTranscriptRuntimeTarget>;
+  withCompactionPersistence?: TranscriptByteCompactionPersistence;
 };
 
 const claims = resolveGlobalSingleton<
@@ -29,6 +34,7 @@ export function resolveTranscriptBytePreflightAuthority(
 export function setTranscriptBytePreflightClaim(
   runtimeContext: ContextEngineRuntimeContext | undefined,
   authority: TranscriptBytePreflightAuthority | undefined,
+  withCompactionPersistence?: TranscriptByteCompactionPersistence,
 ): () => void {
   if (!runtimeContext || !authority) {
     return () => {};
@@ -36,6 +42,7 @@ export function setTranscriptBytePreflightClaim(
   const target = runtimeContext.sessionTarget;
   const claim = {
     authority,
+    ...(withCompactionPersistence ? { withCompactionPersistence } : {}),
     sessionTarget: {
       agentId: target?.agentId,
       sessionId: target?.sessionId,
@@ -55,15 +62,15 @@ export function consumeTranscriptBytePreflightClaim(
   params: CompactEmbeddedAgentSessionRuntimeParams,
   sessionTarget: SessionTranscriptRuntimeTarget,
   lockedHarnessRuntime: string | undefined,
-): TranscriptBytePreflightAuthority | undefined {
+): TranscriptBytePreflightClaim | undefined {
   const runtimeContext = params.contextEngineRuntimeContext;
   const claim = runtimeContext ? claims.get(runtimeContext) : undefined;
   if (!runtimeContext || !claim) {
     return undefined;
   }
-  claims.delete(runtimeContext);
   const { authority, sessionTarget: expected } = claim;
   const active = resolveTranscriptBytePreflightAuthority(authority);
+  claims.delete(runtimeContext);
   return (lockedHarnessRuntime ?? params.agentHarnessId) === authority.id &&
     params.preflightRequired === true &&
     params.preflightCompactionTrigger === "transcript_bytes" &&
@@ -73,6 +80,6 @@ export function consumeTranscriptBytePreflightClaim(
     expected.sessionKey === sessionTarget.sessionKey &&
     expected.storePath === sessionTarget.storePath &&
     active === authority
-    ? authority
+    ? claim
     : undefined;
 }

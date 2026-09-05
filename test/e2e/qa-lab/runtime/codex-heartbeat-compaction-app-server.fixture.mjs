@@ -11,6 +11,7 @@ const requestLog = process.env.OPENCLAW_QA_CODEX_HEARTBEAT_LOG;
 const appServerVersion = process.env.OPENCLAW_QA_CODEX_APP_SERVER_VERSION;
 const compactMode = process.env.OPENCLAW_QA_CODEX_HEARTBEAT_COMPACT_MODE;
 const providerBaseUrl = process.env.OPENCLAW_QA_CODEX_HEARTBEAT_PROVIDER_BASE_URL;
+const proofMode = process.env.OPENCLAW_QA_CODEX_HEARTBEAT_PROOF_MODE;
 const appServerMode = process.argv.includes("--app-server");
 
 const threadId = "thread-qa-codex-heartbeat";
@@ -252,6 +253,46 @@ async function installProviderRedirect() {
   const originalFetch = globalThis.fetch;
   const repoRoot = fileURLToPath(new URL("../../../..", import.meta.url));
   const distDir = path.join(repoRoot, "dist");
+  if (proofMode === "heartbeat-upgraded-restart") {
+    const compactChunks = fs.readdirSync(distDir).filter((name) => {
+      if (!name.startsWith("compact-") || !name.endsWith(".js")) {
+        return false;
+      }
+      const source = fs.readFileSync(path.join(distDir, name), "utf8");
+      return (
+        source.includes("failed to persist compaction checkpoint") &&
+        source.includes("compactionCheckpointStore")
+      );
+    });
+    if (compactChunks.length !== 1) {
+      throw new Error(`expected one compaction checkpoint chunk, found ${compactChunks.length}`);
+    }
+    const compactModule = await import(pathToFileURL(path.join(distDir, compactChunks[0])).href);
+    const checkpointStore = Object.values(compactModule).find(
+      (value) =>
+        value &&
+        typeof value === "object" &&
+        typeof value.persistCheckpoint === "function" &&
+        typeof value.captureSnapshot === "function" &&
+        typeof value.cleanupSnapshot === "function",
+    );
+    if (!checkpointStore) {
+      throw new Error("compaction checkpoint store export was not found");
+    }
+    const persistCheckpoint = checkpointStore.persistCheckpoint.bind(checkpointStore);
+    checkpointStore.persistCheckpoint = async (params) => {
+      const response = await originalFetch(`${providerBaseUrl}/qa/host-compaction-commit`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sessionId: params.sessionId, sessionKey: params.sessionKey }),
+      });
+      await response.text();
+      if (!response.ok) {
+        throw new Error(`host compaction commit checkpoint failed: ${response.status}`);
+      }
+      return await persistCheckpoint(params);
+    };
+  }
   const hostChunks = fs
     .readdirSync(distDir)
     .filter((name) => name.startsWith("ai-transport-host-") && name.endsWith(".js"));

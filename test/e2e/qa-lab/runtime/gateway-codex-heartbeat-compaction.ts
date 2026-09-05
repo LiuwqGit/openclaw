@@ -381,6 +381,7 @@ async function runCase(params: {
         OPENCLAW_QA_CODEX_HEARTBEAT_LOG: appServerLog,
         OPENCLAW_QA_CODEX_HEARTBEAT_COMPACT_MODE: "reject",
         OPENCLAW_QA_CODEX_HEARTBEAT_PROVIDER_BASE_URL: provider.baseUrl,
+        OPENCLAW_QA_CODEX_HEARTBEAT_PROOF_MODE: mode,
       },
       mutateConfig: (config) => {
         const workspaceDir = config.agents?.defaults?.workspace;
@@ -494,6 +495,7 @@ async function runCase(params: {
     let nativeCompactRequestId: unknown;
     let preNativeDurableSnapshot: ReturnType<typeof snapshotCompactionSession> | undefined;
     let restartDurableSnapshot: ReturnType<typeof snapshotCompactionSession> | undefined;
+    let restartProviderCountersAtCommit: ReturnType<typeof snapshotProviderCounters> | undefined;
     let terminalHeartbeat = heartbeat;
 
     if (shouldCommit) {
@@ -729,34 +731,12 @@ async function runCase(params: {
         evidence.nativeCompactRejection = rejection;
       } else if (mode === "heartbeat-upgraded-restart") {
         await waitForCompactionProofCheckpoint(
-          proof.nativeCompactRequestHeld.promise,
-          "held Codex native compaction request before restart",
+          proof.hostCommitHeld.promise,
+          "held atomic host compaction commit before restart",
         );
-        const nativeHeldRequests = await readJsonl(appServerLog);
-        const compactRequests = nativeHeldRequests.filter(
-          (request) => request.method === "thread/compact/start",
-        );
-        assert.equal(compactRequests.length, 1, "Restart case native request count changed");
-        const [compactRequest] = compactRequests;
-        assert.ok(compactRequest, "Restart case native compaction request was missing");
-        assert.deepEqual(
-          compactRequest.params,
-          { threadId: CODEX_THREAD_ID },
-          "Restart case native compaction targeted the wrong thread",
-        );
-        assert.ok(
-          typeof compactRequest.id === "number" || typeof compactRequest.id === "string",
-          "Restart case native compaction request omitted its id",
-        );
-        nativeCompactRequestId = compactRequest.id;
-        assert.equal(
-          matchingAppServerReplies(nativeHeldRequests, nativeCompactRequestId).length,
-          0,
-          "Restart case native compaction replied before Gateway loss",
-        );
-
         restartDurableSnapshot = snapshotCompactionSession(runtime, gateway, proof);
-        evidence.restartNativeHeld = restartDurableSnapshot;
+        restartProviderCountersAtCommit = snapshotProviderCounters(proof);
+        evidence.restartAtomicCommit = restartDurableSnapshot;
         const priorCompactionIds = new Set(held.compactionIds);
         const newCompactionIds = restartDurableSnapshot.compactionIds.filter(
           (id) => !priorCompactionIds.has(id),
@@ -774,36 +754,10 @@ async function runCase(params: {
         const durableCheckpoints = Array.isArray(restartDurableSnapshot.compactionCheckpoints)
           ? restartDurableSnapshot.compactionCheckpoints
           : [];
-        assert.equal(
-          durableCheckpoints.length,
-          priorCheckpoints.length + 1,
-          "Restart host checkpoint was not durable once",
-        );
-        const checkpoint = durableCheckpoints.at(-1);
-        assert.ok(runtime.isRecord(checkpoint), "Restart host checkpoint was malformed");
-        assert.equal(
-          checkpoint.sessionKey,
-          proof.sessionKey,
-          "Restart checkpoint changed session key",
-        );
-        assert.equal(
-          checkpoint.sessionId,
-          proof.sessionId,
-          "Restart checkpoint changed session identity",
-        );
-        assert.ok(
-          runtime.isRecord(checkpoint.postCompaction),
-          "Restart checkpoint omitted post-compaction identity",
-        );
-        assert.equal(
-          checkpoint.postCompaction.entryId,
-          compactionId,
-          "Restart checkpoint did not reference the durable compaction",
-        );
-        assert.equal(
-          checkpoint.postCompaction.sessionId,
-          proof.sessionId,
-          "Restart checkpoint post-compaction identity changed",
+        assert.deepEqual(
+          durableCheckpoints,
+          priorCheckpoints,
+          "Restart barrier was reached after checkpoint persistence",
         );
         assert.equal(
           restartDurableSnapshot.compactionCount,
@@ -819,6 +773,12 @@ async function runCase(params: {
           proof.sessionId,
           "Restart host byte latch changed session identity",
         );
+        const preRestartRequests = await readJsonl(appServerLog);
+        assert.equal(
+          preRestartRequests.filter((request) => request.method === "thread/compact/start").length,
+          0,
+          "Restart barrier was reached after native compaction started",
+        );
 
         const gatewayPid = gateway.pid;
         assert.ok(gatewayPid && gatewayPid > 0, "Restart case Gateway omitted its owned pid");
@@ -828,7 +788,6 @@ async function runCase(params: {
         });
         process.kill(-gatewayPid, "SIGKILL");
         const restarting = gateway.restartAfterStateMutation(async () => {});
-        proof.releaseNativeCompactRequest.resolve();
         await restarting;
         await transport.waitReady({ gateway, timeoutMs: CHECKPOINT_TIMEOUT_MS });
         evidence.restartedGatewayPid = gateway.pid;
@@ -919,28 +878,33 @@ async function runCase(params: {
       );
       assert.equal(afterTerminal.compactionIds.length, 1, "Host compaction was not committed");
       assert.equal(afterTerminal.compactionCount, 1, "Host compaction was not counted once");
-      const terminalCheckpoints = afterTerminal.compactionCheckpoints;
-      assert.ok(Array.isArray(terminalCheckpoints), "Host compaction checkpoints were malformed");
-      assert.equal(terminalCheckpoints.length, 1, "Host compaction checkpoint count changed");
-      const [checkpoint] = terminalCheckpoints;
-      assert.ok(
-        runtime.isRecord(checkpoint) && typeof checkpoint.summary === "string",
-        "Host compaction checkpoint omitted its summary",
-      );
+      const terminalCheckpoints = Array.isArray(afterTerminal.compactionCheckpoints)
+        ? afterTerminal.compactionCheckpoints
+        : [];
       assert.equal(
-        checkpoint.summary.match(/^\*\*Turn Context \(split turn\):\*\*$/gm)?.length ?? 0,
-        1,
-        "Host compaction checkpoint did not contain exactly one split-turn heading",
+        terminalCheckpoints.length,
+        mode === "heartbeat-upgraded-restart" ? 0 : 1,
+        "Host compaction checkpoint count changed",
       );
+      if (terminalCheckpoints.length === 1) {
+        const [checkpoint] = terminalCheckpoints;
+        assert.ok(
+          runtime.isRecord(checkpoint) && typeof checkpoint.summary === "string",
+          "Host compaction checkpoint omitted its summary",
+        );
+        assert.equal(
+          checkpoint.summary.match(/^\*\*Turn Context \(split turn\):\*\*$/gm)?.length ?? 0,
+          1,
+          "Host compaction checkpoint did not contain exactly one split-turn heading",
+        );
+      }
       assert.ok(
         afterTerminal.transcriptByteCompactionLatch,
         "Oversized host transcript did not persist its retry latch",
       );
       assert.equal(
         nativeCompactRequests.length,
-        mode === "heartbeat-upgraded-native-failure" || mode === "heartbeat-upgraded-restart"
-          ? 1
-          : 0,
+        mode === "heartbeat-upgraded-native-failure" ? 1 : 0,
         "Native synchronization request count did not match ownership policy",
       );
       if (mode === "heartbeat-upgraded-native-failure") {
@@ -961,7 +925,7 @@ async function runCase(params: {
           "Codex native compaction rejection count changed",
         );
       } else if (mode === "heartbeat-upgraded-restart") {
-        assert.ok(restartDurableSnapshot, "Restart case omitted its native-held snapshot");
+        assert.ok(restartDurableSnapshot, "Restart case omitted its atomic-commit snapshot");
         assert.equal(
           terminal.runId,
           terminalHeartbeat.runId,
@@ -982,15 +946,26 @@ async function runCase(params: {
           restartDurableSnapshot.compactionCount,
           "Restart duplicated compaction accounting",
         );
-        assert.deepEqual(
-          afterTerminal.transcriptByteCompactionLatch,
-          restartDurableSnapshot.transcriptByteCompactionLatch,
-          "Restart changed the durable byte latch",
+        const terminalLatch = afterTerminal.transcriptByteCompactionLatch;
+        const committedLatch = restartDurableSnapshot.transcriptByteCompactionLatch;
+        assert.ok(terminalLatch && committedLatch, "Restart omitted the durable byte latch");
+        assert.equal(
+          terminalLatch.sessionId,
+          committedLatch.sessionId,
+          "Restart changed the byte-latch session identity",
         );
         assert.equal(
-          matchingAppServerReplies(requestsAtTerminal, nativeCompactRequestId).length,
-          0,
-          "Killed native request gained a reply after restart",
+          terminalLatch.maxBytes,
+          committedLatch.maxBytes,
+          "Restart changed the byte-latch threshold",
+        );
+        assert.ok(
+          terminalLatch.activeBytes < committedLatch.activeBytes,
+          "Restart did not refresh the shrunken byte-latch baseline",
+        );
+        assert.ok(
+          terminalLatch.activeBytes > terminalLatch.maxBytes,
+          "Restart retained the byte latch below its threshold",
         );
       }
     } else if (mode === "heartbeat-substituted") {
@@ -1089,8 +1064,8 @@ async function runCase(params: {
       assertCommittedCompactionHistory(afterTerminal, after);
       if (mode === "heartbeat-upgraded-restart") {
         assert.ok(
-          committingProviderCountersAtHold,
-          "Restart case omitted its provider counter baseline",
+          restartProviderCountersAtCommit,
+          "Restart case omitted its atomic-commit provider counters",
         );
         assert.deepEqual(
           after.transcriptByteCompactionLatch,
@@ -1099,12 +1074,12 @@ async function runCase(params: {
         );
         assert.equal(
           proof.summaryRequests,
-          committingProviderCountersAtHold.summaryRequests + 2,
+          restartProviderCountersAtCommit.summaryRequests,
           "Restart successor repeated host compaction",
         );
         assert.equal(
           finalRequests.filter((request) => request.method === "thread/compact/start").length,
-          1,
+          0,
           "Restart successor repeated native compaction",
         );
       }
@@ -1161,6 +1136,7 @@ async function runCase(params: {
   } finally {
     proof.releaseBeforeHook.resolve();
     proof.releaseSummary.resolve();
+    proof.releaseHostCommit.resolve();
     proof.releaseNativeCompactRequest.resolve();
     proof.releaseAfterHook.resolve();
     proof.releaseSuccessor.resolve();

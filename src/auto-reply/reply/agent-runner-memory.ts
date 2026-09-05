@@ -43,6 +43,7 @@ import {
   type InternalSessionEntry as SessionEntry,
 } from "../../config/sessions.js";
 import {
+  persistCompactionBoundaryWithSessionEntrySync,
   readRecentSessionTranscriptActiveEvents,
   readSessionTranscriptActiveStats,
   updateSessionEntry,
@@ -156,7 +157,7 @@ function hasMatchingTranscriptByteCompactionLatch(
   return (
     latch?.sessionId === entry.sessionId &&
     latch.maxBytes === maxBytes &&
-    activeBytes >= latch.activeBytes &&
+    activeBytes >= maxBytes &&
     activeBytes - latch.activeBytes < maxBytes
   );
 }
@@ -816,6 +817,16 @@ export async function runSessionCompactionIfNeeded(params: {
       maxActiveTranscriptBytes,
     );
   const latch = entry.transcriptByteCompactionLatch;
+  const refreshedTranscriptByteCompactionLatch =
+    transcriptByteCompactionLatched &&
+    typeof activeTranscriptBytes === "number" &&
+    activeTranscriptBytes < (latch?.activeBytes ?? 0)
+      ? {
+          activeBytes: activeTranscriptBytes,
+          sessionId: entry.sessionId,
+          maxBytes: maxActiveTranscriptBytes!,
+        }
+      : undefined;
   // Unknown projection size cannot invalidate a latch whose identity and threshold still apply.
   const shouldClearTranscriptByteCompactionLatch =
     latch !== undefined &&
@@ -823,25 +834,20 @@ export async function runSessionCompactionIfNeeded(params: {
       latch.sessionId !== entry.sessionId ||
       latch.maxBytes !== maxActiveTranscriptBytes ||
       (typeof activeTranscriptBytes === "number" && !transcriptByteCompactionLatched));
-  if (shouldClearTranscriptByteCompactionLatch) {
+  if (refreshedTranscriptByteCompactionLatch || shouldClearTranscriptByteCompactionLatch) {
     const compactionCount = await incrementCompactionCount({
       ...compactionTarget,
       amount: 0,
       expectedSession: entry,
       sessionStore: compactionStore,
+      transcriptByteCompactionLatch: refreshedTranscriptByteCompactionLatch,
     });
     assertActive();
     if (compactionCount === undefined) {
       throw new Error("Session changed before byte-compaction progress could be cleared");
     }
     entry = compactionStore[compactionSessionKey] ?? entry;
-    transcriptByteCompactionLatched =
-      exceedsTranscriptByteThreshold &&
-      hasMatchingTranscriptByteCompactionLatch(
-        entry,
-        activeTranscriptBytes,
-        maxActiveTranscriptBytes,
-      );
+    transcriptByteCompactionLatched = refreshedTranscriptByteCompactionLatch !== undefined;
   }
   const shouldCompactByTranscriptBytes =
     exceedsTranscriptByteThreshold && !transcriptByteCompactionLatched;
@@ -1054,11 +1060,43 @@ export async function runSessionCompactionIfNeeded(params: {
         ...(compactionTrigger === "transcript_bytes" && isCodexRuntime
           ? {
               transcriptBytePreflightHarness: "codex" as const,
+              ...(compactionTarget.storePath &&
+              typeof activeTranscriptBytes === "number" &&
+              typeof maxActiveTranscriptBytes === "number"
+                ? {
+                    withCompactionPersistence: (
+                      append: () => string,
+                      validateAppend: (entryId: string, appendedText: string) => boolean,
+                    ) => {
+                      assertActive();
+                      const entryId = persistCompactionBoundaryWithSessionEntrySync(
+                        {
+                          ...compactionTarget,
+                          expectedLifecycleRevision: expectedSession.lifecycleRevision,
+                          expectedWriterRunId: expectedSession.activeWriterRunId,
+                          sessionId: expectedSession.sessionId,
+                        },
+                        {
+                          append,
+                          transcriptByteCompactionLatch: {
+                            activeBytes: activeTranscriptBytes,
+                            sessionId: expectedSession.sessionId,
+                            maxBytes: maxActiveTranscriptBytes,
+                          },
+                          validateAppend,
+                        },
+                      );
+                      hostAccountingCommitted = true;
+                      return entryId;
+                    },
+                  }
+                : {}),
               onHostCompactionCommitted: async (commit) => {
                 await recordCompactionAccounting(
                   commit.entry,
                   commit.tokensAfter,
                   commit.compactionKind,
+                  hostAccountingCommitted ? 0 : 1,
                 );
                 hostAccountingCommitted = true;
               },

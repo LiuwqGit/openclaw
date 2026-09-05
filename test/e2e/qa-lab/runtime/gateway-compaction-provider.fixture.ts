@@ -66,6 +66,8 @@ export function createCompactionProofCase(mode: CaseMode) {
     summaryHeld: gate(),
     releaseSummary: gate(),
     summarySettled: gate(),
+    hostCommitHeld: gate(),
+    releaseHostCommit: gate(),
     nativeCompactRequestHeld: gate(),
     releaseNativeCompactRequest: gate(),
     afterHookHeld: gate(),
@@ -249,6 +251,16 @@ export async function startCompactionProofProvider(
       const proof = active;
       assert.ok(proof, "Provider request arrived outside an owned case");
       assert.ok(proof.timeline.length < 64, "Unexpected provider retry loop");
+      if (request.url === "/v1/qa/host-compaction-commit") {
+        assert.equal(proof.mode, "heartbeat-upgraded-restart");
+        assert.equal(body.sessionKey, proof.sessionKey, "Host commit changed its session key");
+        assert.equal(body.sessionId, proof.sessionId, "Host commit changed its session identity");
+        recordCompactionProofCheckpoint(proof, "host-compaction-commit-held");
+        proof.hostCommitHeld.resolve();
+        await proof.releaseHostCommit.promise;
+        writeJson(response, 200, { ok: true });
+        return;
+      }
       if (request.url === "/v1/qa/compaction-hook/before-held") {
         assert.equal(body.sessionKey, proof.sessionKey, "Before hook changed its session key");
         assert.equal(body.sessionId, proof.sessionId, "Before hook changed its session identity");
@@ -262,8 +274,7 @@ export async function startCompactionProofProvider(
       }
       if (request.url === "/v1/qa/native-compact/held") {
         assert.ok(
-          proof.mode === "heartbeat-upgraded-native-failure" ||
-            proof.mode === "heartbeat-upgraded-restart",
+          proof.mode === "heartbeat-upgraded-native-failure",
           "Native compaction barrier reached outside the upgraded case",
         );
         assert.equal(
@@ -420,6 +431,7 @@ export async function startCompactionProofProvider(
     async stop() {
       active?.releaseBeforeHook.resolve();
       active?.releaseSummary.resolve();
+      active?.releaseHostCommit.resolve();
       active?.releaseNativeCompactRequest.resolve();
       active?.releaseAfterHook.resolve();
       active?.releaseSuccessor.resolve();

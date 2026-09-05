@@ -263,11 +263,12 @@ export async function compactEmbeddedAgentSessionDirect(
     }));
   const entry = loadSessionEntryReadOnly({ ...runSessionTarget, readConsistency: "latest" });
   const lockedHarnessRuntime = resolveSessionPinnedHarnessId(entry);
-  const transcriptBytePreflightAuthority = consumeTranscriptBytePreflightClaim(
+  const transcriptBytePreflightClaim = consumeTranscriptBytePreflightClaim(
     paramsBase,
     runSessionTarget,
     lockedHarnessRuntime,
   );
+  const transcriptBytePreflightAuthority = transcriptBytePreflightClaim?.authority;
   const requestedParams: CompactEmbeddedAgentSessionParamsWithSessionFile = {
     ...paramsBase,
     config: projectCodexHostTranscriptBytePreflightConfig(
@@ -432,6 +433,17 @@ export async function compactEmbeddedAgentSessionDirect(
       agentDir: preparedModelRuntime.agentDir,
       workspaceDir: preparedWorkspaceDir,
       preparedModelRuntime,
+      ...(transcriptBytePreflightClaim
+        ? {
+            transcriptBytePreflightAuthority: true as const,
+            ...(transcriptBytePreflightClaim.withCompactionPersistence
+              ? {
+                  transcriptByteCompactionPersistence:
+                    transcriptBytePreflightClaim.withCompactionPersistence,
+                }
+              : {}),
+          }
+        : {}),
     };
     const compactPrepared = async () => {
       if (

@@ -48,6 +48,7 @@ import { log } from "./logger.js";
 import {
   setTranscriptBytePreflightClaim,
   type TranscriptBytePreflightAuthority,
+  type TranscriptByteCompactionPersistence,
 } from "./transcript-byte-preflight-authority.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
 
@@ -61,6 +62,7 @@ type QueuedCompactionHostCommit = {
 export type QueuedCompactionHostOptions = {
   assertActive?: () => void;
   transcriptBytePreflightHarness?: "codex";
+  withCompactionPersistence?: TranscriptByteCompactionPersistence;
   onCommitted?: (accepted: AcceptedCompactionSuccessor) => void;
   onHostCompactionCommitted?: (commit: QueuedCompactionHostCommit) => Promise<void> | void;
   onHostCompactionTranscriptSettled?: (commit: QueuedCompactionHostCommit) => Promise<void> | void;
@@ -296,6 +298,7 @@ export async function executeQueuedContextEngineCompaction(input: {
               const clearClaim = setTranscriptBytePreflightClaim(
                 backendParams.runtimeContext,
                 transcriptBytePreflightAuthority,
+                host.withCompactionPersistence,
               );
               return withOwnedSessionTranscriptWrites(writeContext, () =>
                 compact(backendParams),

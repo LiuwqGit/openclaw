@@ -4458,6 +4458,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       },
     });
     expect(order).toEqual(["host", "native"]);
+    expect(attemptServerEndpointCompactionMock).not.toHaveBeenCalled();
     expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledWith(
       expect.objectContaining({ agentHarnessId: "codex" }),
       expectedNativeCompactionOptions("after_context_engine"),
