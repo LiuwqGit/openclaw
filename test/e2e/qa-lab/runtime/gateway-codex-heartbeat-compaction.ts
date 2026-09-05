@@ -1192,6 +1192,11 @@ async function runCase(params: {
       cleanupErrors.push(error);
     }
     try {
+      assert.deepEqual(provider.errors, [], "Controlled provider received unexpected traffic");
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+    try {
       await bus.stop();
     } catch (error) {
       cleanupErrors.push(error);
