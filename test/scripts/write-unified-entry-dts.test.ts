@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { TSDOWN_NON_SDK_DTS_CONFIG_GROUPS } from "../../scripts/lib/tsdown-config-groups.mts";
 import { resolveTsdownDeclarationGeneratorInputs } from "../../scripts/lib/tsdown-declaration-generator-inputs.mts";
+import { materializeNativeCompiler } from "./native-boundary-fixture.js";
 import {
   createFixture,
   declarationCacheRecords,
@@ -26,6 +27,7 @@ describe("write-unified-entry-dts", () => {
     expect(closure).toEqual(
       expect.arrayContaining([
         "scripts/lib/tsdown-declaration-generator-inputs.mts",
+        "scripts/lib/tsdown-declaration-boundary.mts",
         "scripts/lib/plugin-sdk-entrypoints.json",
         "scripts/lib/record-shared.mjs",
         "packages/normalization-core/src/mountinfo-path.ts",
@@ -109,6 +111,7 @@ describe("write-unified-entry-dts", () => {
     const { root, write, production, declarations } = createFixture(
       TSDOWN_NON_SDK_DTS_CONFIG_GROUPS,
     );
+    materializeNativeCompiler(root);
     expect(Object.values(declarations).every((entries) => entries.length > 0)).toBe(true);
     expect(production).toHaveLength(Object.values(declarations).flat().length);
     write("extensions/fixture-a/runtime-only.js", 'export const runtimeOnly = "runtime";');
@@ -349,17 +352,19 @@ describe("write-unified-entry-dts", () => {
         "tsdown.config.ts",
         `${fs.readFileSync(path.join(root, "tsdown.config.ts"), "utf8")}
 const selected = configs.find(config => config.name === ${JSON.stringify(last)});
+const register = selected.hooks;
+selected.hooks = async hooks => {
+  await register(hooks);
 ${
   failure === "missing successful receipt"
-    ? "selected.hooks = {};"
-    : `const done = selected.hooks["build:done"];
-selected.hooks = { "build:done": async (context) => {
-  await done(context);
-  if (fs.existsSync(".artifacts/mutate-cached-input")) {
-    fs.appendFileSync(${JSON.stringify(declarations[TSDOWN_NON_SDK_DTS_CONFIG_GROUPS[0]!]![0])}, "\\nexport const cachedRevision = 'after';\\n");
-  }
-}};`
+    ? '  hooks.clearHook("build:done");'
+    : `  hooks.hook("build:done", () => {
+    if (fs.existsSync(".artifacts/mutate-cached-input")) {
+      fs.appendFileSync(${JSON.stringify(declarations[TSDOWN_NON_SDK_DTS_CONFIG_GROUPS[0]!]![0])}, "\\nexport const cachedRevision = 'after';\\n");
+    }
+  });`
 }
+};
 `,
       );
     }

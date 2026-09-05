@@ -1,6 +1,7 @@
 // Narrow SQLite schema, path, and transaction helpers for first-party runtime.
 
 export {
+  borrowOpenClawAgentDatabase,
   ensureOpenClawAgentDatabaseSchema,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
@@ -12,6 +13,8 @@ export {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
+  iterateSqliteQuerySync,
+  sqliteStringSet,
 } from "../infra/kysely-sync.js";
 export { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 export { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-readonly-location.js";
