@@ -38,12 +38,6 @@ type RealtimeMarkBoundary = {
   sentMs: number;
 };
 
-/** Carrier edge buffer still ahead of playout when the paced queue drained. */
-type RealtimeDrainedLead = {
-  atMs: number;
-  bufferedMs: number;
-};
-
 /** WebSocket send callback for realtime audio frames. */
 type RealtimeAudioSend = (message: string) => boolean;
 
@@ -66,13 +60,17 @@ export class RealtimeAudioPacer {
   private sentAudioMs = 0;
   private evictedSentMs = 0;
   private confirmedPlayedMs = 0;
-  private drainedLead: RealtimeDrainedLead | null = null;
+  private playedFrontierMs = 0;
+  private frontierAtMs: number | null = null;
   private markBoundaries: RealtimeMarkBoundary[] = [];
+  private retiredItemOffsets = new Map<string, number>();
 
   constructor(
     private readonly params: {
       maxQueuedAudioBytes?: number;
       onBackpressure?: () => void;
+      /** Fires whenever queued audio and playback state are discarded. */
+      onPlaybackReset?: () => void;
       send: RealtimeAudioSend;
       serializer: RealtimeAudioSerializer;
     },
@@ -92,6 +90,13 @@ export class RealtimeAudioPacer {
       }
       const durationMs = chunk.length / 8;
       const segment = this.extendPlaybackSegment(metadata?.itemId, durationMs);
+      if (!segment) {
+        // Retention is at capacity with live segments. Losing a queued item's
+        // playback identity would corrupt interruption accounting, so tear
+        // down through the existing backpressure path instead of admitting it.
+        this.failBackpressure();
+        return;
+      }
       this.queue.push({
         type: "audio",
         chunk,
@@ -114,7 +119,8 @@ export class RealtimeAudioPacer {
       const consumed = Math.min(remaining, segment.sentMs);
       remaining -= consumed;
       if (segment.itemId !== undefined) {
-        items.push({ itemId: segment.itemId, audioEndMs: Math.floor(consumed) });
+        const retiredOffsetMs = this.retiredItemOffsets.get(segment.itemId) ?? 0;
+        items.push({ itemId: segment.itemId, audioEndMs: Math.floor(consumed + retiredOffsetMs) });
       }
     }
     return items;
@@ -146,13 +152,23 @@ export class RealtimeAudioPacer {
     }
     // Retire every segment whose sent frames all landed before the mark; the
     // FIFO send order guarantees no retired segment receives more frames later.
-    for (const head of this.playbackSegments) {
-      if (head.lastSentEndMs === undefined || head.lastSentEndMs > boundary.sentMs) {
+    while (this.playbackSegments.length > 0) {
+      const head = this.playbackSegments[0];
+      if (!head || head.lastSentEndMs === undefined || head.lastSentEndMs > boundary.sentMs) {
         break;
       }
       const retired = this.playbackSegments.shift();
       if (retired) {
         this.evictedSentMs += retired.sentMs;
+        // Providers may resume the same item after a chunk acknowledgement;
+        // keep its cumulative played offset so later snapshots do not restart
+        // at zero.
+        if (retired.itemId !== undefined) {
+          this.retiredItemOffsets.set(
+            retired.itemId,
+            (this.retiredItemOffsets.get(retired.itemId) ?? 0) + retired.sentMs,
+          );
+        }
       }
     }
     this.confirmedPlayedMs = Math.max(
@@ -189,37 +205,78 @@ export class RealtimeAudioPacer {
 
   /** Milliseconds of sent audio the telephony edge can already have played. */
   private consumedPlayoutMs(): number {
-    let consumedMs: number;
-    if (this.hasPendingAudio()) {
-      // While pacing, the lead window is still buffered in the telephony edge.
-      consumedMs = Math.max(0, this.sentAudioMs - LEAD_MS);
-    } else if (this.drainedLead) {
-      // The queue drained, but the final lead can still sit in the carrier buffer
-      // until the playout frontier passes it.
-      const elapsedMs = Math.max(0, performance.now() - this.drainedLead.atMs);
-      const bufferedMs = Math.max(0, this.drainedLead.bufferedMs - elapsedMs);
-      consumedMs = Math.max(0, this.sentAudioMs - bufferedMs);
-    } else {
-      consumedMs = 0;
-    }
-    // Carrier mark acknowledgements confirm playout regardless of the lead estimate.
-    return Math.min(this.sentAudioMs, Math.max(consumedMs, this.confirmedPlayedMs));
+    // One continuous playout frontier: played duration advances with wall
+    // clock while sent audio exists, so lead windows, stacked bursts, drained
+    // tails, and resumed pacing all share the same conservative estimate.
+    this.advancePlayedFrontier(performance.now());
+    return Math.min(this.sentAudioMs, Math.max(this.playedFrontierMs, this.confirmedPlayedMs));
   }
 
-  private extendPlaybackSegment(itemId: string | undefined, durationMs: number) {
+  /** Advance the played frontier to `now`, capped at what was actually sent. */
+  private advancePlayedFrontier(now: number): void {
+    if (this.frontierAtMs === null) {
+      this.frontierAtMs = now;
+      return;
+    }
+    this.playedFrontierMs = Math.min(
+      this.sentAudioMs,
+      this.playedFrontierMs + Math.max(0, now - this.frontierAtMs),
+    );
+    this.frontierAtMs = now;
+  }
+
+  private extendPlaybackSegment(
+    itemId: string | undefined,
+    durationMs: number,
+  ): RealtimePlaybackSegment | null {
     let segment = this.playbackSegments.at(-1);
     if (!segment || segment.itemId !== itemId) {
-      segment = { itemId, totalMs: 0, sentMs: 0 };
-      this.playbackSegments.push(segment);
-      while (this.playbackSegments.length > MAX_PLAYBACK_SEGMENTS) {
-        const dropped = this.playbackSegments.shift();
-        if (dropped) {
-          this.evictedSentMs += dropped.sentMs;
+      if (this.playbackSegments.length >= MAX_PLAYBACK_SEGMENTS) {
+        // Admission control: the retention bound may only release segments
+        // that fully reached the line and were fully played out. Live
+        // segments stay authoritative for provider truncation accounting.
+        if (!this.retireFullyPlayedHeadSegment()) {
+          return null;
         }
       }
+      segment = { itemId, totalMs: 0, sentMs: 0 };
+      this.playbackSegments.push(segment);
     }
     segment.totalMs += durationMs;
     return segment;
+  }
+
+  /**
+   * Drop the head playback segment when every frame has been sent and its
+   * playout is fully consumed. Returns false while queued or unplayed frames
+   * keep the segment live, so the caller tears down through the backpressure
+   * path instead of silently evicting a live item's playback identity.
+   */
+  private retireFullyPlayedHeadSegment(): boolean {
+    const head = this.playbackSegments[0];
+    if (!head) {
+      return true;
+    }
+    if (head.sentMs < head.totalMs) {
+      return false;
+    }
+    const playoutBudgetMs = Math.max(0, this.consumedPlayoutMs() - this.evictedSentMs);
+    if (playoutBudgetMs < head.sentMs) {
+      return false;
+    }
+    const retired = this.playbackSegments.shift();
+    if (retired) {
+      this.evictedSentMs += retired.sentMs;
+      // Keep the cumulative offset like mark retirement so a later generation
+      // of the same item does not restart its snapshot at zero.
+      if (retired.itemId !== undefined) {
+        this.retiredItemOffsets.set(
+          retired.itemId,
+          (this.retiredItemOffsets.get(retired.itemId) ?? 0) + retired.sentMs,
+        );
+      }
+    }
+    return true;
   }
 
   private resetPlaybackState(): void {
@@ -228,9 +285,12 @@ export class RealtimeAudioPacer {
     this.sentAudioMs = 0;
     this.evictedSentMs = 0;
     this.confirmedPlayedMs = 0;
-    this.drainedLead = null;
+    this.playedFrontierMs = 0;
+    this.frontierAtMs = null;
     this.markBoundaries = [];
+    this.retiredItemOffsets.clear();
     this.streamClockMs = null;
+    this.params.onPlaybackReset?.();
   }
 
   /** Clear the scheduled pump timer. */
@@ -293,24 +353,14 @@ export class RealtimeAudioPacer {
     const now = performance.now();
     this.streamClockMs ??= now;
 
-    let sentAudio = false;
     while (this.pendingQueueSize > 0 && this.streamClockMs < now + LEAD_MS) {
       const item = this.takeNextItem();
       if (!item) {
         break;
       }
 
-      if (item.type === "audio") {
-        sentAudio = true;
-        // Fresh audio replaces any previous drain frontier.
-        this.drainedLead = null;
-        if (!this.sendAudioItem(item)) {
-          this.resetQueue();
-          this.queuedAudioBytes = 0;
-          this.streamClockMs = null;
-          return;
-        }
-      } else if (!this.sendMarkItem(item)) {
+      const sent = item.type === "audio" ? this.sendAudioItem(item) : this.sendMarkItem(item);
+      if (!sent) {
         this.resetQueue();
         this.queuedAudioBytes = 0;
         this.streamClockMs = null;
@@ -319,7 +369,7 @@ export class RealtimeAudioPacer {
     }
 
     if (this.pendingQueueSize === 0) {
-      this.finishDrain(now, sentAudio);
+      this.streamClockMs = null;
       return;
     }
     const delayMs = Math.max(1, this.streamClockMs - LEAD_MS - performance.now());
@@ -330,6 +380,8 @@ export class RealtimeAudioPacer {
     this.queuedAudioBytes = Math.max(0, this.queuedAudioBytes - item.chunk.length);
     const sent = this.params.send(this.params.serializer.media(item.chunk.toString("base64")));
     if (sent) {
+      // Advance the frontier before the new frames count as sent.
+      this.advancePlayedFrontier(performance.now());
       item.segment.sentMs += item.durationMs;
       this.sentAudioMs += item.durationMs;
       item.segment.lastSentEndMs = this.sentAudioMs;
@@ -351,22 +403,5 @@ export class RealtimeAudioPacer {
       }
     }
     return sent;
-  }
-
-  /** Record how much of the lead window the carrier edge may still hold. */
-  private finishDrain(now: number, sentAudio: boolean): void {
-    if (sentAudio) {
-      const bufferedMs =
-        this.streamClockMs === null ? 0 : Math.min(LEAD_MS, Math.max(0, this.streamClockMs - now));
-      this.drainedLead = { atMs: now, bufferedMs };
-    } else if (this.drainedLead) {
-      // A mark-only pump keeps the frontier moving while the lead plays out.
-      const elapsedMs = Math.max(0, now - this.drainedLead.atMs);
-      this.drainedLead = {
-        atMs: now,
-        bufferedMs: Math.max(0, this.drainedLead.bufferedMs - elapsedMs),
-      };
-    }
-    this.streamClockMs = null;
   }
 }
