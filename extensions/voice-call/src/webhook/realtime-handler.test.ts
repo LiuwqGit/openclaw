@@ -1275,6 +1275,64 @@ describe("RealtimeCallHandler path routing", () => {
     );
   });
 
+  it("drops unsent mark acknowledgements when barge-in clears the pacing queue", async () => {
+    await withBargeInHarness(
+      { providerCallId: "CA-mark-clear", handlesProviderBargeIn: true },
+      async ({ callbacks, outboundMessages, ws }) => {
+        callbacks?.onAudio?.(Buffer.alloc(8 * 160, 0xff), { itemId: "item-1" });
+        await waitForRealtimeTest(() => {
+          expect(outboundMessages.some((message) => message.event === "media")).toBe(true);
+        });
+
+        // The mark sits behind audio that barge-in clears, so it never reaches
+        // the carrier and its acknowledgement must not survive the clear.
+        let markAcknowledged = false;
+        callbacks?.onMark?.("mark-1", () => {
+          markAcknowledged = true;
+        });
+
+        callbacks?.onClearAudio("barge-in");
+        await waitForRealtimeTest(() => {
+          expect(outboundMessages.some((message) => message.event === "clear")).toBe(true);
+        });
+
+        ws.send(JSON.stringify({ event: "mark", mark: { name: "mark-1" } }));
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 60);
+        });
+        expect(markAcknowledged).toBe(false);
+      },
+    );
+  });
+
+  it("drops pending mark acknowledgements on a session continuity reset", async () => {
+    await withBargeInHarness(
+      { providerCallId: "CA-mark-continuity-reset", handlesProviderBargeIn: true },
+      async ({ callbacks, outboundMessages, ws }) => {
+        callbacks?.onAudio?.(Buffer.alloc(8 * 160, 0xff), { itemId: "item-1" });
+        await waitForRealtimeTest(() => {
+          expect(outboundMessages.some((message) => message.event === "media")).toBe(true);
+        });
+
+        let markAcknowledged = false;
+        callbacks?.onMark?.("mark-1", () => {
+          markAcknowledged = true;
+        });
+
+        callbacks?.onEvent?.({ direction: "client", type: "session.continuity.reset" });
+        await waitForRealtimeTest(() => {
+          expect(outboundMessages.some((message) => message.event === "clear")).toBe(true);
+        });
+
+        ws.send(JSON.stringify({ event: "mark", mark: { name: "mark-1" } }));
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 60);
+        });
+        expect(markAcknowledged).toBe(false);
+      },
+    );
+  });
+
   it("keeps local barge-in fallback for providers without speech-started events", async () => {
     await withBargeInHarness(
       { providerCallId: "CA-local-barge-in" },

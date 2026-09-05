@@ -391,4 +391,90 @@ describe("RealtimeAudioPacer playout state", () => {
     pacer.acknowledgeMark("never-sent");
     expect(pacer.getPlaybackState()).toEqual([{ itemId: "item-a", audioEndMs: 0 }]);
   });
+
+  it("preserves cumulative item progress across chunk acknowledgements", async () => {
+    const { pacer } = createPlaybackPacer();
+
+    // Providers emit a mark after every audio delta, so an item can be
+    // acknowledged and then resume with more audio under the same item id.
+    pacer.sendAudio(createSequencedAudio(5), { itemId: "item-a" });
+    pacer.sendMark("chunk-1");
+    pacer.sendAudio(createSequencedAudio(5), { itemId: "item-a" });
+    pacer.sendMark("chunk-2");
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    pacer.acknowledgeMark("chunk-1");
+    pacer.acknowledgeMark("chunk-2");
+    expect(pacer.getPlaybackState()).toEqual([]);
+
+    // Generation resumes for the same item: the snapshot continues from the
+    // acknowledged offset instead of restarting at zero.
+    pacer.sendAudio(createSequencedAudio(3), { itemId: "item-a" });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(pacer.getPlaybackState()).toEqual([{ itemId: "item-a", audioEndMs: 260 }]);
+  });
+
+  it("retires every retained prefix confirmed by one mark", async () => {
+    const { pacer } = createPlaybackPacer();
+
+    pacer.sendAudio(createSequencedAudio(5), { itemId: "item-a" });
+    pacer.sendAudio(createSequencedAudio(5), { itemId: "item-b" });
+    pacer.sendMark("both-played");
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(pacer.getPlaybackState()).toEqual([
+      { itemId: "item-a", audioEndMs: 100 },
+      { itemId: "item-b", audioEndMs: 100 },
+    ]);
+
+    pacer.acknowledgeMark("both-played");
+    expect(pacer.getPlaybackState()).toEqual([]);
+  });
+
+  it("carries the buffered lead forward when another short burst drains", async () => {
+    const { pacer } = createPlaybackPacer();
+
+    pacer.sendAudio(createSequencedAudio(8), { itemId: "item-a" });
+    await vi.advanceTimersByTimeAsync(80);
+    pacer.sendAudio(createSequencedAudio(8), { itemId: "item-a" });
+
+    // Only 80 ms of wall time has passed, so only 80 ms can have played even
+    // though both bursts drained synchronously.
+    expect(pacer.getPlaybackState()).toEqual([{ itemId: "item-a", audioEndMs: 80 }]);
+
+    await vi.advanceTimersByTimeAsync(240);
+    expect(pacer.getPlaybackState()).toEqual([{ itemId: "item-a", audioEndMs: 320 }]);
+  });
+
+  it("carries outstanding playback through a resumed paced burst", async () => {
+    const { pacer } = createPlaybackPacer();
+
+    pacer.sendAudio(createSequencedAudio(8), { itemId: "item-a" });
+    await vi.advanceTimersByTimeAsync(80);
+    // A larger burst resumes pacing instead of draining synchronously; the
+    // frontier must still only claim the 80 ms that could have played.
+    pacer.sendAudio(createSequencedAudio(20), { itemId: "item-a" });
+    expect(pacer.hasPendingAudio()).toBe(true);
+    expect(pacer.getPlaybackState()).toEqual([{ itemId: "item-a", audioEndMs: 80 }]);
+
+    await vi.advanceTimersByTimeAsync(400);
+    expect(pacer.getPlaybackState()).toEqual([{ itemId: "item-a", audioEndMs: 480 }]);
+  });
+
+  it("fires the playback reset hook on every clear and close", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance", "Date"] });
+    const onPlaybackReset = vi.fn();
+    const pacer = new RealtimeAudioPacer({
+      serializer: createCompactSerializer(),
+      onPlaybackReset,
+      send: () => true,
+    });
+
+    pacer.sendAudio(createSequencedAudio(8), { itemId: "item-a" });
+    pacer.clearAudio();
+    expect(onPlaybackReset).toHaveBeenCalledTimes(1);
+
+    pacer.sendAudio(createSequencedAudio(8), { itemId: "item-b" });
+    pacer.close();
+    expect(onPlaybackReset).toHaveBeenCalledTimes(2);
+  });
 });

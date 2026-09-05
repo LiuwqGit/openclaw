@@ -823,6 +823,9 @@ export class RealtimeCallHandler {
     };
     const pendingMarkAcks = new Map<string, () => void>();
     const audioPacer = new RealtimeAudioPacer({
+      // Every pacer reset discards queued marks, so their stored provider
+      // acknowledgements can never fire and must be retired with them.
+      onPlaybackReset: () => pendingMarkAcks.clear(),
       send: sendString,
       serializer: {
         media: (payload) => adapter.serializeMedia(payload),
