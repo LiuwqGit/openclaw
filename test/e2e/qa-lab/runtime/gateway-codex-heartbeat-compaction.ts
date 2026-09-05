@@ -142,7 +142,9 @@ async function waitForAppServerReply(filePath: string, id: unknown) {
     const replies = matchingAppServerReplies(await readJsonl(filePath), id);
     if (replies.length > 0) {
       assert.equal(replies.length, 1, "Codex app-server emitted duplicate native replies");
-      return replies[0];
+      const [reply] = replies;
+      assert.ok(reply, "Codex app-server omitted its native reply");
+      return reply;
     }
     assert.ok(Date.now() < deadline, "Codex app-server native reply did not arrive");
     await new Promise<void>((resolve) => {
@@ -639,7 +641,8 @@ async function runCase(params: {
           (id) => !priorCompactionIds.has(id),
         );
         assert.equal(newCompactionIds.length, 1, "Host compaction event was not durable once");
-        const compactionId = newCompactionIds[0];
+        const [compactionId] = newCompactionIds;
+        assert.ok(compactionId, "Host compaction event omitted its id");
         assert.ok(
           preNativeDurableSnapshot.activeEntryIds.includes(compactionId),
           "Durable host compaction was not on the active branch",
@@ -689,7 +692,8 @@ async function runCase(params: {
           (request) => request.method === "thread/compact/start",
         );
         assert.equal(compactRequests.length, 1, "Codex native compaction request count changed");
-        const compactRequest = compactRequests[0];
+        const [compactRequest] = compactRequests;
+        assert.ok(compactRequest, "Codex native compaction request was missing");
         assert.deepEqual(
           compactRequest.params,
           { threadId: CODEX_THREAD_ID },
@@ -733,7 +737,8 @@ async function runCase(params: {
           (request) => request.method === "thread/compact/start",
         );
         assert.equal(compactRequests.length, 1, "Restart case native request count changed");
-        const compactRequest = compactRequests[0];
+        const [compactRequest] = compactRequests;
+        assert.ok(compactRequest, "Restart case native compaction request was missing");
         assert.deepEqual(
           compactRequest.params,
           { threadId: CODEX_THREAD_ID },
@@ -757,8 +762,10 @@ async function runCase(params: {
           (id) => !priorCompactionIds.has(id),
         );
         assert.equal(newCompactionIds.length, 1, "Restart host compaction was not durable once");
+        const [compactionId] = newCompactionIds;
+        assert.ok(compactionId, "Restart host compaction omitted its id");
         assert.ok(
-          restartDurableSnapshot.activeEntryIds.includes(newCompactionIds[0]),
+          restartDurableSnapshot.activeEntryIds.includes(compactionId),
           "Restart host compaction was not active",
         );
         const priorCheckpoints = Array.isArray(held.compactionCheckpoints)
@@ -790,7 +797,7 @@ async function runCase(params: {
         );
         assert.equal(
           checkpoint.postCompaction.entryId,
-          newCompactionIds[0],
+          compactionId,
           "Restart checkpoint did not reference the durable compaction",
         );
         assert.equal(
@@ -912,12 +919,10 @@ async function runCase(params: {
       );
       assert.equal(afterTerminal.compactionIds.length, 1, "Host compaction was not committed");
       assert.equal(afterTerminal.compactionCount, 1, "Host compaction was not counted once");
-      assert.equal(
-        afterTerminal.compactionCheckpoints.length,
-        1,
-        "Host compaction checkpoint count changed",
-      );
-      const checkpoint = afterTerminal.compactionCheckpoints[0];
+      const terminalCheckpoints = afterTerminal.compactionCheckpoints;
+      assert.ok(Array.isArray(terminalCheckpoints), "Host compaction checkpoints were malformed");
+      assert.equal(terminalCheckpoints.length, 1, "Host compaction checkpoint count changed");
+      const [checkpoint] = terminalCheckpoints;
       assert.ok(
         runtime.isRecord(checkpoint) && typeof checkpoint.summary === "string",
         "Host compaction checkpoint omitted its summary",
@@ -1083,6 +1088,10 @@ async function runCase(params: {
     if (shouldCommit) {
       assertCommittedCompactionHistory(afterTerminal, after);
       if (mode === "heartbeat-upgraded-restart") {
+        assert.ok(
+          committingProviderCountersAtHold,
+          "Restart case omitted its provider counter baseline",
+        );
         assert.deepEqual(
           after.transcriptByteCompactionLatch,
           afterTerminal.transcriptByteCompactionLatch,
@@ -1090,7 +1099,7 @@ async function runCase(params: {
         );
         assert.equal(
           proof.summaryRequests,
-          committingProviderCountersAtHold?.summaryRequests + 2,
+          committingProviderCountersAtHold.summaryRequests + 2,
           "Restart successor repeated host compaction",
         );
         assert.equal(

@@ -52,7 +52,7 @@ export async function waitForCompactionProofCheckpoint(pending: Promise<unknown>
 }
 
 export function createCompactionProofCase(mode: CaseMode) {
-  const id = randomUUID();
+  const id: string = randomUUID();
   return {
     mode,
     sessionId: id,
