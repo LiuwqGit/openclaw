@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
+import { setReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import {
   loadTranscriptEvents,
   replaceSessionEntry,
@@ -54,6 +54,7 @@ async function createCompletionFixture(state: OpenClawTestState) {
     agents: { entries: { main: { workspace: state.workspaceDir } } },
     session: { store: scope.storePath },
   };
+  const payload: ReplyPayload = { text: "Example report", mediaUrl: imagePath };
   const params: DispatchCronDeliveryParams = {
     cfg,
     cfgWithAgentDefaults: cfg,
@@ -82,7 +83,7 @@ async function createCompletionFixture(state: OpenClawTestState) {
     },
     deliveryBestEffort: false,
     deliveryPayloadHasStructuredContent: true,
-    deliveryPayloads: [{ text: "Example report", mediaUrl: imagePath }],
+    deliveryPayloads: [payload],
     isAborted: () => false,
     abortReason: () => "aborted",
     withRunSession: (result) => ({ ...result, sessionId: "report-run" }),
@@ -107,6 +108,7 @@ async function createCompletionFixture(state: OpenClawTestState) {
     }
   });
   return {
+    payload,
     params,
     scope,
     records,
@@ -177,7 +179,7 @@ describe("current-session completion media", () => {
     await withOpenClawTestState({ layout: "state-only" }, async (state) => {
       const fixture = await createCompletionFixture(state);
       try {
-        fixture.params.deliveryPayloads[0].presentation = {
+        fixture.payload.presentation = {
           blocks: [
             {
               type: "table",
@@ -216,7 +218,7 @@ describe("current-session completion media", () => {
           } else if (mode === "missing-image") {
             await fs.unlink(path.join(state.workspaceDir, "report.png"));
           } else {
-            fixture.params.deliveryPayloads[0].text = undefined;
+            fixture.payload.text = undefined;
           }
           await expect(fixture.commit()).resolves.toMatchObject({ ok: true });
           const message = readTranscriptEventMessage((await fixture.messages())[0]);
