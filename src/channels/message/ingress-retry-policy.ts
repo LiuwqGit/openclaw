@@ -118,9 +118,9 @@ export function resolveIngressFailureDisposition(params: {
       attempt,
     };
   }
-  const errorCodes = collectNestedErrorCandidates(params.err).map(extractErrorCode);
+  const errorCodes = new Set(collectNestedErrorCandidates(params.err).map(extractErrorCode));
   // Retrying this terminal generation blocks the authorized reset behind it.
-  if (errorCodes.includes(SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE)) {
+  if (errorCodes.has(SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE)) {
     return {
       kind: "fail",
       reason: "restart-recovery-tombstone",
@@ -128,7 +128,7 @@ export function resolveIngressFailureDisposition(params: {
       attempt,
     };
   }
-  if (attempt >= maxAttempts && errorCodes.includes(SESSION_WORK_START_CHANGED_ERROR_CODE)) {
+  if (attempt >= maxAttempts && errorCodes.has(SESSION_WORK_START_CHANGED_ERROR_CODE)) {
     return {
       kind: "fail",
       reason: "session-start-conflict-retry-limit",
