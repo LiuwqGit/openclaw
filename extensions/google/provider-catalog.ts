@@ -29,10 +29,16 @@ const GOOGLE_GEMINI_TEXT_MODEL_BY_ID = new Map(
 const GOOGLE_GEMINI_TEXT_MODEL_IDS: ReadonlySet<string> = new Set(
   GOOGLE_GEMINI_TEXT_MODEL_BY_ID.keys(),
 );
-const GOOGLE_GEMINI_COST = GOOGLE_GEMINI_TEXT_MODELS[0]?.cost;
-if (!GOOGLE_GEMINI_COST) {
-  throw new Error("Google manifest model catalog must declare at least one model");
+
+function requireGoogleManifestCost(): NonNullable<ModelDefinitionConfig["cost"]> {
+  const cost = GOOGLE_GEMINI_TEXT_MODELS[0]?.cost;
+  if (!cost) {
+    throw new Error("Google manifest model catalog must declare a cost for its first model");
+  }
+  return cost;
 }
+
+const GOOGLE_GEMINI_COST = requireGoogleManifestCost();
 
 export function buildGoogleStaticCatalogProvider(): ModelProviderConfig {
   return {

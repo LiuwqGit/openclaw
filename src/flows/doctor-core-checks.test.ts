@@ -1013,7 +1013,7 @@ describe("CORE_HEALTH_CHECKS", () => {
       ["openai-codex/gpt-5.6-sol", "openai/gpt-5.6-sol", "warning"],
       ["codex-cli/gpt-5.6-sol", "openai/gpt-5.6-sol", "warning"],
       ["groq/llama3-70b-8192", "groq/llama-3.3-70b-versatile", "info"],
-      ["google-gemini-cli/gemini-2.5-pro", "google/gemini-2.5-pro", "warning"],
+      ["google-gemini-cli/gemini-2.5-pro", "google/gemini-2.5-pro", "info"],
     ] as const) {
       expect(findings).toContainEqual(
         expect.objectContaining({
