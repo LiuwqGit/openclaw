@@ -39,6 +39,8 @@ type GoogleManifest = {
     providers?: Record<
       string,
       {
+        api?: string;
+        baseUrl?: string;
         models?: Array<{
           id?: string;
           name?: string;
@@ -122,9 +124,19 @@ describe("google manifest model catalog", () => {
     ]);
   });
 
-  it("mirrors the runtime static Google model rows into modelCatalog.providers.google", () => {
+  it("mirrors the runtime static Google provider and model rows into modelCatalog.providers.google", () => {
     const manifest = loadManifest();
-    const runtimeRows = buildGoogleStaticCatalogProvider().models.map((model) => {
+    const provider = buildGoogleStaticCatalogProvider();
+    const mirror = manifest.modelCatalog?.providers?.google;
+
+    // Provider-level transport must be preserved: manifest rows win over the
+    // runtime static catalog in bundled fallback resolution, and rows without
+    // api/baseUrl would otherwise normalize to openai-responses with an empty
+    // endpoint, breaking Google completion/compaction fallbacks.
+    expect(mirror?.api).toBe(provider.api);
+    expect(mirror?.baseUrl).toBe(provider.baseUrl);
+
+    const runtimeRows = provider.models.map((model) => {
       const row = structuredClone(model);
       // The static provider widens input with "video" at build time; the
       // manifest mirror keeps the canonical text-model modality list.
@@ -135,7 +147,7 @@ describe("google manifest model catalog", () => {
 
     // Full-row comparison (ids, names, capabilities, limits, costs, thinking
     // mappings, compat tiers) so any runtime/manifest drift fails this guard.
-    expect(manifest.modelCatalog?.providers?.google?.models ?? []).toEqual(runtimeRows);
+    expect(mirror?.models ?? []).toEqual(runtimeRows);
   });
 
   it("keeps legacy Google chat providers out of the manifest catalog mirror", () => {
