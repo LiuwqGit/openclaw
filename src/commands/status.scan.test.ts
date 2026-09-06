@@ -160,9 +160,7 @@ describe("scanStatus", () => {
       includeRegistry: false,
       updateConfigChannel: null,
     });
-    expect(mocks.getStatusCommandSecretTargetIds).toHaveBeenCalledWith(cfg, process.env, {
-      includeChannelTargets: undefined,
-    });
+    expect(mocks.getStatusCommandSecretTargetIds).toHaveBeenCalledWith(cfg, process.env);
     expect(mocks.buildChannelsTable).toHaveBeenCalledOnce();
     expect(firstBuildChannelsTableCall()).toStrictEqual([
       cfg,

@@ -777,13 +777,13 @@ describe("resolveSessionDeliveryTarget", () => {
     const telegram = createOwnerAllowlistTargetTestPlugin({
       id: "telegram",
       label: "Telegram",
-      ownerId: "8460725885",
+      ownerId: "123456789",
       inferTargetChatType: ({ to }) => (/^\d+$/.test(to) ? "direct" : undefined),
     });
     telegram.config = {
       ...telegram.config,
       listAccountIds: () => ["default"],
-      inspectAccount: (cfg: { channels?: { telegram?: { botToken?: unknown } } }) => {
+      inspectAccount: (cfg: OpenClawConfig) => {
         const botToken = cfg.channels?.telegram?.botToken;
         return typeof botToken === "string" && botToken.trim()
           ? { enabled: true, configured: true, token: botToken, tokenStatus: "available" }
@@ -794,23 +794,23 @@ describe("resolveSessionDeliveryTarget", () => {
 
     // A store-backed SecretRef that this command path could not resolve must keep
     // owner discovery fail-closed instead of reporting a phantom route.
-    const unresolvedCfg = {
-      commands: { ownerAllowFrom: ["telegram:8460725885"] },
+    const unresolvedCfg: OpenClawConfig = {
+      commands: { ownerAllowFrom: ["telegram:123456789"] },
       channels: {
         telegram: {
           enabled: true,
           botToken: { source: "store", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
         },
       },
-    } as unknown as OpenClawConfig;
+    };
     expect(hasResolvableHeartbeatOwnerRoute({ cfg: unresolvedCfg })).toBe(false);
 
     // Once the read-only resolution contract materializes the credential, the
     // configured owner route resolves without any other config change (#137217).
-    const resolvedCfg = {
-      commands: { ownerAllowFrom: ["telegram:8460725885"] },
+    const resolvedCfg: OpenClawConfig = {
+      commands: { ownerAllowFrom: ["telegram:123456789"] },
       channels: { telegram: { enabled: true, botToken: "8905123456:AAF-example-bDTs" } },
-    } as unknown as OpenClawConfig;
+    };
     expect(hasResolvableHeartbeatOwnerRoute({ cfg: resolvedCfg })).toBe(true);
   });
 
@@ -2101,6 +2101,66 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(resolved.to).toBe("dm:one");
     expect(resolved.threadId).toBeUndefined();
   });
+
+  it.each([
+    {
+      name: "moved direct session does not block the event group",
+      storedTo: "user:operator",
+      storedType: "direct",
+      eventTo: "group:ops",
+      expectedChannel: "alpha",
+      expectedType: "group",
+    },
+    {
+      name: "moved group session does not allow the event direct chat",
+      storedTo: "group:ops",
+      storedType: "group",
+      eventTo: "user:operator",
+      expectedChannel: "none",
+      expectedType: undefined,
+    },
+    {
+      name: "same opaque direct conversation retains its hint",
+      storedTo: "opaque-dm",
+      storedType: "direct",
+      eventTo: "opaque-dm",
+      expectedChannel: "none",
+      expectedType: undefined,
+    },
+    {
+      name: "same group conversation remains deliverable",
+      storedTo: "group:ops",
+      storedType: "group",
+      eventTo: "group:ops",
+      expectedChannel: "alpha",
+      expectedType: "group",
+    },
+  ] as const)(
+    "qualifies heartbeat chat type by the selected conversation: $name",
+    async ({ storedTo, storedType, eventTo, expectedChannel, expectedType }) => {
+      const resolved = await resolveHeartbeatDeliveryTargetWithSessionRoute({
+        cfg: {},
+        agentId: "main",
+        entry: {
+          sessionId: "chat-type-owner",
+          updatedAt: 1,
+          lastChannel: "alpha",
+          lastTo: storedTo,
+          chatType: storedType,
+        },
+        heartbeat: { target: "last", directPolicy: "block" },
+        turnSource: { channel: "alpha", to: eventTo },
+      });
+      expect(resolved.channel).toBe(expectedChannel);
+      expect(resolved.chatType).toBe(expectedType);
+      if (expectedChannel === "none") {
+        expect(resolved.reason).toBe("dm-blocked");
+        expect(resolved.to).toBeUndefined();
+      } else {
+        expect(resolved.to).toBe(eventTo);
+      }
+    },
+  );
 
   it("prefers turn-scoped routing over mutable session routing for target=last", () => {
     const resolved = resolveHeartbeatDeliveryTarget({

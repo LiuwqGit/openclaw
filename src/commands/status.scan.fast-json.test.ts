@@ -89,7 +89,6 @@ describe("scanStatusJsonFast", () => {
     expect(mocks.getStatusCommandSecretTargetIds).toHaveBeenCalledWith(
       createStatusMemorySearchConfig(),
       process.env,
-      { includeChannelTargets: undefined },
     );
     expect(mocks.hasConfiguredChannelsForReadOnlyScope).not.toHaveBeenCalled();
     expect(mocks.ensurePluginRegistryLoaded).not.toHaveBeenCalled();
@@ -149,19 +148,15 @@ describe("scanStatusJsonFast", () => {
     expect(mocks.resolveCommandSecretRefsViaGateway).toHaveBeenCalled();
   });
 
-  it("bounds gateway secret resolution by the fast JSON probe budget", async () => {
-    await scanStatusJsonFast({}, {} as never);
-
+  it.each([
+    { opts: {}, expected: 1000 },
+    { opts: { timeoutMs: 1500 }, expected: 1500 },
+    { opts: { all: true }, expected: 5000 },
+    { opts: { all: true, timeoutMs: 700 }, expected: 700 },
+  ])("bounds gateway secret resolution to $expected ms for $opts", async ({ opts, expected }) => {
+    await scanStatusJsonFast(opts, {} as never);
     expect(mocks.resolveCommandSecretRefsViaGateway).toHaveBeenCalledWith(
-      expect.objectContaining({ gatewaySecretResolveTimeoutMs: 1000 }),
-    );
-
-    vi.clearAllMocks();
-    configureFastJsonStatus();
-    await scanStatusJsonFast({ timeoutMs: 1500 }, {} as never);
-
-    expect(mocks.resolveCommandSecretRefsViaGateway).toHaveBeenCalledWith(
-      expect.objectContaining({ gatewaySecretResolveTimeoutMs: 1500 }),
+      expect.objectContaining({ gatewaySecretResolveTimeoutMs: expected }),
     );
   });
 

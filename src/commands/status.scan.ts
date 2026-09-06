@@ -59,8 +59,6 @@ export async function scanStatus(
         showSecrets: process.env.OPENCLAW_SHOW_SECRETS?.trim() !== "0",
         includeLiveChannelStatus: isFullScan,
         includeChannelSetupRuntimeFallback: isFullScan,
-        // Configured channel credentials resolve through the documented read-only
-        // contract so fast status agrees with --deep for store-backed SecretRefs (#137217).
         fetchGitUpdate: isFullScan,
         includeRegistryUpdate: isFullScan,
         includeAdvertisedControlUiLinks: true,

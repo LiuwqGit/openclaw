@@ -732,32 +732,6 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     });
   });
 
-  it("threads the caller's secrets.resolve budget into the gateway request", async () => {
-    await withEnvValue("TALK_API_KEY", "local-fallback-key", async () => {
-      callGateway.mockRejectedValueOnce(new Error("gateway closed"));
-      const result = await resolveCommandSecretRefsViaGateway({
-        config: {
-          ...buildTalkTestProviderConfig({
-            source: "env",
-            provider: "default",
-            id: "TALK_API_KEY",
-          }),
-          secrets: {
-            providers: {
-              default: { source: "env" },
-            },
-          },
-        } as unknown as OpenClawConfig,
-        commandName: "status",
-        targetIds: new Set(["talk.providers.*.apiKey"]),
-        gatewaySecretResolveTimeoutMs: 2500,
-      });
-
-      expect(callGateway.mock.calls[0]?.[0]).toMatchObject({ timeoutMs: 2500 });
-      expect(readTalkProviderApiKey(result.resolvedConfig)).toBe("local-fallback-key");
-    });
-  });
-
   it("falls back to local resolution when the gateway stalls secrets.resolve past the caller's budget", async () => {
     await withEnvValue("TALK_API_KEY", "local-fallback-key", async () => {
       callGateway.mockImplementation(
@@ -768,18 +742,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
           }),
       );
       const result = await resolveCommandSecretRefsViaGateway({
-        config: {
-          ...buildTalkTestProviderConfig({
-            source: "env",
-            provider: "default",
-            id: "TALK_API_KEY",
-          }),
-          secrets: {
-            providers: {
-              default: { source: "env" },
-            },
-          },
-        } as unknown as OpenClawConfig,
+        config: makeTalkProviderApiKeySecretRefConfig("TALK_API_KEY"),
         commandName: "status",
         targetIds: new Set(["talk.providers.*.apiKey"]),
         gatewaySecretResolveTimeoutMs: 50,

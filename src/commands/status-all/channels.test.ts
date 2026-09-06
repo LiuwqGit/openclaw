@@ -202,20 +202,6 @@ describe("buildChannelsTable", () => {
     expect(detailRow?.Status).toBe("OK");
   });
 
-  it("does not warn on SecretRef credentials when credential resolution was skipped", async () => {
-    const table = await buildChannelsTable(
-      { channels: { discord: { enabled: true } } },
-      { credentialResolutionSkipped: true },
-    );
-
-    const row = table.rows.find((entry) => entry.id === "discord");
-    expect(row?.state).toBe("ok");
-    expect(row?.detail).toBe("configured");
-    const detailRow = table.details[0]?.rows[0];
-    expect(detailRow?.Status).toBe("UNKNOWN");
-    expect(detailRow?.Notes).toContain("credential not checked");
-  });
-
   it("formats human phone identity while preserving raw account ids", async () => {
     const phonePlugin = {
       id: "signal",
