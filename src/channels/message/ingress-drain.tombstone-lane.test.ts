@@ -43,9 +43,10 @@ describe("channel ingress drain restart-recovery tombstone", () => {
             expectDefined(lifecycle, "deferred lifecycle").onFailed,
             "failure callback",
           )(
-            Object.assign(new Error("dispatch failure"), {
-              ...(terminal ? { code: "SESSION_RESTART_RECOVERY_TOMBSTONE" } : {}),
-            }),
+            Object.assign(
+              new Error("dispatch failure"),
+              terminal ? { code: "SESSION_RESTART_RECOVERY_TOMBSTONE" } : {},
+            ),
           );
           expect(await queue.listFailed?.()).toHaveLength(!reclaimed && terminal ? 1 : 0);
           expect(await queue.listPending()).toHaveLength(!reclaimed && terminal ? 0 : 1);
