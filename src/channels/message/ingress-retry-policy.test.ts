@@ -164,9 +164,10 @@ describe("ingress retry policy", () => {
     });
   });
 
-  it("dead-letters a restart-recovery tombstone failure immediately", () => {
-    const message =
-      'Session "agent:main:main" ended during restart recovery. Use /new or /reset to start a replacement session.';
+  it.each([
+    'Session "agent:main:main" ended during restart recovery. Use /new or /reset to start a replacement session.',
+    "This generation is terminal.",
+  ])("dead-letters a restart tombstone by structured code: %s", (message) => {
     const wrapped = Object.assign(new Error("BotError in middleware"), {
       error: new Error("telegram spooled update processing failed", {
         cause: Object.assign(new Error(message), {
@@ -174,7 +175,6 @@ describe("ingress retry policy", () => {
         }),
       }),
     });
-    // Fresh event: no attempt floor and no dead-letter age gate met.
     expect(
       resolveIngressFailureDisposition({
         err: wrapped,
@@ -189,7 +189,6 @@ describe("ingress retry policy", () => {
       message: wrapped.message,
       attempt: 1,
     });
-    // The stable code also survives without wrapper nesting.
     expect(
       resolveIngressFailureDisposition({
         err: Object.assign(new Error(message), {
@@ -200,6 +199,69 @@ describe("ingress retry policy", () => {
         now: 2_000,
       }),
     ).toMatchObject({ kind: "fail", reason: "restart-recovery-tombstone", attempt: 426 });
+  });
+
+  it.each([undefined, "SESSION_WORK_START_INVALIDATED"])(
+    "keeps tombstone-like text retryable without its code: %s",
+    (code) => {
+      const err = Object.assign(
+        new Error("Session ended during restart recovery. Use /new or /reset."),
+        { code },
+      );
+      expect(
+        resolveIngressFailureDisposition({
+          err,
+          event: { receivedAt: 1_000, attempts: 0 },
+          formatError: coerceErrorMessage,
+          now: 2_000,
+        }),
+      ).toEqual({ kind: "release", attempt: 1, message: err.message });
+    },
+  );
+
+  it.each(["code", "cause", "reason", "original", "error", "data", "errors"])(
+    "releases a transient failure when its %s getter throws",
+    (field) => {
+      const err = Object.defineProperty(new Error("temporary failure"), field, {
+        get() {
+          throw new Error("unavailable diagnostic field");
+        },
+      });
+      expect(
+        resolveIngressFailureDisposition({
+          err,
+          event: { receivedAt: 1_000, attempts: 0 },
+          formatError: coerceErrorMessage,
+          now: 2_000,
+        }),
+      ).toEqual({ kind: "release", attempt: 1, message: "temporary failure" });
+    },
+  );
+
+  it("finds the terminal code beside an inaccessible wrapper field", () => {
+    const err = Object.assign(new Error("reply admission refused"), {
+      error: Object.assign(new Error("terminal generation"), {
+        code: "SESSION_RESTART_RECOVERY_TOMBSTONE",
+      }),
+    });
+    Object.defineProperty(err, "cause", {
+      get() {
+        throw new Error("unavailable diagnostic field");
+      },
+    });
+    expect(
+      resolveIngressFailureDisposition({
+        err,
+        event: { receivedAt: 1_000, attempts: 0 },
+        formatError: coerceErrorMessage,
+        now: 2_000,
+      }),
+    ).toEqual({
+      kind: "fail",
+      reason: "restart-recovery-tombstone",
+      attempt: 1,
+      message: "reply admission refused",
+    });
   });
 
   it("bounds a wrapped session-start conflict at the configured attempt budget", () => {

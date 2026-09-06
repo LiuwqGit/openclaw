@@ -50,18 +50,6 @@ type IngressFailureDisposition =
       message: string;
     };
 
-function isSessionStartConflictFailure(error: unknown): boolean {
-  return collectNestedErrorCandidates(error).some(
-    (candidate) => extractErrorCode(candidate) === SESSION_WORK_START_CHANGED_ERROR_CODE,
-  );
-}
-
-function isRestartRecoveryTombstoneFailure(error: unknown): boolean {
-  return collectNestedErrorCandidates(error).some(
-    (candidate) => extractErrorCode(candidate) === SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE,
-  );
-}
-
 function resolveConfig(config?: IngressRetryPolicyConfig) {
   return {
     maxAttempts: config?.maxAttempts ?? DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
@@ -130,11 +118,9 @@ export function resolveIngressFailureDisposition(params: {
       attempt,
     };
   }
-  // A restart-recovery tombstone rejects every non-reset dispatch until the
-  // session is replaced; retrying cannot succeed, and keeping the event at the
-  // head of an ordered lane blocks the reset command behind it. Dead-letter it
-  // immediately so the queued remedy can reach lifecycle admission.
-  if (isRestartRecoveryTombstoneFailure(params.err)) {
+  const errorCodes = collectNestedErrorCandidates(params.err).map(extractErrorCode);
+  // Retrying this terminal generation blocks the authorized reset behind it.
+  if (errorCodes.includes(SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE)) {
     return {
       kind: "fail",
       reason: "restart-recovery-tombstone",
@@ -142,7 +128,7 @@ export function resolveIngressFailureDisposition(params: {
       attempt,
     };
   }
-  if (attempt >= maxAttempts && isSessionStartConflictFailure(params.err)) {
+  if (attempt >= maxAttempts && errorCodes.includes(SESSION_WORK_START_CHANGED_ERROR_CODE)) {
     return {
       kind: "fail",
       reason: "session-start-conflict-retry-limit",
