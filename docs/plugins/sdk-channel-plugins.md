@@ -490,6 +490,15 @@ metadata. Replacing either starts fresh target metadata, so a new session cannot
 inherit the previous plugin owner, agent, or label. Keep conversation transport
 details and explicit lifecycle settings separate from target metadata.
 
+Every record the generic bind API writes is stamped with
+`metadata.bindingOrigin: "generic-bind-api"` provenance. Routing uses that
+provenance to distinguish intentional SDK bindings from legacy rows persisted
+by the removed catch-all writer: a fresh generic binding keeps its runtime
+precedence over a configured binding, while a provenance-less generic
+session-kind record that conflicts with a configured binding is treated as
+stale and ignored. Do not strip or forge `bindingOrigin` when projecting,
+copying, or rebinding records through the service.
+
 Preserve opaque plugin ownership metadata when projecting binding records.
 Plugin-owned targets do not require an OpenClaw agent id; use
 `isPluginOwnedSessionBindingRecord(...)` from

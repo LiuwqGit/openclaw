@@ -20,8 +20,6 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   ensureConfiguredBindingRouteReady,
   resolvePinnedMainDmOwnerFromAllowlist,
-  resolveConfiguredBindingRoute,
-  resolveRuntimeConversationBindingRoute,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { resolveAgentRoute, resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
@@ -33,6 +31,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeAllowFrom } from "./bot-access.js";
+import { resolveLineConversationRoute } from "./conversation-route.js";
 import { resolveLineGroupConfigEntry } from "./group-keys.js";
 import { resolveLineMentionStrippedText } from "./mentions.js";
 import { getLineGroupName, getUserProfile } from "./send.js";
@@ -126,46 +125,12 @@ async function resolveLineInboundRoute(params: {
 
   const { userId, groupId, roomId, isGroup } = getLineSourceInfo(params.source);
   const peerId = buildPeerId(params.source);
-  let route = resolveAgentRoute({
+  const { route, configuredBinding, configuredBindingSessionKey } = resolveLineConversationRoute({
     cfg: params.cfg,
-    channel: "line",
     accountId: params.account.accountId,
-    peer: {
-      kind: isGroup ? "group" : "direct",
-      id: peerId,
-    },
+    peerId,
+    isGroup,
   });
-
-  const configuredRoute = resolveConfiguredBindingRoute({
-    cfg: params.cfg,
-    route,
-    conversation: {
-      channel: "line",
-      accountId: params.account.accountId,
-      conversationId: peerId,
-    },
-  });
-  let configuredBinding = configuredRoute.bindingResolution;
-  const configuredBindingSessionKey = configuredRoute.boundSessionKey ?? "";
-  route = configuredRoute.route;
-
-  const runtimeRoute = resolveRuntimeConversationBindingRoute({
-    route,
-    conversation: {
-      channel: "line",
-      accountId: params.account.accountId,
-      conversationId: peerId,
-    },
-  });
-  route = runtimeRoute.route;
-  if (runtimeRoute.bindingRecord) {
-    configuredBinding = null;
-    logVerbose(
-      runtimeRoute.boundSessionKey
-        ? `line: routed via bound conversation ${peerId} -> ${runtimeRoute.boundSessionKey}`
-        : `line: plugin-bound conversation ${peerId}`,
-    );
-  }
 
   if (configuredBinding) {
     const ensured = await ensureConfiguredBindingRouteReady({

@@ -12,14 +12,17 @@ import {
   type ConversationRef,
   type SessionBindingRecord,
 } from "../../infra/outbound/session-binding-service.js";
-import { isPluginOwnedBindingMetadata } from "../../plugins/conversation-binding-metadata.js";
+import {
+  isGenericBindApiBindingMetadata,
+  isPluginOwnedBindingMetadata,
+} from "../../plugins/conversation-binding-metadata.js";
 import type { ResolvedAgentRoute } from "../../routing/resolve-route.js";
 import { deriveLastRoutePolicy } from "../../routing/resolve-route.js";
 import {
   isUnscopedSessionKeySentinel,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
-import { isCronRunSessionKey } from "../../sessions/session-key-utils.js";
+import { isAcpSessionKey, isCronRunSessionKey } from "../../sessions/session-key-utils.js";
 import { ensureConfiguredBindingTargetReady } from "./binding-targets.js";
 import type { ConfiguredBindingResolution } from "./binding-types.js";
 import { resolveConfiguredBinding } from "./configured-binding-registry.js";
@@ -133,6 +136,13 @@ export function resolveRuntimeConversationBindingRoute(
     route: ResolvedAgentRoute;
     /** Set false for read-only ownership checks that must not extend binding liveness. */
     touchBinding?: boolean;
+    /**
+     * Configured-binding resolution that already produced `params.route`, when the caller ran
+     * `resolveConfiguredBindingRoute` first. Obsolete generic runtime records must not
+     * override it; live runtime overrides (ACP targets, active subagent thread bindings,
+     * plugin-owned records) keep their runtime precedence.
+     */
+    configuredBindingRoute?: ConfiguredBindingRouteResult | null;
   } & ConfiguredBindingRouteConversationInput,
 ): RuntimeConversationBindingRouteResult {
   const inspection = inspectSessionBindingByConversation(
@@ -167,6 +177,35 @@ export function resolveRuntimeConversationBindingRoute(
     };
   }
 
+  const configuredBoundSessionKey = params.configuredBindingRoute?.boundSessionKey?.trim();
+  const pluginId = isPluginOwnedBindingMetadata(bindingRecord.metadata)
+    ? bindingRecord.metadata.pluginId.trim()
+    : undefined;
+  if (
+    !pluginId &&
+    !isGenericBindApiBindingMetadata(bindingRecord.metadata) &&
+    configuredBoundSessionKey &&
+    boundSessionKey !== configuredBoundSessionKey &&
+    !isAcpSessionKey(boundSessionKey) &&
+    bindingRecord.targetKind === "session"
+  ) {
+    // A configured binding already claimed this conversation. Generic session-kind runtime
+    // records without bind-API provenance can only originate from the removed legacy
+    // catch-all writer, so they are stale rows that must not nullify the configured route.
+    // Live overrides keep runtime precedence: fresh generic bindings written by the public
+    // bind API (bindGenericCurrentConversation stamps bindingOrigin provenance), records
+    // targeting an ACP session (explicit /acp spawn binds), and active subagent thread
+    // bindings (targetKind "subagent" created by bindThreadForSubagentSpawn).
+    logVerbose(
+      `ignored non-ACP runtime conversation binding ${bindingRecord.bindingId} to ${boundSessionKey} because configured binding targets ${configuredBoundSessionKey}`,
+    );
+    return {
+      bindingOwnerAvailable: true,
+      bindingRecord: null,
+      route: params.route,
+    };
+  }
+
   if (params.touchBinding !== false) {
     getSessionBindingService().touch(
       bindingRecord.bindingId,
@@ -174,9 +213,6 @@ export function resolveRuntimeConversationBindingRoute(
       bindingRecord.conversation,
     );
   }
-  const pluginId = isPluginOwnedBindingMetadata(bindingRecord.metadata)
-    ? bindingRecord.metadata.pluginId.trim()
-    : undefined;
   if (pluginId) {
     // Plugin-owned binding records are observed but not route-rewritten by core; the owning
     // plugin is responsible for its runtime target handoff.

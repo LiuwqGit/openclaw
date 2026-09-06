@@ -10,6 +10,7 @@ import type { ResolvedAgentRoute } from "../../routing/resolve-route.js";
 import {
   ensureConfiguredBindingRouteReady,
   resolveRuntimeConversationBindingRoute,
+  type ConfiguredBindingRouteResult,
   type RuntimeConversationBindingRouteResult,
 } from "./binding-routing.js";
 import { registerStatefulBindingTargetDriver } from "./stateful-target-drivers.js";
@@ -215,6 +216,160 @@ describe("runtime conversation binding route", () => {
     expect(result.bindingRecord).toBeNull();
     expect(result.boundSessionKey).toBeUndefined();
     expect(result.route).toBe(route);
+  });
+
+  it("keeps a configured binding route when a non-ACP runtime binding targets a different session", () => {
+    const route = createRoute();
+    const binding = createBinding({
+      // Stale catch-all row: non-ACP target recorded before the configured binding existed.
+      targetSessionKey: "agent:main:demo:default:direct:room-1",
+    });
+    const { touch } = registerAdapter(binding);
+    const configuredBindingRoute: ConfiguredBindingRouteResult = {
+      bindingResolution: null,
+      route,
+      boundSessionKey: "agent:claude:acp:binding:demo:default:hash-1",
+      boundAgentId: "claude",
+    };
+
+    const result = resolveRuntimeConversationBindingRoute({
+      route,
+      configuredBindingRoute,
+      conversation: {
+        channel: "demo",
+        accountId: "default",
+        conversationId: "room-1",
+      },
+    });
+
+    expect(touch).not.toHaveBeenCalled();
+    expect(result.bindingRecord).toBeNull();
+    expect(result.boundSessionKey).toBeUndefined();
+    expect(result.route).toBe(route);
+    expect(result.route.sessionKey).toBe("agent:main:main");
+  });
+
+  it("still lets a runtime binding that targets an ACP session override the configured route", () => {
+    const route = createRoute();
+    const binding = createBinding({
+      // Explicit /acp spawn bind: runtime record targeting an ACP session.
+      targetSessionKey: "agent:claude:acp:spawn-9",
+    });
+    const { touch } = registerAdapter(binding);
+    const configuredBindingRoute: ConfiguredBindingRouteResult = {
+      bindingResolution: null,
+      route,
+      boundSessionKey: "agent:claude:acp:binding:demo:default:hash-1",
+      boundAgentId: "claude",
+    };
+
+    const result = resolveRuntimeConversationBindingRoute({
+      route,
+      configuredBindingRoute,
+      conversation: {
+        channel: "demo",
+        accountId: "default",
+        conversationId: "room-1",
+      },
+    });
+
+    expect(touch).toHaveBeenCalled();
+    expect(result.bindingRecord).toBe(binding);
+    expect(result.boundSessionKey).toBe("agent:claude:acp:spawn-9");
+    expect(result.route.sessionKey).toBe("agent:claude:acp:spawn-9");
+  });
+
+  it("still lets a live subagent runtime binding override the configured route", () => {
+    const route = createRoute();
+    const binding = createBinding({
+      // Active subagent thread binding created by bindThreadForSubagentSpawn.
+      targetSessionKey: "agent:main:subagent:spawn-9",
+      targetKind: "subagent",
+    });
+    const { touch } = registerAdapter(binding);
+    const configuredBindingRoute: ConfiguredBindingRouteResult = {
+      bindingResolution: null,
+      route,
+      boundSessionKey: "agent:claude:acp:binding:demo:default:hash-1",
+      boundAgentId: "claude",
+    };
+
+    const result = resolveRuntimeConversationBindingRoute({
+      route,
+      configuredBindingRoute,
+      conversation: {
+        channel: "demo",
+        accountId: "default",
+        conversationId: "room-1",
+      },
+    });
+
+    expect(touch).toHaveBeenCalled();
+    expect(result.bindingRecord).toBe(binding);
+    expect(result.boundSessionKey).toBe("agent:main:subagent:spawn-9");
+    expect(result.route.sessionKey).toBe("agent:main:subagent:spawn-9");
+    expect(result.route.agentId).toBe("main");
+  });
+
+  it("still lets a fresh generic bind-API runtime binding override the configured route", () => {
+    const route = createRoute();
+    const binding = createBinding({
+      // Fresh explicit bind written by the public bind API (bindGenericCurrentConversation
+      // stamps bindingOrigin provenance); intentional SDK bindings keep runtime precedence.
+      targetSessionKey: "agent:codex:demo:default:direct:room-1",
+      metadata: { bindingOrigin: "generic-bind-api" },
+    });
+    const { touch } = registerAdapter(binding);
+    const configuredBindingRoute: ConfiguredBindingRouteResult = {
+      bindingResolution: null,
+      route,
+      boundSessionKey: "agent:claude:acp:binding:demo:default:hash-1",
+      boundAgentId: "claude",
+    };
+
+    const result = resolveRuntimeConversationBindingRoute({
+      route,
+      configuredBindingRoute,
+      conversation: {
+        channel: "demo",
+        accountId: "default",
+        conversationId: "room-1",
+      },
+    });
+
+    expect(touch).toHaveBeenCalled();
+    expect(result.bindingRecord).toBe(binding);
+    expect(result.boundSessionKey).toBe("agent:codex:demo:default:direct:room-1");
+    expect(result.route.sessionKey).toBe("agent:codex:demo:default:direct:room-1");
+    expect(result.route.agentId).toBe("codex");
+  });
+
+  it("still applies a non-ACP runtime binding that matches the configured target", () => {
+    const route = createRoute();
+    const binding = createBinding({
+      targetSessionKey: "agent:main:demo:default:bound-1",
+    });
+    const { touch } = registerAdapter(binding);
+    const configuredBindingRoute: ConfiguredBindingRouteResult = {
+      bindingResolution: null,
+      route,
+      boundSessionKey: "agent:main:demo:default:bound-1",
+      boundAgentId: "main",
+    };
+
+    const result = resolveRuntimeConversationBindingRoute({
+      route,
+      configuredBindingRoute,
+      conversation: {
+        channel: "demo",
+        accountId: "default",
+        conversationId: "room-1",
+      },
+    });
+
+    expect(touch).toHaveBeenCalled();
+    expect(result.bindingRecord).toBe(binding);
+    expect(result.route.sessionKey).toBe("agent:main:demo:default:bound-1");
   });
 });
 

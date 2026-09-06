@@ -140,6 +140,7 @@ function resolveGenericRouteOwner(params: {
   });
   const runtime = resolveRuntimeConversationBindingRoute({
     route: configured.route,
+    configuredBindingRoute: configured,
     conversation,
     touchBinding: false,
   });

@@ -49,6 +49,7 @@ export function resolveIMessageConversationRoute(params: {
 
   const runtimeRoute = resolveRuntimeConversationBindingRoute({
     route: configuredRoute.route,
+    configuredBindingRoute: configuredRoute,
     conversation,
   });
   if (runtimeRoute.bindingRecord && !runtimeRoute.boundSessionKey) {

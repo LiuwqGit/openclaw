@@ -357,10 +357,40 @@ describe("generic current-conversation bindings", () => {
       expect(binding.metadata).toEqual({
         ...(replace ? {} : metadata),
         label: "updated",
+        bindingOrigin: "generic-bind-api",
         lastActivityAt: expect.any(Number),
       });
     },
   );
+
+  it("stamps bind-API provenance on every record it writes", async () => {
+    const bound = await bindWorkspaceConversation("user:provenance", {
+      targetSessionKey: "agent:codex:demo:default:direct:provenance",
+    });
+    expectBindingMetadata(bound, { bindingOrigin: "generic-bind-api" });
+
+    // Rebinding a legacy provenance-less row onto the same target must also stamp it:
+    // the explicit bind is itself the evidence of intent.
+    seedPersistedBinding({
+      bindingId: "generic:workspace\u241fdefault\u241f\u241fuser:legacy",
+      targetSessionKey: "agent:main:demo:default:direct:legacy",
+      targetKind: "session",
+      conversation: workspaceConversation("user:legacy"),
+      status: "active",
+      boundAt: 1,
+      metadata: { lastActivityAt: 1 },
+    });
+    expectBindingMetadata(resolveWorkspaceConversation("user:legacy"), {
+      bindingOrigin: undefined,
+    });
+
+    await bindWorkspaceConversation("user:legacy", {
+      targetSessionKey: "agent:main:demo:default:direct:legacy",
+    });
+    expectBindingMetadata(resolveWorkspaceConversation("user:legacy"), {
+      bindingOrigin: "generic-bind-api",
+    });
+  });
 
   describe("independent SQLite owners", () => {
     it.each(["bind", "touch", "expiry cleanup", "unbind"] as const)(

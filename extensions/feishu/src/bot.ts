@@ -921,6 +921,7 @@ export async function handleFeishuMessage(params: {
       // configured ACP bindings may still inherit the shared `chat:topic:root` topic session.
       const runtimeRoute = resolveRuntimeConversationBindingRoute({
         route,
+        configuredBindingRoute: configuredRoute,
         conversation: {
           channel: "feishu",
           accountId: account.accountId,

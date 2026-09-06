@@ -163,6 +163,7 @@ function resolveTelegramConversationRouteWithRuntimePolicy(
   const runtimeBindingConversationId = conversationId;
   const runtimeRoute = resolveRuntimeConversationBindingRoute({
     route,
+    configuredBindingRoute: configuredRoute,
     touchBinding: touchRuntimeBinding,
     conversation: {
       channel: "telegram",

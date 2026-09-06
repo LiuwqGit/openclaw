@@ -9,6 +9,7 @@ import {
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeConversationText } from "../../acp/conversation-id.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
+import { GENERIC_BIND_API_BINDING_ORIGIN } from "../../plugins/conversation-binding-metadata.js";
 import { getActivePluginChannelRegistryFromState } from "../../plugins/runtime-channel-state.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
@@ -472,6 +473,9 @@ export async function bindGenericCurrentConversation(
         ? existing.metadata
         : undefined),
       ...input.metadata,
+      // Every record this API writes is an intentional bind; stamp provenance so routing
+      // can distinguish it from legacy rows persisted by the removed catch-all writer.
+      bindingOrigin: GENERIC_BIND_API_BINDING_ORIGIN,
       lastActivityAt: now,
     },
   })).current;

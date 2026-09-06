@@ -90,6 +90,45 @@ describe("resolveIMessageConversationRoute", () => {
     expect(result.bindingResolution?.record.targetSessionKey).toBe(result.route.sessionKey);
   });
 
+  it("keeps the configured ACP binding when a stale non-ACP runtime binding exists", () => {
+    const touch = vi.fn();
+    registerSessionBindingAdapter({
+      channel: "imessage",
+      accountId: "default",
+      listBySession: () => [],
+      resolveByConversation: (ref) =>
+        ref.conversationId === "+15555550123"
+          ? {
+              bindingId: "default:+15555550123",
+              // Stale catch-all row predating the configured ACP binding.
+              targetSessionKey: "agent:main:imessage:default:direct:+15555550123",
+              targetKind: "session",
+              conversation: {
+                channel: "imessage",
+                accountId: "default",
+                conversationId: "+15555550123",
+              },
+              status: "active",
+              boundAt: 1,
+            }
+          : null,
+      touch,
+    });
+
+    const result = resolveIMessageConversationRoute({
+      cfg: configuredCfg,
+      accountId: "default",
+      isGroup: false,
+      peerId: "+15555550123",
+      sender: "+15555550123",
+    });
+
+    expect(result.route.agentId).toBe("codex");
+    expect(result.route.sessionKey).toMatch(/^agent:codex:acp:binding:imessage:/);
+    expect(result.bindingResolution?.record.targetSessionKey).toBe(result.route.sessionKey);
+    expect(touch).not.toHaveBeenCalled();
+  });
+
   it("lets runtime iMessage conversation bindings override default routing", () => {
     const touch = vi.fn();
     registerSessionBindingAdapter({
