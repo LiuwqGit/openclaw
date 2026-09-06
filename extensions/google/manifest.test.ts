@@ -3,7 +3,6 @@ import { readFileSync } from "node:fs";
 import { buildJsonPluginConfigSchema } from "openclaw/plugin-sdk/core";
 import type { JsonSchemaObject } from "openclaw/plugin-sdk/json-schema-runtime";
 import { describe, expect, it } from "vitest";
-import { buildGoogleStaticCatalogProvider } from "./provider-catalog.js";
 
 type GoogleManifest = {
   setup?: {
@@ -31,6 +30,7 @@ type GoogleManifest = {
     >;
   };
   modelCatalog?: {
+    discovery?: Record<string, string>;
     suppressions?: Array<{
       provider?: string;
       model?: string;
@@ -124,39 +124,28 @@ describe("google manifest model catalog", () => {
     ]);
   });
 
-  it("mirrors the runtime static Google provider and model rows into modelCatalog.providers.google", () => {
-    const manifest = loadManifest();
-    const provider = buildGoogleStaticCatalogProvider();
-    const mirror = manifest.modelCatalog?.providers?.google;
+  it("owns the canonical Google model catalog and runtime discovery declaration", () => {
+    const catalog = loadManifest().modelCatalog;
+    const provider = catalog?.providers?.google;
+    const modelIds = provider?.models?.map((model) => model.id) ?? [];
 
-    // Provider-level transport must be preserved: manifest rows win over the
-    // runtime static catalog in bundled fallback resolution, and rows without
-    // api/baseUrl would otherwise normalize to openai-responses with an empty
-    // endpoint, breaking Google completion/compaction fallbacks.
-    expect(mirror?.api).toBe(provider.api);
-    expect(mirror?.baseUrl).toBe(provider.baseUrl);
-
-    const runtimeRows = provider.models.map((model) => {
-      const row = structuredClone(model);
-      // The static provider widens input with "video" at build time; the
-      // manifest mirror keeps the canonical text-model modality list.
-      row.input = row.input.filter((modality) => modality !== "video");
-      return row;
+    expect(catalog?.discovery?.google).toBe("runtime");
+    expect(provider).toMatchObject({
+      api: "google-generative-ai",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
     });
-    expect(runtimeRows.length).toBeGreaterThan(0);
-
-    // Full-row comparison (ids, names, capabilities, limits, costs, thinking
-    // mappings, compat tiers) so any runtime/manifest drift fails this guard.
-    expect(mirror?.models ?? []).toEqual(runtimeRows);
+    expect(modelIds).toHaveLength(10);
+    expect(modelIds).not.toContain(undefined);
+    expect(new Set(modelIds).size).toBe(modelIds.length);
   });
 
-  it("keeps legacy Google chat providers out of the manifest catalog mirror", () => {
+  it("keeps legacy Google chat providers out of the canonical manifest catalog", () => {
     const manifest = loadManifest();
 
     // google-gemini-cli references must stay unknown-model so Doctor keeps
     // emitting its migration hint, and neither CLI nor Vertex declares runtime
     // discovery, so manifest rows for them would leak into runtime catalog
-    // planning. Only the canonical google provider is mirrored.
+    // planning. Only the canonical google provider owns manifest rows.
     expect(manifest.modelCatalog?.providers?.["google-gemini-cli"]).toBeUndefined();
     expect(manifest.modelCatalog?.providers?.["google-vertex"]).toBeUndefined();
   });
