@@ -77,7 +77,7 @@ import {
   waitForEmbeddedAgentRunEnd,
 } from "./subagent-announce.runtime.js";
 
-type SubagentAnnounceDeps = {
+export type SubagentAnnounceDeps = {
   callGateway: typeof callGateway;
   dispatchGatewayMethodInProcess: typeof dispatchGatewayMethodInProcess;
   getRuntimeConfig: typeof getRuntimeConfig;
@@ -92,6 +92,14 @@ const defaultSubagentAnnounceDeps: SubagentAnnounceDeps = {
 };
 
 let subagentAnnounceDeps: SubagentAnnounceDeps = defaultSubagentAnnounceDeps;
+
+/**
+ * Shares the announce runtime overrides with sibling announce modules so one
+ * test seam (or one gateway binding) covers every announce dispatch path.
+ */
+export function getSubagentAnnounceRuntimeDeps(): SubagentAnnounceDeps {
+  return subagentAnnounceDeps;
+}
 
 const subagentRegistryRuntimeLoader = createLazyImportLoader(
   () => import("../registry/subagent-registry-runtime.js"),

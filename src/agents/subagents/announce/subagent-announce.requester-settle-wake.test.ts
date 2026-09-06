@@ -37,6 +37,7 @@ const { registryRuntimeMock } = vi.hoisted(() => ({
         _childSessionKey: string,
       ): Pick<SubagentRunRecord, "runId" | "requesterSessionKey"> | undefined => undefined,
     ),
+    getLatestLiveSubagentRunByChildSessionKey: vi.fn(() => null),
     resolveRequesterForChildSession: vi.fn((_childSessionKey: string) => null),
   },
 }));

@@ -43,6 +43,8 @@ type GatewayRequest = Omit<CallGatewayOptions, "params"> & {
     inputProvenance?: { sourceSessionKey?: string };
     idempotencyKey?: string;
     message?: string;
+    deliver?: boolean;
+    runId?: string;
   };
 };
 
@@ -68,6 +70,9 @@ const callGatewayMock = vi.fn(async (request: GatewayRequest) => {
   if (request.method === "agent.wait") {
     return { status: "pending" };
   }
+  if (request.method === "chat.abort") {
+    return { aborted: true, runIds: [request.params?.runId] };
+  }
   if (request.method === "chat.history") {
     return { messages: chatHistoryBySessionKey.get(request.params?.sessionKey ?? "") ?? [] };
   }
@@ -79,6 +84,14 @@ const callGatewayMock = vi.fn(async (request: GatewayRequest) => {
       if (emptyGatedAgentReply) {
         return { result: { payloads: [] } };
       }
+    }
+    if (request.params?.deliver === false) {
+      // An internal continuation reports the gateway run it started so the
+      // registry can adopt it into the paused requester row.
+      return {
+        runId: `wake-${request.params?.sessionKey ?? "session"}`,
+        result: { payloads: [] },
+      };
     }
     return {
       result: {
@@ -122,7 +135,8 @@ vi.mock("../../../browser-lifecycle-cleanup.js", () => ({
 }));
 
 vi.mock("../spawn/subagent-depth.js", () => ({
-  getSubagentDepthFromSessionStore: () => 0,
+  getSubagentDepthFromSessionStore: (sessionKey: string) =>
+    sessionKey.split(":subagent:").length - 1,
 }));
 
 const loadSubagentRegistryRuntimeForTest = async () =>
@@ -277,6 +291,7 @@ describe("requester settle wake product flow", () => {
     runId: string;
     childSessionKey: string;
     requesterTurnRunId: string;
+    agentSessionKey?: string;
   }) => {
     const result = await maybeSpawnVisibleSession({
       raw: { visible: true },
@@ -286,7 +301,7 @@ describe("requester settle wake product flow", () => {
       sandbox: "inherit",
       expectsCompletionMessage: true,
       options: {
-        agentSessionKey: MAIN_REQUESTER_SESSION_KEY,
+        agentSessionKey: params.agentSessionKey ?? MAIN_REQUESTER_SESSION_KEY,
         requesterTurnRunId: params.requesterTurnRunId,
         requesterAgentIdOverride: "main",
         config: {
@@ -325,6 +340,15 @@ describe("requester settle wake product flow", () => {
           ...(modelRouteChange ? { modelRouteChange } : {}),
         },
       },
+    });
+  };
+
+  const emitYielded = (runId: string, childSessionKey: string) => {
+    lifecycleHandler?.({
+      stream: "lifecycle",
+      runId,
+      sessionKey: childSessionKey,
+      data: { phase: "end", endedAt: Date.now(), yielded: true },
     });
   };
 
@@ -582,6 +606,119 @@ describe("requester settle wake product flow", () => {
       payload: undefined,
       lastError: undefined,
       lastDropReason: undefined,
+    });
+  });
+
+  it("wakes a yielded nested requester once its direct child settles", async () => {
+    vi.setSystemTime(100_000);
+    const middleSessionKey = "agent:main:subagent:middle";
+    const leafSessionKey = "agent:main:subagent:leaf";
+    sessionStore[middleSessionKey] = { sessionId: "sess-middle", updatedAt: 1 };
+    sessionStore[leafSessionKey] = { sessionId: "sess-leaf", updatedAt: 1 };
+    const context = {} as GatewayRequestContext;
+    context.resolveGatewayContext = () => context;
+    registry.initSubagentRegistry();
+    registry.activateSubagentRegistry(() => context);
+
+    // root -> middle -> leaf, all through the real spawn path.
+    await spawnVisibleChild({
+      runId: "run-middle",
+      childSessionKey: middleSessionKey,
+      requesterTurnRunId: "requester-root-turn",
+    });
+    await spawnVisibleChild({
+      runId: "run-leaf",
+      childSessionKey: leafSessionKey,
+      requesterTurnRunId: "run-middle",
+      agentSessionKey: middleSessionKey,
+    });
+    expect(registry.getSubagentRunByRunId("run-leaf")).toMatchObject({
+      requesterSessionKey: middleSessionKey,
+      requesterTurnRunId: "run-middle",
+    });
+
+    // The nested requester yields while its direct child is still running.
+    await createSessionsYieldTool({
+      sessionId: "sess-middle",
+      claimYield: () =>
+        registry.markRequesterTurnYielded({
+          requesterSessionKey: middleSessionKey,
+          requesterAgentId: "main",
+          requesterTurnRunId: "run-middle",
+        }) > 0,
+      onYield: () => {},
+    }).execute("yield-middle", { message: "wait for the leaf" });
+    emitYielded("run-middle", middleSessionKey);
+    expect(registry.getSubagentRunByRunId("run-middle")).toMatchObject({
+      pauseReason: "sessions_yield",
+    });
+
+    const { withLocalSessionPlacementTurnSettlement } =
+      await import("../../session-placement-admission.js");
+
+    // Reported ordering: the direct child reaches terminal + cleaned state
+    // before the yielded requester turn settles. Its per-child announce defers
+    // to the yield batch, so no wake may leave for the nested requester yet.
+    emitCompleted("run-leaf", leafSessionKey, "leaf complete");
+    await vi.waitFor(() =>
+      expect(registry.getSubagentRunByRunId("run-leaf")).toMatchObject({
+        execution: { status: "terminal" },
+        cleanupCompletedAt: expect.any(Number),
+      }),
+    );
+    expect(
+      getAgentCalls().filter((request) => request.params?.sessionKey === middleSessionKey),
+    ).toHaveLength(0);
+
+    await withLocalSessionPlacementTurnSettlement(
+      {
+        sessionId: "sess-middle",
+        sessionKey: middleSessionKey,
+        agentId: "main",
+        runId: "run-middle",
+      },
+      async () => ({
+        acceptedSessionSpawns: [{ runId: "run-leaf", childSessionKey: leafSessionKey }],
+        meta: {
+          durationMs: 1,
+          yielded: true,
+          executionTrace: { runner: "cli", attempts: [], fallbackUsed: false },
+        },
+      }),
+    );
+    // Settlement must hand the nested requester its owed wake instead of
+    // clearing the armed batch. Durable adoption of that wake into the paused
+    // row needs real registry persistence, which this harness stubs, so the
+    // batch keeps its retry budget here; the dispatch itself is the observable
+    // the reported bug never produced.
+    for (let attempt = 0; attempt < 80; attempt += 1) {
+      if (getRequesterWakeCalls().length >= 1) {
+        break;
+      }
+      await vi.advanceTimersByTimeAsync(100);
+      await flushAsync();
+    }
+
+    // The nested requester receives exactly one owed wake, delivered internally.
+    expect(getRequesterWakeCalls()).toHaveLength(1);
+    const continuation = getRequesterWakeCalls()[0];
+    expect(continuation?.params?.sessionKey).toBe(middleSessionKey);
+    expect(continuation?.params?.deliver).toBe(false);
+    expect(String(continuation?.params?.message)).toContain("leaf complete");
+    expect(continuation?.params?.idempotencyKey).toBe(
+      "announce:requester-settle:main:agent:main:subagent:middle:run-leaf:yield-1:wake",
+    );
+    // The armed batch recorded the attempt instead of vanishing undispatched.
+    expect(registry.getSubagentRunByRunId("run-leaf")?.requesterSettleWake).toMatchObject({
+      attemptCount: 1,
+      requesterYieldBatch: true,
+      rearmGeneration: 1,
+      batchRunIds: ["run-leaf"],
+    });
+    // The paused requester row is untouched until a continuation is adopted.
+    expect(registry.getSubagentRunByRunId("run-middle")).toMatchObject({
+      pauseReason: "sessions_yield",
+      requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
     });
   });
 

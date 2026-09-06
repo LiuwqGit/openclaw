@@ -22,6 +22,7 @@ import { buildAnnounceIdempotencyKey } from "../../announce-idempotency.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import {
   countActiveDescendantRuns,
+  getLatestLiveSubagentRunByChildSessionKey,
   getLatestSubagentRunByChildSessionKey,
   hasDescendantRunAwaitingSettle,
   listSubagentRunsForRequester,
@@ -36,6 +37,7 @@ import {
   deliverSubagentAnnouncement,
   loadRequesterSessionEntry,
 } from "./subagent-announce-delivery.js";
+import { runDescendantWake } from "./subagent-announce-descendant-wake.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 import { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
 import {
@@ -43,7 +45,7 @@ import {
   dedupeLatestChildCompletionRows,
   filterCurrentDirectChildCompletionRows,
 } from "./subagent-announce-output.js";
-import { hasUsableSessionEntry } from "./subagent-announce.js";
+import { getSubagentAnnounceRuntimeDeps, hasUsableSessionEntry } from "./subagent-announce.js";
 
 export type RequesterSettleWakeBatchState = Omit<RequesterSettleWakeState, "retireAfterSettle">;
 
@@ -175,6 +177,78 @@ function readSharedBatchState(batch: readonly SubagentRunRecord[]): RequesterSet
     ...(source?.lastError !== undefined ? { lastError: source.lastError } : {}),
     deferralCount: Math.max(0, ...states.map((state) => state.deferralCount ?? 0)),
   };
+}
+
+/**
+ * Continues a nested (subagent) requester whose yielded batch just drained.
+ *
+ * The synthesized top-level wake cannot reach it: a nested requester owns a
+ * registry row, and an untracked wake turn would leave that row paused behind
+ * `sessions_yield` forever, so its own requester never hears the result. The
+ * descendant-settle continuation injects one internal turn and adopts it into
+ * the paused row, which keeps parent-run tracking and only clears completion
+ * ownership once the adoption outcome is recorded.
+ */
+async function dispatchNestedRequesterYieldContinuation(params: {
+  requesterSessionKey: string;
+  findings?: string;
+  announceId: string;
+  /** Fence for the awaited dispatch: the admitted batch generation must still own the wake. */
+  isBatchCurrent: () => boolean;
+  signal?: AbortSignal;
+  resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
+}): Promise<SubagentAnnounceDeliveryResult> {
+  const unavailable = (error: string): SubagentAnnounceDeliveryResult => ({
+    delivered: false,
+    path: "none",
+    error,
+  });
+  const isPausedRequesterRow = (entry: SubagentRunRecord) => entry.pauseReason === "sessions_yield";
+  const requesterRow = getLatestLiveSubagentRunByChildSessionKey(
+    params.requesterSessionKey,
+    isPausedRequesterRow,
+  );
+  if (!requesterRow) {
+    return unavailable("nested requester has no sessions_yield-paused run to continue");
+  }
+  const announceDeps = getSubagentAnnounceRuntimeDeps();
+  let replaceSubagentRunAfterSteer: Awaited<
+    ReturnType<typeof announceDeps.loadSubagentRegistryRuntime>
+  >["replaceSubagentRunAfterSteer"];
+  try {
+    ({ replaceSubagentRunAfterSteer } = await announceDeps.loadSubagentRegistryRuntime());
+  } catch (error) {
+    return unavailable(
+      `nested requester registry runtime unavailable: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  const woke = await runDescendantWake({
+    runId: requesterRow.runId,
+    childSessionKey: params.requesterSessionKey,
+    taskLabel: requesterRow.label || requesterRow.task || "task",
+    // An empty capture must still wake the requester: it can inspect its own
+    // settled children, while a dropped wake strands it behind the yield.
+    findings: params.findings ?? "(no child result text was captured for this batch)",
+    announceId: params.announceId,
+    // Ownership must survive the awaited dispatch. The continuation replaces
+    // the paused row, so row identity is not a stable fence; the admitted batch
+    // generation is.
+    isChildSessionEffectsAllowed: params.isBatchCurrent,
+    hasUsableSessionEntry,
+    deps: {
+      callGateway: announceDeps.callGateway,
+      dispatchGatewayMethodInProcess: announceDeps.dispatchGatewayMethodInProcess,
+      getRuntimeConfig: announceDeps.getRuntimeConfig,
+      replaceSubagentRunAfterSteer,
+    },
+    ...(params.resolveGatewayContext
+      ? { resolveGatewayContext: params.resolveGatewayContext }
+      : {}),
+    signal: params.signal,
+  });
+  return woke
+    ? { delivered: true, path: "direct" }
+    : unavailable("nested requester yield continuation was not adopted");
 }
 
 /**
@@ -332,15 +406,20 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
   const requesterYieldedAfterDelivery =
     selectedState.afterRequesterYield === true ||
     (selectedState.requesterYieldBatch === true && selectedState.rearmGeneration !== undefined);
+  // A nested requester owns a registry row, so only an explicit yield batch
+  // needs a continuation here; ordinary nested waves stay with the
+  // descendant-settle wake that deferred cleanup arms on the ended run.
+  const requesterIsNested =
+    getSubagentDepthFromSessionStore(requesterSessionKey, {
+      cfg,
+      agentId: requesterAgentId,
+    }) >= 1;
   if (
     requiredSettled.length === 0 ||
     (requiredSettled.length < 2 &&
       !hasUndeliveredRequiredCompletion &&
       !requesterYieldedAfterDelivery) ||
-    getSubagentDepthFromSessionStore(requesterSessionKey, {
-      cfg,
-      agentId: requesterAgentId,
-    }) >= 1
+    (requesterIsNested && !requesterYieldedAfterDelivery)
   ) {
     completeBatch(settledBatch, selectedState.rearmGeneration);
     return false;
@@ -464,29 +543,42 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
     }
 
     let delivery: Awaited<ReturnType<typeof deliverSubagentAnnouncement>>;
+    const attemptAnnounceId =
+      attemptIndex === 0 ? wakeKeyBase : `${wakeKeyBase}:retry-${attemptIndex}`;
     try {
-      delivery = await deliverSubagentAnnouncement({
-        requesterSessionKey,
-        requesterAgentId,
-        triggerMessage: wakeMessage,
-        steerMessage: wakeMessage,
-        summaryLine: "all spawned subagents settled",
-        requesterSessionOrigin,
-        requesterOrigin: requesterSessionOrigin,
-        directOrigin,
-        sourceSessionKey: currentSettledEntry.childSessionKey,
-        sourceTool: "subagent_announce",
-        targetRequesterSessionKey: requesterSessionKey,
-        requesterIsSubagent: false,
-        expectsCompletionMessage: false,
-        requireDirectDelivery: true,
-        ...(requesterYieldedAfterDelivery ? { requireVisibleReply: true } : {}),
-        directIdempotencyKey: buildAnnounceIdempotencyKey(
-          attemptIndex === 0 ? wakeKeyBase : `${wakeKeyBase}:retry-${attemptIndex}`,
-        ),
-        signal: params.signal,
-        resolveGatewayContext,
-      });
+      delivery = requesterIsNested
+        ? await dispatchNestedRequesterYieldContinuation({
+            requesterSessionKey,
+            findings,
+            announceId: attemptAnnounceId,
+            isBatchCurrent: () =>
+              settledBatch.every(
+                (entry) =>
+                  entry.requesterSettleWake?.rearmGeneration === selectedState.rearmGeneration,
+              ) && !isGatewayClosed(),
+            signal: params.signal,
+            resolveGatewayContext,
+          })
+        : await deliverSubagentAnnouncement({
+            requesterSessionKey,
+            requesterAgentId,
+            triggerMessage: wakeMessage,
+            steerMessage: wakeMessage,
+            summaryLine: "all spawned subagents settled",
+            requesterSessionOrigin,
+            requesterOrigin: requesterSessionOrigin,
+            directOrigin,
+            sourceSessionKey: currentSettledEntry.childSessionKey,
+            sourceTool: "subagent_announce",
+            targetRequesterSessionKey: requesterSessionKey,
+            requesterIsSubagent: false,
+            expectsCompletionMessage: false,
+            requireDirectDelivery: true,
+            ...(requesterYieldedAfterDelivery ? { requireVisibleReply: true } : {}),
+            directIdempotencyKey: buildAnnounceIdempotencyKey(attemptAnnounceId),
+            signal: params.signal,
+            resolveGatewayContext,
+          });
     } catch (error) {
       // A transport exception can arrive after gateway admission. Replay the
       // same persisted idempotency key; only a known no-turn result may rotate it.
