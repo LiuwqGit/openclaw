@@ -12,6 +12,55 @@ import {
 describe("channel ingress drain restart-recovery tombstone", () => {
   afterEach(() => closeOpenClawStateDatabaseForTest());
 
+  it.each([
+    { reclaimed: false, terminal: false },
+    { reclaimed: false, terminal: true },
+    { reclaimed: true, terminal: false },
+    { reclaimed: true, terminal: true },
+  ])(
+    "reports settlement only after the claim write succeeds: %j",
+    async ({ reclaimed, terminal }) => {
+      await withTempState(async (stateDir) => {
+        const queue = createTestIngressQueue(stateDir, { now: () => 10_000 });
+        await queue.enqueue("evt-head", { text: "question" }, { laneKey: "dm" });
+        let lifecycle: ChannelIngressDispatchLifecycle | undefined;
+        const logs: string[] = [];
+        const drain = createChannelIngressDrain({
+          queue,
+          onLog: (message) => logs.push(message),
+          dispatchClaimedEvent: (_event, current) => {
+            lifecycle = current;
+            return { kind: "deferred" };
+          },
+        });
+        try {
+          await drain.drainOnce();
+          await vi.waitFor(() => expect(lifecycle).toBeDefined());
+          if (reclaimed) {
+            expect(await queue.recoverStaleClaims({ staleMs: 0, now: 10_001 })).toBe(1);
+          }
+          await expectDefined(
+            expectDefined(lifecycle, "deferred lifecycle").onFailed,
+            "failure callback",
+          )(
+            Object.assign(new Error("dispatch failure"), {
+              ...(terminal ? { code: "SESSION_RESTART_RECOVERY_TOMBSTONE" } : {}),
+            }),
+          );
+          expect(await queue.listFailed?.()).toHaveLength(!reclaimed && terminal ? 1 : 0);
+          expect(await queue.listPending()).toHaveLength(!reclaimed && terminal ? 0 : 1);
+          expect(
+            logs.some((message) =>
+              message.includes(terminal ? "; dead-lettered" : "; keeping for retry:"),
+            ),
+          ).toBe(!reclaimed);
+        } finally {
+          drain.dispose();
+        }
+      });
+    },
+  );
+
   it.each([false, true])(
     "retains the failed head and drains its follower without replay (prior retry: %s)",
     async (priorRetry) => {
