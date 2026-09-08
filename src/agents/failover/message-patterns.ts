@@ -41,6 +41,9 @@ export function isProviderRequestSizeCeilingError(errorMessage?: string): boolea
 // match — those are not assistant-stream contracts.
 export const INCOMPLETE_ASSISTANT_STREAM_RE =
   /^[\w -]*stream ended (?:before (?:message_?stop|(?:a )?terminal (?:finish reason|response event|event))|without (?:a terminal )?finish[_ ]reason)[.!]?$/i;
+// Undici ends a stream body with this exact bare transport message. Keep it
+// anchored so unrelated failures that merely contain the word do not match.
+export const TERMINATED_TRANSPORT_MESSAGE_RE = /^terminated$/i;
 const PERIODIC_USAGE_LIMIT_RE =
   /\b(?:daily|weekly|monthly)(?:\/(?:daily|weekly|monthly))* (?:usage )?limit(?:s)?(?: (?:exhausted|reached|exceeded))?\b/i;
 
@@ -221,7 +224,7 @@ const ERROR_PATTERNS = {
     // 502 served with an empty body, socket reset mid-response, body-stream
     // aborted). These arrive as bare strings on the outer error and, without
     // an explicit match, the fallback chain is never attempted (#69368).
-    /^terminated$/i,
+    TERMINATED_TRANSPORT_MESSAGE_RE,
     /^stream_read_error$/i,
     /\bund_err_(?:socket|connect|headers?|body|req_content_length_mismatch|aborted|closed)\b/i,
     // shared model runtime's openai provider surfaces `Request failed` when the HTTP

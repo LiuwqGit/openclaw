@@ -10,7 +10,10 @@ import {
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { isCloudCodeAssistFormatError } from "../../embedded-agent-helpers.js";
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
-import { INCOMPLETE_ASSISTANT_STREAM_RE } from "../../failover/message-patterns.js";
+import {
+  INCOMPLETE_ASSISTANT_STREAM_RE,
+  TERMINATED_TRANSPORT_MESSAGE_RE,
+} from "../../failover/message-patterns.js";
 import type { AgentRuntimeModelAttempt } from "../../runtime-plan/types.js";
 import { markCoreTtsAttemptResult } from "../../tools/tts-tool-result-provenance.js";
 import { log } from "../logger.js";
@@ -117,7 +120,15 @@ function isTransientSettledTurnFailure(failure: unknown): boolean {
     typeof failure.message === "string"
       ? failure.message.trim()
       : "";
-  return INCOMPLETE_ASSISTANT_STREAM_RE.test(message);
+  // An exact `terminated` body-stream failure carries no retryable code, so the
+  // network classifier and the incomplete-stream wording both miss it. The
+  // failover timeout family already treats this transport failure as
+  // recoverable (#56875); the settled-turn context producer must agree so a
+  // completed tool batch keeps its isolated tool-free finalization instead of
+  // failing the whole run (#142149).
+  return (
+    INCOMPLETE_ASSISTANT_STREAM_RE.test(message) || TERMINATED_TRANSPORT_MESSAGE_RE.test(message)
+  );
 }
 
 function normalizeEmbeddedAttemptToolMetas(

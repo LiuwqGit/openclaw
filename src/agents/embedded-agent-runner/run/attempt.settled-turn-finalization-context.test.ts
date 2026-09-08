@@ -72,6 +72,19 @@ describe("settled post-tool turn finalization context", () => {
       error: new Error("Stream ended without finish_reason"),
       captures: true,
     },
+    {
+      // Undici ends a stream body with this exact bare transport message (#142149).
+      kind: "terminated-transport-body",
+      error: new Error("terminated"),
+      captures: true,
+    },
+    {
+      // Only the exact transport message is recoverable; variants that merely
+      // contain the word keep failing closed like any other provider failure.
+      kind: "terminated-word-variant",
+      error: new Error("the request was terminated by the server"),
+      captures: false,
+    },
   ])("$kind final provider failure captures context=$captures", async ({ error, captures }) => {
     const result = await runSettledTurnWithFailedFinalCall(
       "agent:main:telegram:direct:settled",
