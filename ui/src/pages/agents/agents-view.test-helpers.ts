@@ -1,5 +1,18 @@
 import { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
+import { IdentityAvatarController } from "../../lib/identity-avatar-loader.ts";
 import type { renderAgents } from "./view.ts";
+
+/** Connected controller fake for pure-render tests; re-renders via onUpdate. */
+export function createIdentityAvatarLoader(onUpdate?: () => void): IdentityAvatarController {
+  const loader = new IdentityAvatarController({
+    addController: () => undefined,
+    removeController: () => undefined,
+    requestUpdate: () => onUpdate?.(),
+    updateComplete: Promise.resolve(true),
+  });
+  loader.hostConnected();
+  return loader;
+}
 
 type AgentsViewProps = Parameters<typeof renderAgents>[0];
 
@@ -63,6 +76,7 @@ export function createAgentViewTestProps(
     agentIdentityError: null,
     agentIdentityById: {},
     identityDraft: { name: null, emoji: null, avatar: null },
+    identityAvatarLoader: createIdentityAvatarLoader(),
     identitySaving: false,
     identityError: null,
     agentSkills: {
