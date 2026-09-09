@@ -320,7 +320,7 @@ async function resolvePluginArtifactCapabilityConsent(params: {
     const outcome = params.currentArtifactDir ? "updated" : "installed";
     return throwManagedPluginCapabilityConsentRequired(
       finalReview,
-      `The plugin was not ${outcome}. Re-run the original command with --accept-capabilities to accept its capabilities.`,
+      `The plugin was not ${outcome}. Re-run the same "openclaw plugins install" or "openclaw plugins update" command with --accept-capabilities, keeping its source and other options. For Doctor or setup, complete the plugin command first, then retry Doctor or setup.`,
     );
   }
   pendingPluginCapabilityReviews.delete(params.pluginId);

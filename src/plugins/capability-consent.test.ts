@@ -548,7 +548,11 @@ describe("plugin capability consent", () => {
     expect(error).toMatchObject({ capabilityConsent: { pluginId: "plugin" } });
     const message = error instanceof Error ? error.message : String(error);
     expect(message).toContain("The plugin was not installed");
-    expect(message).toContain("Re-run the original command with --accept-capabilities");
+    expect(message).toContain(
+      'Re-run the same "openclaw plugins install" or "openclaw plugins update" command with --accept-capabilities',
+    );
+    expect(message).toContain("keeping its source and other options");
+    expect(message).toContain("complete the plugin command first, then retry Doctor or setup");
     // The fresh artifact was never published, so an enable command cannot find it.
     expect(message).not.toContain("plugins enable");
   });
@@ -581,7 +585,11 @@ describe("plugin capability consent", () => {
     expect(error).toMatchObject({ capabilityConsent: { pluginId: "plugin" } });
     const message = error instanceof Error ? error.message : String(error);
     expect(message).toContain("The plugin was not updated");
-    expect(message).toContain("Re-run the original command with --accept-capabilities");
+    expect(message).toContain(
+      'Re-run the same "openclaw plugins install" or "openclaw plugins update" command with --accept-capabilities',
+    );
+    expect(message).toContain("keeping its source and other options");
+    expect(message).toContain("complete the plugin command first, then retry Doctor or setup");
     expect(message).not.toContain("plugins enable");
   });
 });
