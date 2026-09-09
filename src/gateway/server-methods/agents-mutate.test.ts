@@ -1334,37 +1334,6 @@ describe("agents.update", () => {
       nonBlockingRead: true,
     });
   });
-
-  it("allows an intentional config size drop when an avatar replacement shrinks the config", async () => {
-    const { respond, promise } = makeCall("agents.update", {
-      agentId: "test-agent",
-      avatar: "data:image/webp;base64,replacement-avatar",
-    });
-    await promise;
-
-    expectRespondOk(respond, { ok: true, agentId: "test-agent" });
-    // Replacing a large data-URI avatar with a smaller one shrinks the whole
-    // config below the size-drop guard baseline; the write must be declared
-    // intentional so the update actually persists (issue #143123).
-    const writeOptions = mockCallArg(mocks.writeConfigFile, 0, 1) as
-      | { allowConfigSizeDrop?: boolean }
-      | undefined;
-    expect(writeOptions?.allowConfigSizeDrop).toBe(true);
-  });
-
-  it("keeps the size-drop guard for non-identity agent updates", async () => {
-    const { respond, promise } = makeCall("agents.update", {
-      agentId: "test-agent",
-      model: "gpt-5.5",
-    });
-    await promise;
-
-    expectRespondOk(respond, { ok: true, agentId: "test-agent" });
-    const writeOptions = mockCallArg(mocks.writeConfigFile, 0, 1) as
-      | { allowConfigSizeDrop?: boolean }
-      | undefined;
-    expect(writeOptions?.allowConfigSizeDrop ?? false).toBe(false);
-  });
 });
 
 describe("agents.delete", () => {

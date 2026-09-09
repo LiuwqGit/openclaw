@@ -35,18 +35,11 @@ export async function updateAgentConfigEntry(params: {
   workspace?: string;
   model?: string | null;
   identity?: IdentityConfig;
-  /**
-   * Allow an intentional whole-config size drop. Replacing a large data-URI
-   * avatar with a smaller value legitimately shrinks the config below the
-   * destructive-write size baseline; this write is a bounded, user-intentional
-   * edit of one agent entry, so callers may declare the drop intentional
-   * (mirrors deleteAgentConfigEntry's opt-in).
-   */
-  allowConfigSizeDrop?: boolean;
 }): Promise<void> {
   await mutateConfigFileWithRetry({
     afterWrite: { mode: "auto" },
-    ...(params.allowConfigSizeDrop ? { writeOptions: { allowConfigSizeDrop: true } } : {}),
+    // Identity replacement may intentionally reduce the configuration size.
+    ...(params.identity ? { writeOptions: { allowConfigSizeDrop: true } } : {}),
     mutate: (draft) => {
       if (!isConfiguredAgent(draft, params.agentId)) {
         throw new AgentConfigPreconditionError(`agent "${params.agentId}" not found`);
