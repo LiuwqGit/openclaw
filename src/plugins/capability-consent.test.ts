@@ -548,7 +548,7 @@ describe("plugin capability consent", () => {
     expect(error).toMatchObject({ capabilityConsent: { pluginId: "plugin" } });
     const message = error instanceof Error ? error.message : String(error);
     expect(message).toContain("The plugin was not installed");
-    expect(message).toContain("Re-run this install with --accept-capabilities");
+    expect(message).toContain("Re-run the original command with --accept-capabilities");
     // The fresh artifact was never published, so an enable command cannot find it.
     expect(message).not.toContain("plugins enable");
   });
@@ -581,7 +581,7 @@ describe("plugin capability consent", () => {
     expect(error).toMatchObject({ capabilityConsent: { pluginId: "plugin" } });
     const message = error instanceof Error ? error.message : String(error);
     expect(message).toContain("The plugin was not updated");
-    expect(message).toContain("Re-run this update with --accept-capabilities");
+    expect(message).toContain("Re-run the original command with --accept-capabilities");
     expect(message).not.toContain("plugins enable");
   });
 });
