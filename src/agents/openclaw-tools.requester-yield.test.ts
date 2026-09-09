@@ -18,6 +18,7 @@ function seedRequiredChild(requesterSessionKey = CRON_RUN_KEY): SubagentRunRecor
     runId: "run-child",
     childSessionKey: "agent:main:subagent:child",
     requesterSessionKey,
+    requesterDisplayKey: requesterSessionKey,
     requesterAgentId: "main",
     requesterTurnRunId: "run-requester",
     task: "child work",
