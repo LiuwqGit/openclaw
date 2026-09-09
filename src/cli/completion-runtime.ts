@@ -214,6 +214,7 @@ function isPreviousCompletionSourceLine(
   }
   const sourcePaths = sourcePath.includes("\\") ? path.win32 : path;
   return (
+    sourcePaths.isAbsolute(sourcePath) &&
     sourcePaths.basename(sourcePaths.dirname(sourcePath)) === "completions" &&
     sourcePaths.basename(sourcePath) === path.basename(currentCachePath)
   );
@@ -280,20 +281,18 @@ function isPortableCompletionSourceLine(
   if (PORTABLE_PATH_UNSAFE.test(suffix) || suffix === "") {
     return false;
   }
-  const trimmed = line.trim();
+  const trimmed = line.replace(/^[ \t]+|[ \t]+$/gu, "");
   let guardOperand: string | undefined;
   let sourceOperand: string | undefined;
   if (shell === "fish") {
-    const hook = /^test\s+-f\s+(.+?)\s*;\s*and\s+source\s+(.+)$/u.exec(trimmed);
+    const hook = /^test[ \t]+-f[ \t]+(.+?)[ \t]*;[ \t]*and[ \t]+source[ \t]+(.+)$/u.exec(trimmed);
     guardOperand = hook?.[1];
     sourceOperand = hook?.[2];
   } else {
-    // The closing bracket must be a whitespace-delimited token: Bash requires it to be
-    // a separate argument, so guards like `[ -f "$HOME/cache.bash"]` are syntax errors
-    // and must never count as installed.
+    // Shell token separators are spaces and tabs, not JavaScript's Unicode whitespace.
     const hook =
-      /^\[\s+-f\s+(.+?)\s+\]\s*&&\s+source\s+(.+)$/u.exec(trimmed) ??
-      /^\[\[\s+-f\s+(.+?)\s+\]\]\s*&&\s+source\s+(.+)$/u.exec(trimmed);
+      /^\[[ \t]+-f[ \t]+(.+?)[ \t]+\][ \t]*&&[ \t]+source[ \t]+(.+)$/u.exec(trimmed) ??
+      /^\[\[[ \t]+-f[ \t]+(.+?)[ \t]+\]\][ \t]*&&[ \t]+source[ \t]+(.+)$/u.exec(trimmed);
     guardOperand = hook?.[1];
     sourceOperand = hook?.[2];
   }
@@ -375,15 +374,17 @@ function updateCompletionProfile(
   const filtered: string[] = [];
   let hadExisting = false;
   let portableCoversCurrent = false;
-  let removedOwnedLine = false;
 
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i] ?? "";
     if (isCompletionProfileHeader(line)) {
-      hadExisting = true;
-      removedOwnedLine = true;
-      // An orphaned marker owns no following user line; remove only a recognized source line.
       const following = lines[i + 1] ?? "";
+      if (isPortableCompletionSourceLine(following, shell, cachePath, homeDir)) {
+        filtered.push(line);
+        continue;
+      }
+      hadExisting = true;
+      // An orphaned marker owns no following user line; remove only a recognized source line.
       if (
         isCompletionProfileLine(following, binName, cachePath) ||
         isPreviousCompletionSourceLine(following, cachePath, shell)
@@ -394,7 +395,6 @@ function updateCompletionProfile(
     }
     if (isCompletionProfileLine(line, binName, cachePath)) {
       hadExisting = true;
-      removedOwnedLine = true;
       continue;
     }
     if (isPortableCompletionSourceLine(line, shell, cachePath, homeDir)) {
@@ -407,13 +407,11 @@ function updateCompletionProfile(
     filtered.push(line);
   }
 
-  const trimmed = filtered.join("\n").trimEnd();
   if (portableCoversCurrent) {
-    // The user-managed portable hook already sources this cache script; appending the CLI's
-    // literal block would duplicate it and dirty dotfile-managed profiles.
-    const next = removedOwnedLine ? `${trimmed}\n` : content;
+    const next = filtered.join("\n");
     return { next, changed: next !== content, hadExisting };
   }
+  const trimmed = filtered.join("\n").trimEnd();
   const block = `# OpenClaw Completion\n${formatCompletionSourceLine(shell, cachePath)}`;
   const next = trimmed ? `${trimmed}\n\n${block}\n` : `${block}\n`;
   return { next, changed: next !== content, hadExisting };

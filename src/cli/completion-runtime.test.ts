@@ -855,6 +855,9 @@ describe("completion-runtime", () => {
     .each([
       '[[ -f "${HOME}/.openclaw/completions/openclaw.bash" ]] && source "${HOME}/.openclaw/completions/openclaw.bash"',
       '[ -f "$HOME/.openclaw/completions/openclaw.bash" ] && source "$HOME/.openclaw/completions/openclaw.bash"',
+      '# OpenClaw Completion\n[[ -f "${HOME}/.openclaw/completions/openclaw.bash" ]] && source "${HOME}/.openclaw/completions/openclaw.bash"',
+      '# OpenClaw Completion\n[ -f "$HOME/.openclaw/completions/openclaw.bash" ] && source "$HOME/.openclaw/completions/openclaw.bash"',
+      '[\t-f\t"$HOME/.openclaw/completions/openclaw.bash"\t]&& source "$HOME/.openclaw/completions/openclaw.bash"\t',
     ])(
     "preserves a managed portable Bash hook byte-for-byte across installs: %s",
     async (portableHook) => {
@@ -1025,50 +1028,17 @@ describe("completion-runtime", () => {
 
   it
     .skipIf(process.platform === "win32")
-    .each([
-      '[ -f "$HOME/.openclaw/completions/openclaw.bash"] && source "$HOME/.openclaw/completions/openclaw.bash"',
-      '[[ -f "${HOME}/.openclaw/completions/openclaw.bash"]] && source "${HOME}/.openclaw/completions/openclaw.bash"',
-    ])(
-    "does not claim a malformed portable guard whose closing bracket is not a separate token: %s",
-    async (brokenHook) => {
-      const homeDir = tempDirs.make("openclaw-bash-broken-guard-home-");
-      const stateDir = path.join(homeDir, ".openclaw");
-      await withEnvAsync(
-        {
-          HOME: homeDir,
-          OPENCLAW_STATE_DIR: stateDir,
-          XDG_CONFIG_HOME: undefined,
-          ZDOTDIR: undefined,
-        },
-        async () => {
-          const profilePath = path.join(homeDir, ".bashrc");
-          const cachePath = resolveCompletionCachePath("bash", "openclaw");
-          await fs.mkdir(path.dirname(cachePath), { recursive: true });
-          await fs.writeFile(cachePath, "complete -W 'status' openclaw\n", "utf-8");
-          await fs.writeFile(profilePath, `${brokenHook}\n`, "utf-8");
-
-          await expect(isCompletionInstalled("bash", "openclaw")).resolves.toBe(false);
-
-          await installCompletion("bash", true, "openclaw");
-
-          const profile = await fs.readFile(profilePath, "utf8");
-          expect(profile).toContain(`${brokenHook}\n`);
-          expect(profile).toContain("# OpenClaw Completion");
-          expect(profile).toContain(cachePath);
-          await expect(isCompletionInstalled("bash", "openclaw")).resolves.toBe(true);
-        },
-      );
-    },
-  );
-
-  it
-    .skipIf(process.platform === "win32")
-    .each([
-      '[ -f "$HOME/.openclaw/completions/openclaw.bash"] && source "$HOME/.openclaw/completions/openclaw.bash"',
-      '[[ -f "${HOME}/.openclaw/completions/openclaw.bash"]] && source "${HOME}/.openclaw/completions/openclaw.bash"',
-    ])(
-    "keeps a working literal install beside a malformed portable guard: %s",
-    async (brokenHook) => {
+    .each(
+      [
+        '[ -f "$HOME/.openclaw/completions/openclaw.bash"] && source "$HOME/.openclaw/completions/openclaw.bash"',
+        '[[ -f "${HOME}/.openclaw/completions/openclaw.bash"]] && source "${HOME}/.openclaw/completions/openclaw.bash"',
+        '[ -f "$HOME/.openclaw/completions/openclaw.bash"\u00a0] && source "$HOME/.openclaw/completions/openclaw.bash"',
+        '\u00a0[ -f "$HOME/.openclaw/completions/openclaw.bash" ] && source "$HOME/.openclaw/completions/openclaw.bash"',
+        '[ -f "$HOME/.other/completions/openclaw.bash" ] && source "$HOME/.other/completions/openclaw.bash"',
+      ].flatMap((brokenHook) => [false, true].map((marked) => ({ brokenHook, marked }))),
+    )(
+    "preserves unrecognized portable hooks across literal installs (marked=$marked): $brokenHook",
+    async ({ brokenHook, marked }) => {
       const homeDir = tempDirs.make("openclaw-bash-broken-guard-literal-home-");
       const stateDir = path.join(homeDir, ".openclaw");
       await withEnvAsync(
@@ -1083,9 +1053,12 @@ describe("completion-runtime", () => {
           const cachePath = resolveCompletionCachePath("bash", "openclaw");
           await fs.mkdir(path.dirname(cachePath), { recursive: true });
           await fs.writeFile(cachePath, "complete -W 'status' openclaw\n", "utf-8");
-          // The malformed guard alone must not count as installed, so the first
-          // install appends the CLI's literal block on top of it.
-          await fs.writeFile(profilePath, `${brokenHook}\n`, "utf-8");
+          await fs.writeFile(
+            profilePath,
+            `${marked ? "# OpenClaw Completion\n" : ""}${brokenHook}\n`,
+            "utf-8",
+          );
+          await expect(isCompletionInstalled("bash", "openclaw")).resolves.toBe(false);
           await installCompletion("bash", true, "openclaw");
           const first = await fs.readFile(profilePath, "utf8");
           expect(first).toContain(`${brokenHook}\n`);
@@ -1093,8 +1066,6 @@ describe("completion-runtime", () => {
           expect(first).toContain(cachePath);
           await expect(isCompletionInstalled("bash", "openclaw")).resolves.toBe(true);
 
-          // A later install must keep the working literal block instead of removing
-          // it and leaving only the malformed portable guard behind.
           await installCompletion("bash", true, "openclaw");
           await expect(fs.readFile(profilePath, "utf8")).resolves.toBe(first);
         },
