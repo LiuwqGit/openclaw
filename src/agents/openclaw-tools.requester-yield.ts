@@ -1,13 +1,7 @@
 import { isCronSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
 
-/**
- * Isolated automation (cron) requesters are never woken by requester settle
- * (see subagent-announce.requester-settle-wake), so an accepted yield would
- * strand the turn: yield intent is recorded, the run finalizes before required
- * descendants settle, and the continuation never arrives (#135282).
- */
 const ISOLATED_AUTOMATION_YIELD_UNSUPPORTED_ERROR =
-  "Isolated automation turns do not support sessions_yield because no continuation owner resumes this session. Keep required child work bounded in this turn; spawned descendants deliver output through the scheduler-owned completion wait.";
+  "Isolated automation turns cannot use sessions_yield because no requester continuation is available. Finish this turn so the scheduler can handle child output under the job's delivery policy.";
 
 type YieldCompletionClaim = () =>
   | boolean
@@ -20,10 +14,7 @@ export function createRequesterYieldCallback(params: {
   requesterTurnRunId?: string;
   claimYieldCompletion?: () => boolean | Promise<boolean>;
 }): YieldCompletionClaim | undefined {
-  // Backstop: createOpenClawTools does not assemble sessions_yield for cron
-  // requesters at all (the capability is unavailable, not merely rejected), so
-  // this lifecycle-boundary rejection guards against any future
-  // re-introduction path recording a stranded durable yield intent.
+  // Requester settlement never resumes cron. Reject before checking claims or writing yield intent.
   if (isCronSessionKey(params.requesterSessionKey)) {
     return () => ({ error: ISOLATED_AUTOMATION_YIELD_UNSUPPORTED_ERROR });
   }

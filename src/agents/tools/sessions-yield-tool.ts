@@ -10,7 +10,6 @@ import { jsonResult, readToolStringParam } from "./common.js";
 const NO_PENDING_CHILD_COMPLETION_ERROR =
   "No pending child completion is owned by this turn. Continue working because independent background operations complete separately.";
 
-/** Claim result: `true` accepts the yield; `false` keeps the generic error; a reason object rejects with that error. */
 type SessionsYieldClaimResult = boolean | { error: string };
 
 const SessionsYieldToolSchema = Type.Object({
@@ -51,20 +50,15 @@ export function createSessionsYieldTool(opts?: {
       }
       const claim = await opts.claimYield?.();
       if (claim !== true) {
-        const rejectionError =
-          typeof claim === "object" && claim !== null && claim.error
-            ? claim.error
-            : NO_PENDING_CHILD_COMPLETION_ERROR;
         return jsonResult({
           status: "error",
-          error: rejectionError,
+          error: typeof claim === "object" ? claim.error : NO_PENDING_CHILD_COMPLETION_ERROR,
         });
       }
       // The runtime owns the actual pause/end-turn behavior; this tool records intent.
       await opts.onYield(message, acknowledgment);
       return jsonResult({
         status: "yielded",
-        message,
         ...(acknowledgment ? { acknowledgment } : {}),
       });
     },

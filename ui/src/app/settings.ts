@@ -4,12 +4,7 @@ import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
-import {
-  DEFAULT_SIDEBAR_ENTRIES,
-  isPersistedSidebarRoute,
-  normalizeSidebarEntries,
-  serializeSidebarEntry,
-} from "../app-navigation.ts";
+import { DEFAULT_SIDEBAR_ENTRIES, normalizeSidebarEntries } from "../app-navigation.ts";
 import { isSupportedLocale } from "../i18n/index.ts";
 import { normalizeBoardSessionViews, type BoardSessionViews } from "../lib/board/settings.ts";
 import { getSafeLocalStorage, getSafeSessionStorage } from "../local-storage.ts";
@@ -74,21 +69,6 @@ const CSS_WIDTH_IDENTIFIER_RE = /[A-Za-z][A-Za-z0-9-]*/g;
 const CSS_WIDTH_SIMPLE_RE = /^(?:\d+(?:\.\d+)?|\.\d+)(?:px|rem|em|ch|vw|vh|vmin|vmax|%)$/i;
 const CSS_WIDTH_MAX_LENGTH = 96;
 
-function hasBalancedParentheses(value: string): boolean {
-  let depth = 0;
-  for (const char of value) {
-    if (char === "(") {
-      depth++;
-    } else if (char === ")") {
-      depth--;
-      if (depth < 0) {
-        return false;
-      }
-    }
-  }
-  return depth === 0;
-}
-
 function hasAllowedWidthIdentifiers(value: string): boolean {
   for (const match of value.matchAll(CSS_WIDTH_IDENTIFIER_RE)) {
     const identifier = match[0].toLowerCase();
@@ -119,7 +99,7 @@ export function normalizeChatMessageMaxWidth(value: unknown): string | undefined
   }
   if (
     !CSS_WIDTH_ALLOWED_CHARS.test(normalized) ||
-    !hasBalancedParentheses(normalized) ||
+    !CSS.supports("max-width", normalized) ||
     !hasAllowedWidthIdentifiers(normalized)
   ) {
     return undefined;
@@ -199,6 +179,7 @@ export const UI_APPEARANCE_DEFAULTS = {
 
 export type UiSettings = {
   gatewayUrl: string;
+  // In-memory Gateway secret; only token-mode hello may persist it.
   token: string;
   sessionKey: string;
   lastActiveSessionKey: string;
@@ -229,7 +210,7 @@ export type UiSettings = {
   sidebarSessionActivePanels?: SidebarSessionActivePanels; // Collapsed active panel per session
   navCollapsed: boolean; // Collapsible sidebar state
   navWidth: number; // Sidebar width when expanded (240–400px)
-  sidebarEntries: string[]; // Ordered routes, Workboard boards, and pinned sessions below Home
+  sidebarEntries: string[]; // Ordered routes, plugin navigation, and pinned sessions below Home
   sidebarLiveActivity?: boolean; // Latest activity under running sidebar sessions (default true)
   chatMessageMaxWidth?: string; // Browser-local centered chat transcript max width
   showAdvancedSettings?: boolean; // Expand advanced schema settings (default false)
@@ -520,15 +501,8 @@ export function loadUiPreferences(targetGatewayUrl?: string): UiPreferences {
       ? null
       : Array.isArray(parsedRecord.sidebarPinnedRoutes)
         ? normalizeSidebarEntries(
-            parsedRecord.sidebarPinnedRoutes.flatMap((value) =>
-              isPersistedSidebarRoute(value)
-                ? [
-                    serializeSidebarEntry({
-                      type: "route",
-                      route: value,
-                    }),
-                  ]
-                : [],
+            parsedRecord.sidebarPinnedRoutes.map((value) =>
+              typeof value === "string" ? `route:${value}` : value,
             ),
           )
         : null;
@@ -664,7 +638,6 @@ export function loadLocalUserIdentity(): LocalUserIdentity {
 }
 
 function persistSettings(next: UiSettings, options: { selectGateway?: boolean } = {}) {
-  persistSessionToken(next.gatewayUrl, next.token);
   const storage = getSafeLocalStorage();
   const scope = gatewayOriginScope(next.gatewayUrl);
   const scopedKey = settingsKeyForGateway(next.gatewayUrl);
