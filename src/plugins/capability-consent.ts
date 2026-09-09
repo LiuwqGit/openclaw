@@ -105,7 +105,10 @@ function acceptManagedPluginDeclaredSurface<T extends PluginInstallRecord>(
   return accepted;
 }
 
-function throwManagedPluginCapabilityConsentRequired(review: PluginCapabilityConsentReview): never {
+function throwManagedPluginCapabilityConsentRequired(
+  review: PluginCapabilityConsentReview,
+  recovery: string,
+): never {
   pendingPluginCapabilityReviews.delete(review.pluginId);
   pendingPluginCapabilityReviews.set(review.pluginId, review);
   if (pendingPluginCapabilityReviews.size > 32) {
@@ -115,7 +118,7 @@ function throwManagedPluginCapabilityConsentRequired(review: PluginCapabilityCon
     }
   }
   throw new ManagedPluginLifecycleError(
-    `Plugin "${review.pluginId}" requires capability consent. Use openclaw plugins install or openclaw plugins enable with --accept-capabilities, then retry.`,
+    `Plugin "${review.pluginId}" requires capability consent. ${recovery}`,
     {
       capabilityConsent: {
         pluginId: review.pluginId,
@@ -125,6 +128,26 @@ function throwManagedPluginCapabilityConsentRequired(review: PluginCapabilityCon
       },
     },
   );
+}
+
+/**
+ * Recovery for consent rejection of an already-installed plugin whose enable/
+ * activation was interrupted: an enable command can find the installed plugin.
+ */
+function formatInstalledPluginConsentRecovery(pluginId: string): string {
+  return `Run "openclaw plugins enable ${pluginId} --accept-capabilities" to accept its capabilities.`;
+}
+
+/**
+ * Recovery for consent rejection before a staged artifact is published. The
+ * plugin is not installed yet (or keeps its previous version on update), so an
+ * enable command cannot find it; the interrupted install/update must be retried
+ * with the explicit flag instead.
+ */
+function formatUnpublishedArtifactConsentRecovery(mode: "install" | "update"): string {
+  return mode === "update"
+    ? "The plugin was not updated. Re-run this update with --accept-capabilities to accept its capabilities."
+    : "The plugin was not installed. Re-run this install with --accept-capabilities to accept its capabilities.";
 }
 
 /** Enforce and durably acknowledge consent before an installed plugin is enabled. */
@@ -194,7 +217,10 @@ export async function resolvePluginCapabilityConsent(params: {
     }
     const acknowledgment = params.acknowledge ?? (await params.onCapabilityConsent?.(review));
     if (!acknowledgment) {
-      throwManagedPluginCapabilityConsentRequired(review);
+      throwManagedPluginCapabilityConsentRequired(
+        review,
+        formatInstalledPluginConsentRecovery(pluginId),
+      );
     }
     await params.beforePersistentEffect?.();
     const records = await loadInstalledPluginIndexInstallRecords({ env });
@@ -216,7 +242,10 @@ export async function resolvePluginCapabilityConsent(params: {
     });
     // Consent callbacks yield; reread the artifact surface before recording acceptance.
     if (acknowledgment.reviewToken !== currentReview.reviewToken) {
-      throwManagedPluginCapabilityConsentRequired(currentReview);
+      throwManagedPluginCapabilityConsentRequired(
+        currentReview,
+        formatInstalledPluginConsentRecovery(pluginId),
+      );
     }
     await writePersistedInstalledPluginIndexInstallRecordsWithLease(
       {
@@ -314,7 +343,10 @@ async function resolvePluginArtifactCapabilityConsent(params: {
             declared: finalDeclared,
             ...(params.previousDeclared ? { previousDeclared: params.previousDeclared } : {}),
           });
-    return throwManagedPluginCapabilityConsentRequired(finalReview);
+    return throwManagedPluginCapabilityConsentRequired(
+      finalReview,
+      formatUnpublishedArtifactConsentRecovery(params.mode ?? "install"),
+    );
   }
   pendingPluginCapabilityReviews.delete(params.pluginId);
   // Provenance alone is not operator acceptance; an explicit review is.

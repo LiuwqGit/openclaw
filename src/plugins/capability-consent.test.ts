@@ -525,4 +525,63 @@ describe("plugin capability consent", () => {
       }),
     ).rejects.toMatchObject({ capabilityConsent: { pluginId: "plugin" } });
   });
+
+  it("directs a fresh install consent rejection to retry install, not enable", async () => {
+    const rootDir = createArtifactFixture({
+      "package.json": { openclaw: { extensions: ["./index.js"] } },
+      "index.js": "export {};",
+      "openclaw.plugin.json": { id: "plugin", configSchema: { type: "object" } },
+    });
+    const consent = createManagedPluginArtifactConsentHandler({
+      config: {},
+      source: "clawhub",
+      spec: "clawhub:@openviking/openclaw-plugin",
+    });
+
+    const error: unknown = await consent
+      .onBeforePluginArtifactCommit({
+        pluginId: "plugin",
+        stagedArtifactDir: rootDir,
+        mode: "install",
+      })
+      .catch((caught: unknown) => caught);
+    expect(error).toMatchObject({ capabilityConsent: { pluginId: "plugin" } });
+    const message = error instanceof Error ? error.message : String(error);
+    expect(message).toContain("The plugin was not installed");
+    expect(message).toContain("Re-run this install with --accept-capabilities");
+    // The fresh artifact was never published, so an enable command cannot find it.
+    expect(message).not.toContain("plugins enable");
+  });
+
+  it("directs an update consent rejection to retry update, not enable", async () => {
+    const rootDir = createArtifactFixture({
+      "package.json": { openclaw: { extensions: ["./index.js"] } },
+      "index.js": "export {};",
+      "openclaw.plugin.json": {
+        id: "plugin",
+        contracts: { tools: ["read"] },
+        configSchema: { type: "object" },
+      },
+    });
+    const consent = createManagedPluginArtifactConsentHandler({
+      config: {},
+      source: "npm",
+      previousRecords: {
+        plugin: { source: "npm", installPath: rootDir },
+      },
+    });
+
+    const error: unknown = await consent
+      .onBeforePluginArtifactCommit({
+        pluginId: "plugin",
+        stagedArtifactDir: rootDir,
+        mode: "update",
+      })
+      .catch((caught: unknown) => caught);
+    expect(error).toMatchObject({ capabilityConsent: { pluginId: "plugin" } });
+    const message = error instanceof Error ? error.message : String(error);
+    expect(message).toContain("The plugin was not updated");
+    expect(message).toContain("Re-run this update with --accept-capabilities");
+    expect(message).not.toContain("plugins enable");
+  });
 });
