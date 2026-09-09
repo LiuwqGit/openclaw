@@ -19,8 +19,8 @@ const configMocks = vi.hoisted(() => {
   return {
     readConfigFileSnapshot: vi.fn(),
     writeConfigFile,
-    replaceConfigFile: vi.fn(async (params: { sourceConfig: unknown }) => {
-      await writeConfigFile(params.sourceConfig);
+    replaceConfigFile: vi.fn(async (params: { sourceConfig: unknown; writeOptions?: unknown }) => {
+      await writeConfigFile(params.sourceConfig, params.writeOptions);
       return { nextConfig: params.sourceConfig };
     }),
   };
@@ -337,6 +337,35 @@ describe("agents set-identity command", () => {
     expect(getWrittenMainIdentity()).toEqual({
       avatar: "https://example.com/avatar.png",
     });
+  });
+
+  it("declares an intentional size drop when replacing an avatar", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue(
+      createTestConfigSnapshot({
+        agents: {
+          entries: {
+            main: {
+              identity: {
+                avatar: `data:image/webp;base64,${"A".repeat(200_000)}`,
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    await agentsSetIdentityCommand({ agent: "main", avatar: "avatars/replacement.png" }, runtime);
+
+    expect(getWrittenMainIdentity()).toEqual({
+      avatar: "avatars/replacement.png",
+    });
+    // Replacing a large data-URI avatar shrinks the whole config below the
+    // size-drop guard baseline; set-identity writes must opt into the
+    // intentional-shrink allowance so the avatar update persists (issue #143123).
+    const [, writeOptions] = configMocks.writeConfigFile.mock.calls[0] ?? [];
+    expect(
+      (writeOptions as { allowConfigSizeDrop?: boolean } | undefined)?.allowConfigSizeDrop,
+    ).toBe(true);
   });
 
   it.each(["ghostzzz", "агент✨", "   "])(

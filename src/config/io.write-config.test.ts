@@ -1234,6 +1234,58 @@ describe("config io write", () => {
   );
 
   itWithHome(
+    "rejects avatar replacement that shrinks the config unless the drop is declared intentional",
+    async (home) => {
+      const configPath = configPathForHome(home);
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      const bigAvatar = "data:image/webp;base64," + "A".repeat(200_000);
+      const smallAvatar = "data:image/webp;base64,SMALL";
+      const original = {
+        meta: { lastTouchedVersion: "2026.9.3" },
+        gateway: { mode: "local" },
+        agents: {
+          entries: {
+            main: {
+              default: true,
+              identity: { avatar: bigAvatar },
+            },
+          },
+        },
+      } satisfies ConfigFileSnapshot["config"];
+      await fs.writeFile(configPath, formatConfig(original), "utf-8");
+      const io = createHomeConfigIO(home, {
+        env: { VITEST: "true" } as NodeJS.ProcessEnv,
+      });
+      const snapshot = await io.readConfigFileSnapshot();
+      expect(snapshot.valid).toBe(true);
+
+      const replacement = {
+        ...original,
+        agents: {
+          entries: {
+            main: {
+              default: true,
+              identity: { avatar: smallAvatar },
+            },
+          },
+        },
+      };
+      await expectConfigWriteRejected(io.writeConfigFile(replacement, { baseSnapshot: snapshot }));
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toContain("A".repeat(200_000));
+      await expect(fs.readFile(configPath, "utf-8")).resolves.not.toContain(smallAvatar);
+
+      await expect(
+        io.writeConfigFile(replacement, {
+          allowConfigSizeDrop: true,
+          baseSnapshot: snapshot,
+        }),
+      ).resolves.toBeDefined();
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toContain(smallAvatar);
+      await expect(fs.readFile(configPath, "utf-8")).resolves.not.toContain("A".repeat(200_000));
+    },
+  );
+
+  itWithHome(
     "keeps authored agent provider params during narrowed internal agent writes",
     async (home) => {
       const configPath = configPathForHome(home);

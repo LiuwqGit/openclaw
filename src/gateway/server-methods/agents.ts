@@ -944,6 +944,10 @@ export const agentsHandlers: GatewayRequestHandlers = {
       ...(workspaceDir ? { workspace: workspaceDir } : {}),
       ...(model !== undefined ? { model } : {}),
       ...(identity ? { identity } : {}),
+      // Replacing a large data-URI avatar shrinks the whole config below the
+      // size-drop guard baseline; identity updates are bounded, intentional
+      // edits, so declare the drop intentional (issue #143123).
+      allowConfigSizeDrop: hasIdentityFields,
     };
     const nextConfig = applyAgentConfig(cfg, agentConfigUpdate);
 

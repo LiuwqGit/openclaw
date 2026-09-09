@@ -165,6 +165,14 @@ export async function agentsSetIdentityCommand(
   const committed = await replaceConfigFile({
     ...writeSnapshot,
     sourceConfig: nextConfig,
+    // Replacing a large data-URI avatar shrinks the whole config below the
+    // size-drop guard baseline; set-identity is a bounded, intentional identity
+    // edit, so preserve the read-time write options and declare the drop
+    // intentional (issue #143123).
+    writeOptions: {
+      ...writeSnapshot.writeOptions,
+      allowConfigSizeDrop: true,
+    },
   });
 
   const committedEntry = expectDefined(
