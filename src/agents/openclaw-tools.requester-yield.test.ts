@@ -1,6 +1,10 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { createOpenClawTools } from "./openclaw-tools.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { createOpenClawCodingTools } from "./agent-tools.js";
 import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.js";
 import { markRequesterTurnYieldedInRuns } from "./subagents/registry/subagent-registry-requester-yield.js";
 import {
@@ -34,16 +38,14 @@ function seedRequiredChild(requesterSessionKey = CRON_RUN_KEY): SubagentRunRecor
 }
 
 function createTestOpenClawTools(
-  options: NonNullable<Parameters<typeof createOpenClawTools>[0]> = {},
+  options: NonNullable<Parameters<typeof createOpenClawCodingTools>[0]> = {},
 ) {
-  return createOpenClawTools({
+  return createOpenClawCodingTools({
     ...options,
     config: {
       ...options.config,
       agents: options.config?.agents ?? { entries: { main: { default: true } } },
     } satisfies OpenClawConfig,
-    disableMessageTool: true,
-    disablePluginTools: true,
     wrapBeforeToolCallHook: false,
   });
 }
@@ -110,7 +112,7 @@ describe("requester yield ownership", () => {
     seedRequiredChild();
     const before = structuredClone(getSubagentRunByRunId("run-child"));
     const tools = createTestOpenClawTools({
-      agentSessionKey: "agent:main:telegram:default:direct:1234",
+      sessionKey: "agent:main:telegram:default:direct:1234",
       runSessionKey: CRON_RUN_KEY,
       sessionId: "cron-requester-session",
       runId: "run-requester",
@@ -123,7 +125,7 @@ describe("requester yield ownership", () => {
 
   it("omits yield when only the controller identity is cron", () => {
     const tools = createTestOpenClawTools({
-      agentSessionKey: "agent:main:cron:daily-report",
+      sessionKey: "agent:main:cron:daily-report",
       sessionId: "cron-controller-session",
       runId: "run-requester",
     });
@@ -140,7 +142,7 @@ describe("requester yield ownership", () => {
       expect(getSubagentRunByRunId("run-child")?.requesterTurnYielded).toBe(true);
     });
     const tool = createTestOpenClawTools({
-      agentSessionKey,
+      sessionKey: agentSessionKey,
       sessionId: "requester-session",
       runId: "run-requester",
       onYield,
@@ -172,6 +174,59 @@ describe("requester yield ownership", () => {
         status: test.accepted ? "yielded" : "error",
       });
       expect(onYield).toHaveBeenCalledTimes(test.accepted ? 1 : 0);
+    },
+  );
+
+  it.each([
+    { policy: { profile: "coding" as const }, runtime: undefined, allowed: true },
+    {
+      policy: { profile: "coding" as const, deny: ["sessions_yield"] },
+      runtime: undefined,
+      allowed: false,
+    },
+    { policy: { allow: ["read", "sessions_spawn"] }, runtime: undefined, allowed: false },
+    { policy: { profile: "coding" as const }, runtime: ["read", "sessions_spawn"], allowed: false },
+  ])(
+    "preserves child yield authorization under $policy / $runtime",
+    async ({ policy, runtime, allowed }) => {
+      const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "cron-yield-policy-"));
+      try {
+        const storePath = path.join(workspace, "sessions.json");
+        const config: OpenClawConfig = {
+          agents: { entries: { main: { default: true, workspace } } },
+          session: { store: storePath },
+          tools: policy,
+        };
+        const inheritedToolAllowlistRef: string[] = [];
+        const parent = createTestOpenClawTools({
+          config,
+          sessionKey: CRON_RUN_KEY,
+          inheritedToolAllowlistRef,
+          runtimeToolAllowlist: runtime,
+          inheritRuntimeToolAllowlist: true,
+        });
+        expect(parent.map((tool) => tool.name)).not.toContain("sessions_yield");
+        expect(inheritedToolAllowlistRef.includes("sessions_yield")).toBe(allowed);
+        const childSessionKey = "agent:main:subagent:policy-child";
+        await replaceSessionEntry(
+          { agentId: "main", sessionKey: childSessionKey, storePath },
+          {
+            sessionId: "policy-child",
+            updatedAt: 1000,
+            spawnedBy: CRON_RUN_KEY,
+            spawnDepth: 1,
+            inheritedToolPolicyVersion: 1,
+            inheritedToolAllow: inheritedToolAllowlistRef,
+          },
+        );
+        const child = createTestOpenClawTools({
+          config: { ...config, tools: { profile: "coding" } },
+          sessionKey: childSessionKey,
+        });
+        expect(child.some((tool) => tool.name === "sessions_yield")).toBe(allowed);
+      } finally {
+        await fs.rm(workspace, { recursive: true, force: true });
+      }
     },
   );
 
