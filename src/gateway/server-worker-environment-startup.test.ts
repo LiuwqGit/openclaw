@@ -403,6 +403,64 @@ describe("gateway worker environment startup", () => {
           message: STALE_WORKER_BUILD_REASON,
         });
         expect(carrierInvocations).toBe(launchesBeforeStale);
+        // Recovery after redispatch: reconcile refuses the stale delivery and
+        // redelivers the session, which on the durable store creates a fresh
+        // record bootstrapped against the current bundle (the same seed shape the
+        // original current record used). On this same runtime and store, the
+        // redispatched record's desktop launch succeeds while the stale record
+        // keeps refusing.
+        const redispatchIntent = startup.store.createIntent({
+          environmentId: "node-desktop-redispatched-environment",
+          providerId: "fake-provider",
+          profileId: "desktop-profile",
+          profileSnapshot: { settings: { desktop: true } },
+          provisionOperationId: "provision:node-desktop-redispatched-environment",
+        });
+        const redispatchProvisioning = startup.store.transition({
+          environmentId: redispatchIntent.environmentId,
+          from: redispatchIntent.state,
+          to: "provisioning",
+        });
+        const redispatchedRecord = startup.store.transition({
+          environmentId: redispatchProvisioning.environmentId,
+          from: redispatchProvisioning.state,
+          to: "ready",
+          patch: {
+            leaseId: "node-desktop-redispatched-lease",
+            nodeDeviceId: nodeId,
+            sshEndpoint: null,
+            sharedHost: true,
+            desktop: { protocol: "rfb", port: 5900, apps: [app] },
+            bootstrapReceipt: {
+              bundleHash: "a".repeat(64),
+              openclawVersion: "2026.8.14",
+              protocolFeatures: ["worker-heartbeat-v1"],
+              installKind: "bundle",
+            },
+            credential: {
+              credentialHash: hashWorkerCredential("node-desktop-redispatched-credential"),
+              sessionId: null,
+              rpcSetVersion: 1,
+              expiresAtMs: Date.now() + 60_000,
+            },
+          },
+        });
+        await expect(
+          service.launchDesktopApp({
+            environmentId: redispatchedRecord.environmentId,
+            app: "terminal",
+          }),
+        ).resolves.toEqual({ app: "terminal", status: "ready" });
+        expect(carrierInvocations).toBe(launchesBeforeStale + 1);
+        await expect(
+          service.launchDesktopApp({
+            environmentId: staleRecord.environmentId,
+            app: "terminal",
+          }),
+        ).rejects.toMatchObject({
+          code: "invalid_state",
+          message: STALE_WORKER_BUILD_REASON,
+        });
       } finally {
         await service.stop();
       }
