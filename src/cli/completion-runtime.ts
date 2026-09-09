@@ -219,6 +219,92 @@ function isPreviousCompletionSourceLine(
   );
 }
 
+const PORTABLE_HOOK_SHELLS: ReadonlySet<CompletionShell> = new Set(["bash", "zsh", "fish"]);
+
+/** Characters that would change meaning if a literal shell operand were expanded or globbed. */
+const PORTABLE_PATH_UNSAFE = /[\s"'`$\\|&;<>()*?[\]{}]/u;
+
+/**
+ * Expands a guarded-source operand that is a portable `$HOME`-rooted path, or returns undefined
+ * when the operand is not one of the supported safe forms. The operand may be double-quoted or
+ * unquoted; single quotes prevent expansion and are never treated as portable. Expansion is
+ * purely textual (`${HOME}`/`$HOME` token + literal suffix); nothing is evaluated.
+ */
+function expandPortableHomeOperand(
+  operand: string,
+  homeDir: string,
+  shell: CompletionShell,
+): string | undefined {
+  const doubleQuoted = operand.length >= 2 && operand.startsWith('"') && operand.endsWith('"');
+  const inner = doubleQuoted ? operand.slice(1, -1) : operand;
+  if (doubleQuoted ? inner.includes('"') : /["'`]/u.test(inner)) {
+    return undefined;
+  }
+  if (!doubleQuoted && PORTABLE_PATH_UNSAFE.test(homeDir)) {
+    // An unquoted ${HOME} prefix would be split or globbed for such homes.
+    return undefined;
+  }
+  const token = shell === "fish" ? "$HOME" : inner.startsWith("${HOME}") ? "${HOME}" : "$HOME";
+  if (!inner.startsWith(token)) {
+    return undefined;
+  }
+  const suffix = inner.slice(token.length);
+  if (PORTABLE_PATH_UNSAFE.test(suffix)) {
+    return undefined;
+  }
+  return suffix.startsWith("/") ? `${homeDir}${suffix}` : undefined;
+}
+
+/**
+ * Recognizes a user-managed portable completion hook such as
+ * `[[ -f "${HOME}/.openclaw/completions/openclaw.bash" ]] && source "${HOME}/.openclaw/completions/openclaw.bash"`.
+ * Dotfile managers own these lines, so recognition is kept separate from rewrite ownership:
+ * portable hooks are never deleted or rewritten by the installer. The anchored parser only
+ * accepts guarded forms whose guard and source operands both expand to the current cache path;
+ * compound commands and mismatched paths are left alone.
+ */
+function isPortableCompletionSourceLine(
+  line: string,
+  shell: CompletionShell,
+  cachePath: string,
+  homeDir: string,
+): boolean {
+  if (!PORTABLE_HOOK_SHELLS.has(shell)) {
+    return false;
+  }
+  const homePrefix = homeDir.endsWith(path.sep) ? homeDir : `${homeDir}${path.sep}`;
+  if (!cachePath.startsWith(homePrefix)) {
+    return false;
+  }
+  const suffix = cachePath.slice(homePrefix.length);
+  if (PORTABLE_PATH_UNSAFE.test(suffix) || suffix === "") {
+    return false;
+  }
+  const trimmed = line.trim();
+  let guardOperand: string | undefined;
+  let sourceOperand: string | undefined;
+  if (shell === "fish") {
+    const hook = /^test\s+-f\s+(.+?)\s*;\s*and\s+source\s+(.+)$/u.exec(trimmed);
+    guardOperand = hook?.[1];
+    sourceOperand = hook?.[2];
+  } else {
+    // The closing bracket must be a whitespace-delimited token: Bash requires it to be
+    // a separate argument, so guards like `[ -f "$HOME/cache.bash"]` are syntax errors
+    // and must never count as installed.
+    const hook =
+      /^\[\s+-f\s+(.+?)\s+\]\s*&&\s+source\s+(.+)$/u.exec(trimmed) ??
+      /^\[\[\s+-f\s+(.+?)\s+\]\]\s*&&\s+source\s+(.+)$/u.exec(trimmed);
+    guardOperand = hook?.[1];
+    sourceOperand = hook?.[2];
+  }
+  return (
+    guardOperand !== undefined &&
+    sourceOperand !== undefined &&
+    expandPortableHomeOperand(guardOperand, homeDir, shell) === cachePath &&
+    expandPortableHomeOperand(sourceOperand, homeDir, shell) === cachePath
+  );
+}
+
 function isOwnedCompletionInvocation(invocation: string, binName: string): boolean {
   const [command, action, ...args] = invocation.trim().split(/\s+/u);
   if (command !== binName || action !== "completion") {
@@ -281,16 +367,21 @@ function updateCompletionProfile(
   binName: string,
   cachePath: string,
   shell: CompletionShell,
+  homeDir: string,
 ): { next: string; changed: boolean; hadExisting: boolean } {
-  // Remove both cached and old dynamic blocks so installs converge to one fast source line.
+  // Remove both cached and old dynamic blocks so installs converge to one fast source line,
+  // while preserving user-managed portable hooks byte-for-byte.
   const lines = content.split("\n");
   const filtered: string[] = [];
   let hadExisting = false;
+  let portableCoversCurrent = false;
+  let removedOwnedLine = false;
 
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i] ?? "";
     if (isCompletionProfileHeader(line)) {
       hadExisting = true;
+      removedOwnedLine = true;
       // An orphaned marker owns no following user line; remove only a recognized source line.
       const following = lines[i + 1] ?? "";
       if (
@@ -303,12 +394,26 @@ function updateCompletionProfile(
     }
     if (isCompletionProfileLine(line, binName, cachePath)) {
       hadExisting = true;
+      removedOwnedLine = true;
+      continue;
+    }
+    if (isPortableCompletionSourceLine(line, shell, cachePath, homeDir)) {
+      // A portable hook for the current cache counts as configured and stays untouched.
+      hadExisting = true;
+      portableCoversCurrent = true;
+      filtered.push(line);
       continue;
     }
     filtered.push(line);
   }
 
   const trimmed = filtered.join("\n").trimEnd();
+  if (portableCoversCurrent) {
+    // The user-managed portable hook already sources this cache script; appending the CLI's
+    // literal block would duplicate it and dirty dotfile-managed profiles.
+    const next = removedOwnedLine ? `${trimmed}\n` : content;
+    return { next, changed: next !== content, hadExisting };
+  }
   const block = `# OpenClaw Completion\n${formatCompletionSourceLine(shell, cachePath)}`;
   const next = trimmed ? `${trimmed}\n\n${block}\n` : `${block}\n`;
   return { next, changed: next !== content, hadExisting };
@@ -429,10 +534,16 @@ export async function isCompletionInstalled(
     return false;
   }
   const cachePath = resolveCompletionCachePath(shell, binName);
+  const homeDir = process.env.HOME || os.homedir();
   const { content } = await readCompletionProfile(profilePath, shell);
   const lines = content.split("\n");
   // A marker does not install completion; retain missing-cache source lines for doctor repair.
-  return lines.some((line) => isCompletionProfileLine(line, binName, cachePath));
+  // Managed portable hooks for the same cache script count as installed but are never rewritten.
+  return lines.some(
+    (line) =>
+      isCompletionProfileLine(line, binName, cachePath) ||
+      isPortableCompletionSourceLine(line, shell, cachePath, homeDir),
+  );
 }
 
 /**
@@ -479,6 +590,7 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
   }
 
   const profilePath = resolveCompletionProfilePath(shell);
+  const homeDir = process.env.HOME || os.homedir();
 
   try {
     let content: string;
@@ -495,7 +607,7 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
       content = "";
     }
 
-    const update = updateCompletionProfile(content, binName, cachePath, shell);
+    const update = updateCompletionProfile(content, binName, cachePath, shell, homeDir);
     if (!update.changed) {
       if (!yes) {
         console.log(`Completion already installed in ${profilePath}`);
