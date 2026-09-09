@@ -28,6 +28,8 @@ import {
   loadGatewayWorkerEnvironmentStartupState,
 } from "./server-worker-environment-startup.js";
 import { withPreparedNodeAcknowledgement } from "./server-worker-environment-startup.prepared.test-support.js";
+import { STALE_WORKER_BUILD_REASON } from "./worker-environments/admission.js";
+import type { WorkerBundleProducer } from "./worker-environments/bundle.js";
 import { hashWorkerCredential } from "./worker-environments/credential.js";
 import {
   DEVICE_WORKER_PROVIDER_ID,
@@ -289,22 +291,42 @@ describe("gateway worker environment startup", () => {
         workerHost: { enabled: true, capacity: { total: 1, available: 0 } },
         commands: [],
       };
+      let carrierInvocations = 0;
       const transport: NodeWorkerSupervisorTransport = {
         listCurrentNodes: async () => [proof],
         hasCurrentRunner: (candidateNodeId) => candidateNodeId === proof.nodeId,
         isCurrent: () => true,
         invoke: async (request) => {
+          carrierInvocations += 1;
           expect(request.isDispatchAuthorized()).toBe(true);
           return { ok: true, payloadJSON: '{"status":"ready"}' };
         },
       };
       const registry = createEmptyPluginRegistry();
+      // The runtime resolves the current worker build identity through the bundle
+      // producer. Tests run from an unpackaged checkout, so supply a producer that
+      // returns the same identity the seeded record bootstrapped with; admission
+      // otherwise refuses desktop launch with "Current worker build identity is
+      // unavailable" before the node carrier is reached.
+      const workerBundleProducer: WorkerBundleProducer = {
+        prepare: async () => ({
+          install: "bundle",
+          bundleHash: "a".repeat(64),
+          openclawVersion: "2026.8.14",
+          protocolFeatures: ["worker-heartbeat-v1"],
+          tarballBytes: 1,
+          tarballSha256: "b".repeat(64),
+          tarballPath: "/gateway/cache/worker-bundle.tgz",
+        }),
+        prune: async () => {},
+      };
       const runtime = await createGatewayWorkerEnvironmentRuntime({
         getPluginRegistry: () => registry,
         getPortalRuntime: () => undefined,
         resolveGatewayContext: () => undefined,
         desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
         nodeDesktopStreamBroker: createNodeDesktopStreamBroker(),
+        workerBundleProducer,
         startup,
         log: { child: () => ({ warn: () => {} }) },
       });
@@ -332,6 +354,55 @@ describe("gateway worker environment startup", () => {
         await expect(
           service.launchDesktopApp({ environmentId: record.environmentId, app: "terminal" }),
         ).resolves.toEqual({ app: "terminal", status: "ready" });
+        const launchesBeforeStale = carrierInvocations;
+        // A sibling environment bootstrapped against a superseded bundle is refused
+        // at admission time, before the node carrier's launchApp is reached.
+        const staleIntent = startup.store.createIntent({
+          environmentId: "node-desktop-stale-environment",
+          providerId: "fake-provider",
+          profileId: "desktop-profile",
+          profileSnapshot: { settings: { desktop: true } },
+          provisionOperationId: "provision:node-desktop-stale-environment",
+        });
+        const staleProvisioning = startup.store.transition({
+          environmentId: staleIntent.environmentId,
+          from: staleIntent.state,
+          to: "provisioning",
+        });
+        const staleRecord = startup.store.transition({
+          environmentId: staleProvisioning.environmentId,
+          from: staleProvisioning.state,
+          to: "ready",
+          patch: {
+            leaseId: "node-desktop-stale-lease",
+            nodeDeviceId: nodeId,
+            sshEndpoint: null,
+            sharedHost: true,
+            desktop: { protocol: "rfb", port: 5900, apps: [app] },
+            bootstrapReceipt: {
+              bundleHash: "c".repeat(64),
+              openclawVersion: "2026.8.14",
+              protocolFeatures: ["worker-heartbeat-v1"],
+              installKind: "bundle",
+            },
+            credential: {
+              credentialHash: hashWorkerCredential("node-desktop-stale-credential"),
+              sessionId: null,
+              rpcSetVersion: 1,
+              expiresAtMs: Date.now() + 60_000,
+            },
+          },
+        });
+        await expect(
+          service.launchDesktopApp({
+            environmentId: staleRecord.environmentId,
+            app: "terminal",
+          }),
+        ).rejects.toMatchObject({
+          code: "invalid_state",
+          message: STALE_WORKER_BUILD_REASON,
+        });
+        expect(carrierInvocations).toBe(launchesBeforeStale);
       } finally {
         await service.stop();
       }
