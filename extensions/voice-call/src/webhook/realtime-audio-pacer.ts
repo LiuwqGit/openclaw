@@ -1,4 +1,5 @@
 // Realtime telephony audio pacing for mulaw streams.
+import { randomUUID } from "node:crypto";
 
 const TELEPHONY_SAMPLE_RATE = 8_000;
 const TELEPHONY_CHUNK_BYTES = 160;
@@ -58,10 +59,11 @@ export class RealtimeAudioPacer {
   private streamClockMs: number | null = null;
   private playbackSegments: RealtimePlaybackSegment[] = [];
   private sentAudioMs = 0;
-  private evictedSentMs = 0;
+  private retiredAudioMs = 0;
   private confirmedPlayedMs = 0;
-  private playedFrontierMs = 0;
-  private frontierAtMs: number | null = null;
+  private readonly playbackMarkPrefix = `openclaw-playout-${randomUUID()}`;
+  private playbackMarkSequence = 0;
+  private lastPlaybackMarkMs = 0;
   private markBoundaries: RealtimeMarkBoundary[] = [];
   private retiredItemOffsets = new Map<string, number>();
 
@@ -113,17 +115,21 @@ export class RealtimeAudioPacer {
    * Queued audio has not reached the telephony line, so unplayed items report zero.
    */
   getPlaybackState(): { itemId: string; audioEndMs: number }[] {
-    let remaining = Math.max(0, this.consumedPlayoutMs() - this.evictedSentMs);
-    const items: { itemId: string; audioEndMs: number }[] = [];
+    let remaining = Math.max(0, this.confirmedPlayedMs - this.retiredAudioMs);
+    const playedByItem = new Map<string, number>();
     for (const segment of this.playbackSegments) {
       const consumed = Math.min(remaining, segment.sentMs);
       remaining -= consumed;
       if (segment.itemId !== undefined) {
-        const retiredOffsetMs = this.retiredItemOffsets.get(segment.itemId) ?? 0;
-        items.push({ itemId: segment.itemId, audioEndMs: Math.floor(consumed + retiredOffsetMs) });
+        const previousMs =
+          playedByItem.get(segment.itemId) ?? this.retiredItemOffsets.get(segment.itemId) ?? 0;
+        playedByItem.set(segment.itemId, previousMs + consumed);
       }
     }
-    return items;
+    return Array.from(playedByItem, ([itemId, audioEndMs]) => ({
+      itemId,
+      audioEndMs: Math.floor(audioEndMs),
+    }));
   }
 
   /** Queue a provider mark frame after prior audio frames. */
@@ -150,16 +156,20 @@ export class RealtimeAudioPacer {
     if (!boundary) {
       return;
     }
-    // Retire every segment whose sent frames all landed before the mark; the
-    // FIFO send order guarantees no retired segment receives more frames later.
+    // Progress marks can confirm a prefix while the same item still has queued audio.
     while (this.playbackSegments.length > 0) {
       const head = this.playbackSegments[0];
-      if (!head || head.lastSentEndMs === undefined || head.lastSentEndMs > boundary.sentMs) {
+      if (
+        !head ||
+        head.sentMs < head.totalMs ||
+        head.lastSentEndMs === undefined ||
+        head.lastSentEndMs > boundary.sentMs
+      ) {
         break;
       }
       const retired = this.playbackSegments.shift();
       if (retired) {
-        this.evictedSentMs += retired.sentMs;
+        this.retiredAudioMs += retired.sentMs;
         // Providers may resume the same item after a chunk acknowledgement;
         // keep its cumulative played offset so later snapshots do not restart
         // at zero.
@@ -203,28 +213,6 @@ export class RealtimeAudioPacer {
     this.resetPlaybackState();
   }
 
-  /** Milliseconds of sent audio the telephony edge can already have played. */
-  private consumedPlayoutMs(): number {
-    // One continuous playout frontier: played duration advances with wall
-    // clock while sent audio exists, so lead windows, stacked bursts, drained
-    // tails, and resumed pacing all share the same conservative estimate.
-    this.advancePlayedFrontier(performance.now());
-    return Math.min(this.sentAudioMs, Math.max(this.playedFrontierMs, this.confirmedPlayedMs));
-  }
-
-  /** Advance the played frontier to `now`, capped at what was actually sent. */
-  private advancePlayedFrontier(now: number): void {
-    if (this.frontierAtMs === null) {
-      this.frontierAtMs = now;
-      return;
-    }
-    this.playedFrontierMs = Math.min(
-      this.sentAudioMs,
-      this.playedFrontierMs + Math.max(0, now - this.frontierAtMs),
-    );
-    this.frontierAtMs = now;
-  }
-
   private extendPlaybackSegment(
     itemId: string | undefined,
     durationMs: number,
@@ -232,12 +220,7 @@ export class RealtimeAudioPacer {
     let segment = this.playbackSegments.at(-1);
     if (!segment || segment.itemId !== itemId) {
       if (this.playbackSegments.length >= MAX_PLAYBACK_SEGMENTS) {
-        // Admission control: the retention bound may only release segments
-        // that fully reached the line and were fully played out. Live
-        // segments stay authoritative for provider truncation accounting.
-        if (!this.retireFullyPlayedHeadSegment()) {
-          return null;
-        }
+        return null;
       }
       segment = { itemId, totalMs: 0, sentMs: 0 };
       this.playbackSegments.push(segment);
@@ -246,47 +229,13 @@ export class RealtimeAudioPacer {
     return segment;
   }
 
-  /**
-   * Drop the head playback segment when every frame has been sent and its
-   * playout is fully consumed. Returns false while queued or unplayed frames
-   * keep the segment live, so the caller tears down through the backpressure
-   * path instead of silently evicting a live item's playback identity.
-   */
-  private retireFullyPlayedHeadSegment(): boolean {
-    const head = this.playbackSegments[0];
-    if (!head) {
-      return true;
-    }
-    if (head.sentMs < head.totalMs) {
-      return false;
-    }
-    const playoutBudgetMs = Math.max(0, this.consumedPlayoutMs() - this.evictedSentMs);
-    if (playoutBudgetMs < head.sentMs) {
-      return false;
-    }
-    const retired = this.playbackSegments.shift();
-    if (retired) {
-      this.evictedSentMs += retired.sentMs;
-      // Keep the cumulative offset like mark retirement so a later generation
-      // of the same item does not restart its snapshot at zero.
-      if (retired.itemId !== undefined) {
-        this.retiredItemOffsets.set(
-          retired.itemId,
-          (this.retiredItemOffsets.get(retired.itemId) ?? 0) + retired.sentMs,
-        );
-      }
-    }
-    return true;
-  }
-
   private resetPlaybackState(): void {
     this.playbackSegments = [];
     this.queuedAudioBytes = 0;
     this.sentAudioMs = 0;
-    this.evictedSentMs = 0;
+    this.retiredAudioMs = 0;
     this.confirmedPlayedMs = 0;
-    this.playedFrontierMs = 0;
-    this.frontierAtMs = null;
+    this.lastPlaybackMarkMs = 0;
     this.markBoundaries = [];
     this.retiredItemOffsets.clear();
     this.streamClockMs = null;
@@ -380,14 +329,25 @@ export class RealtimeAudioPacer {
     this.queuedAudioBytes = Math.max(0, this.queuedAudioBytes - item.chunk.length);
     const sent = this.params.send(this.params.serializer.media(item.chunk.toString("base64")));
     if (sent) {
-      // Advance the frontier before the new frames count as sent.
-      this.advancePlayedFrontier(performance.now());
       item.segment.sentMs += item.durationMs;
       this.sentAudioMs += item.durationMs;
       item.segment.lastSentEndMs = this.sentAudioMs;
     }
     this.streamClockMs = (this.streamClockMs ?? performance.now()) + item.durationMs;
-    return sent;
+    if (
+      !sent ||
+      item.segment.itemId === undefined ||
+      this.sentAudioMs - this.lastPlaybackMarkMs < LEAD_MS
+    ) {
+      return sent;
+    }
+    // Confirm playout during long provider chunks, before their final provider mark.
+    this.lastPlaybackMarkMs = this.sentAudioMs;
+    this.playbackMarkSequence += 1;
+    return this.sendMarkItem({
+      type: "mark",
+      name: `${this.playbackMarkPrefix}-${this.playbackMarkSequence}`,
+    });
   }
 
   /** Send a queued mark frame and bind it to the playback prefix before it. */

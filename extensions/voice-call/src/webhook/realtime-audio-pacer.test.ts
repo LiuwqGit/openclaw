@@ -41,6 +41,29 @@ function inspectQueue(pacer: RealtimeAudioPacer): { length: number; head: number
   return { length: state.queue.length, head: state.queueHead };
 }
 
+function readSentMarks(sent: string[]): { name: string; audioEndMs: number }[] {
+  let audioEndMs = 0;
+  const marks: { name: string; audioEndMs: number }[] = [];
+  for (const message of sent) {
+    if (message.startsWith("mark:")) {
+      marks.push({ name: message.slice("mark:".length), audioEndMs });
+    } else if (message === "clear") {
+      audioEndMs = 0;
+    } else {
+      audioEndMs += Buffer.from(message, "base64").length / 8;
+    }
+  }
+  return marks;
+}
+
+function sentMarkAt(sent: string[], audioEndMs: number): string {
+  const mark = readSentMarks(sent).find((entry) => entry.audioEndMs === audioEndMs);
+  if (!mark) {
+    throw new Error(`No sent carrier mark follows ${audioEndMs} ms of audio`);
+  }
+  return mark.name;
+}
+
 describe("RealtimeAudioPacer", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -276,8 +299,8 @@ describe("RealtimeAudioPacer playout state", () => {
     return { pacer, sent };
   }
 
-  it("reports retained items with consumed playout duration in playback order", async () => {
-    const { pacer } = createPlaybackPacer();
+  it("reports zero until carrier receipts confirm a retained item's played prefix", async () => {
+    const { pacer, sent } = createPlaybackPacer();
 
     pacer.sendAudio(createSequencedAudio(30), { itemId: "item-a" });
     pacer.sendAudio(createSequencedAudio(20), { itemId: "item-b" });
@@ -288,39 +311,73 @@ describe("RealtimeAudioPacer playout state", () => {
       { itemId: "item-b", audioEndMs: 0 },
     ]);
 
-    // 600 ms later the pace has sent 760 ms; only 600 ms can have played out.
     await vi.advanceTimersByTimeAsync(600);
     expect(pacer.getPlaybackState()).toEqual([
-      { itemId: "item-a", audioEndMs: 600 },
+      { itemId: "item-a", audioEndMs: 0 },
       { itemId: "item-b", audioEndMs: 0 },
     ]);
 
-    await vi.advanceTimersByTimeAsync(20 * 20 + 500);
+    pacer.acknowledgeMark(sentMarkAt(sent, 480));
+    expect(pacer.getPlaybackState()).toEqual([
+      { itemId: "item-a", audioEndMs: 480 },
+      { itemId: "item-b", audioEndMs: 0 },
+    ]);
+
+    await vi.advanceTimersByTimeAsync(1_000);
     expect(pacer.hasPendingAudio()).toBe(false);
     expect(pacer.getPlaybackState()).toEqual([
-      { itemId: "item-a", audioEndMs: 600 },
-      { itemId: "item-b", audioEndMs: 400 },
+      { itemId: "item-a", audioEndMs: 480 },
+      { itemId: "item-b", audioEndMs: 0 },
     ]);
+    pacer.acknowledgeMark(sentMarkAt(sent, 960));
+    expect(pacer.getPlaybackState()).toEqual([{ itemId: "item-b", audioEndMs: 360 }]);
   });
 
   it("merges consecutive chunks of the same provider item", async () => {
-    const { pacer } = createPlaybackPacer();
+    const { pacer, sent } = createPlaybackPacer();
 
     pacer.sendAudio(createSequencedAudio(4), { itemId: "item-a" });
     pacer.sendAudio(createSequencedAudio(6), { itemId: "item-a" });
     await vi.advanceTimersByTimeAsync(1_000);
 
-    expect(pacer.getPlaybackState()).toEqual([{ itemId: "item-a", audioEndMs: 200 }]);
+    pacer.acknowledgeMark(sentMarkAt(sent, 160));
+    expect(pacer.getPlaybackState()).toEqual([{ itemId: "item-a", audioEndMs: 160 }]);
+  });
+
+  it("reports one cumulative offset when an item resumes after another item", async () => {
+    const { pacer, sent } = createPlaybackPacer();
+
+    pacer.sendAudio(createSequencedAudio(30), { itemId: "item-a" });
+    pacer.sendAudio(createSequencedAudio(20), { itemId: "item-b" });
+    pacer.sendAudio(createSequencedAudio(10), { itemId: "item-a" });
+    await vi.advanceTimersByTimeAsync(300);
+    pacer.acknowledgeMark(sentMarkAt(sent, 160));
+
+    expect(pacer.getPlaybackState()).toEqual([
+      { itemId: "item-a", audioEndMs: 160 },
+      { itemId: "item-b", audioEndMs: 0 },
+    ]);
+
+    await vi.advanceTimersByTimeAsync(860);
+    pacer.acknowledgeMark(sentMarkAt(sent, 1120));
+    expect(pacer.getPlaybackState()).toEqual([{ itemId: "item-a", audioEndMs: 720 }]);
   });
 
   it("consumes playout time for untracked audio without reporting it", async () => {
-    const { pacer } = createPlaybackPacer();
+    const { pacer, sent } = createPlaybackPacer();
 
     pacer.sendAudio(createSequencedAudio(10));
     pacer.sendAudio(createSequencedAudio(20), { itemId: "item-a" });
     await vi.advanceTimersByTimeAsync(1_000);
 
-    expect(pacer.getPlaybackState()).toEqual([{ itemId: "item-a", audioEndMs: 400 }]);
+    const mark = readSentMarks(sent).find((entry) => entry.audioEndMs > 200);
+    if (!mark) {
+      throw new Error("No progress mark follows the anonymous audio prefix");
+    }
+    pacer.acknowledgeMark(mark.name);
+    expect(pacer.getPlaybackState()).toEqual([
+      { itemId: "item-a", audioEndMs: mark.audioEndMs - 200 },
+    ]);
   });
 
   it("drops playout state when queued audio is cleared or closed", async () => {
@@ -328,7 +385,7 @@ describe("RealtimeAudioPacer playout state", () => {
 
     pacer.sendAudio(createSequencedAudio(20), { itemId: "item-a" });
     await vi.advanceTimersByTimeAsync(400);
-    expect(pacer.getPlaybackState()).toEqual([{ itemId: "item-a", audioEndMs: 400 }]);
+    expect(pacer.getPlaybackState()).toEqual([{ itemId: "item-a", audioEndMs: 0 }]);
 
     pacer.clearAudio();
     expect(pacer.getPlaybackState()).toEqual([]);
@@ -338,8 +395,8 @@ describe("RealtimeAudioPacer playout state", () => {
     expect(pacer.getPlaybackState()).toEqual([]);
   });
 
-  it("keeps the drained carrier lead unplayed until the playout frontier passes it", async () => {
-    const { pacer } = createPlaybackPacer();
+  it("keeps the drained carrier lead unconfirmed until its played mark arrives", async () => {
+    const { pacer, sent } = createPlaybackPacer();
 
     // One lead window drains synchronously; the carrier edge still buffers it.
     pacer.sendAudio(createSequencedAudio(8), { itemId: "item-a" });
@@ -347,10 +404,12 @@ describe("RealtimeAudioPacer playout state", () => {
     expect(pacer.getPlaybackState()).toEqual([{ itemId: "item-a", audioEndMs: 0 }]);
 
     await vi.advanceTimersByTimeAsync(80);
-    expect(pacer.getPlaybackState()).toEqual([{ itemId: "item-a", audioEndMs: 80 }]);
+    expect(pacer.getPlaybackState()).toEqual([{ itemId: "item-a", audioEndMs: 0 }]);
 
     await vi.advanceTimersByTimeAsync(80);
-    expect(pacer.getPlaybackState()).toEqual([{ itemId: "item-a", audioEndMs: 160 }]);
+    expect(pacer.getPlaybackState()).toEqual([{ itemId: "item-a", audioEndMs: 0 }]);
+    pacer.acknowledgeMark(sentMarkAt(sent, 160));
+    expect(pacer.getPlaybackState()).toEqual([]);
   });
 
   it("retires carrier-acknowledged playback before the next interruption", async () => {
@@ -361,14 +420,14 @@ describe("RealtimeAudioPacer playout state", () => {
     pacer.sendAudio(createSequencedAudio(10), { itemId: "item-b" });
     await vi.advanceTimersByTimeAsync(1_000);
     expect(pacer.getPlaybackState()).toEqual([
-      { itemId: "item-a", audioEndMs: 400 },
-      { itemId: "item-b", audioEndMs: 200 },
+      { itemId: "item-a", audioEndMs: 0 },
+      { itemId: "item-b", audioEndMs: 0 },
     ]);
 
     // Carrier confirms playout reached the mark: item-a leaves the snapshot so a
     // later interruption of item-b cannot truncate it again.
     pacer.acknowledgeMark("item-a-done");
-    expect(pacer.getPlaybackState()).toEqual([{ itemId: "item-b", audioEndMs: 200 }]);
+    expect(pacer.getPlaybackState()).toEqual([{ itemId: "item-b", audioEndMs: 0 }]);
   });
 
   it("treats a carrier mark acknowledgement as playout confirmation", async () => {
@@ -378,6 +437,7 @@ describe("RealtimeAudioPacer playout state", () => {
     pacer.sendMark("item-a-done");
     expect(pacer.getPlaybackState()).toEqual([{ itemId: "item-a", audioEndMs: 0 }]);
 
+    await vi.advanceTimersByTimeAsync(160);
     pacer.acknowledgeMark("item-a-done");
     expect(pacer.getPlaybackState()).toEqual([]);
   });
@@ -411,7 +471,7 @@ describe("RealtimeAudioPacer playout state", () => {
     // acknowledged offset instead of restarting at zero.
     pacer.sendAudio(createSequencedAudio(3), { itemId: "item-a" });
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(pacer.getPlaybackState()).toEqual([{ itemId: "item-a", audioEndMs: 260 }]);
+    expect(pacer.getPlaybackState()).toEqual([{ itemId: "item-a", audioEndMs: 200 }]);
   });
 
   it("retires every retained prefix confirmed by one mark", async () => {
@@ -422,42 +482,80 @@ describe("RealtimeAudioPacer playout state", () => {
     pacer.sendMark("both-played");
     await vi.advanceTimersByTimeAsync(1_000);
     expect(pacer.getPlaybackState()).toEqual([
-      { itemId: "item-a", audioEndMs: 100 },
-      { itemId: "item-b", audioEndMs: 100 },
+      { itemId: "item-a", audioEndMs: 0 },
+      { itemId: "item-b", audioEndMs: 0 },
     ]);
 
     pacer.acknowledgeMark("both-played");
     expect(pacer.getPlaybackState()).toEqual([]);
   });
 
-  it("carries the buffered lead forward when another short burst drains", async () => {
-    const { pacer } = createPlaybackPacer();
+  it("confirms only the first short burst when a later burst is still unacknowledged", async () => {
+    const { pacer, sent } = createPlaybackPacer();
 
     pacer.sendAudio(createSequencedAudio(8), { itemId: "item-a" });
     await vi.advanceTimersByTimeAsync(80);
     pacer.sendAudio(createSequencedAudio(8), { itemId: "item-a" });
 
-    // Only 80 ms of wall time has passed, so only 80 ms can have played even
-    // though both bursts drained synchronously.
-    expect(pacer.getPlaybackState()).toEqual([{ itemId: "item-a", audioEndMs: 80 }]);
+    expect(pacer.getPlaybackState()).toEqual([{ itemId: "item-a", audioEndMs: 0 }]);
 
     await vi.advanceTimersByTimeAsync(240);
-    expect(pacer.getPlaybackState()).toEqual([{ itemId: "item-a", audioEndMs: 320 }]);
+    pacer.acknowledgeMark(sentMarkAt(sent, 160));
+    expect(pacer.getPlaybackState()).toEqual([{ itemId: "item-a", audioEndMs: 160 }]);
+    pacer.acknowledgeMark(sentMarkAt(sent, 320));
+    expect(pacer.getPlaybackState()).toEqual([]);
   });
 
-  it("carries outstanding playback through a resumed paced burst", async () => {
-    const { pacer } = createPlaybackPacer();
+  it("keeps queued frames attached to their item after a partial progress receipt", async () => {
+    const { pacer, sent } = createPlaybackPacer();
 
     pacer.sendAudio(createSequencedAudio(8), { itemId: "item-a" });
     await vi.advanceTimersByTimeAsync(80);
-    // A larger burst resumes pacing instead of draining synchronously; the
-    // frontier must still only claim the 80 ms that could have played.
     pacer.sendAudio(createSequencedAudio(20), { itemId: "item-a" });
     expect(pacer.hasPendingAudio()).toBe(true);
-    expect(pacer.getPlaybackState()).toEqual([{ itemId: "item-a", audioEndMs: 80 }]);
+    expect(pacer.getPlaybackState()).toEqual([{ itemId: "item-a", audioEndMs: 0 }]);
+
+    await vi.advanceTimersByTimeAsync(80);
+    pacer.acknowledgeMark(sentMarkAt(sent, 160));
+    expect(pacer.hasPendingAudio()).toBe(true);
+    expect(pacer.getPlaybackState()).toEqual([{ itemId: "item-a", audioEndMs: 160 }]);
 
     await vi.advanceTimersByTimeAsync(400);
+    pacer.acknowledgeMark(sentMarkAt(sent, 480));
     expect(pacer.getPlaybackState()).toEqual([{ itemId: "item-a", audioEndMs: 480 }]);
+  });
+
+  it("does not retire an unfinished item when the carrier catches up to a delayed pump", async () => {
+    const { pacer, sent } = createPlaybackPacer();
+    const stalledClock = vi.spyOn(performance, "now").mockReturnValue(0);
+    try {
+      pacer.sendAudio(createSequencedAudio(30), { itemId: "item-a" });
+      const mark = sentMarkAt(sent, 160);
+
+      // The carrier plays the sent lead while the pump has no new clock tick.
+      await vi.advanceTimersByTimeAsync(160);
+      expect(sent.filter((message) => !message.startsWith("mark:"))).toHaveLength(8);
+      pacer.acknowledgeMark(mark);
+
+      expect(pacer.hasPendingAudio()).toBe(true);
+      expect(pacer.getPlaybackState()).toEqual([{ itemId: "item-a", audioEndMs: 160 }]);
+    } finally {
+      pacer.close();
+      stalledClock.mockRestore();
+    }
+  });
+
+  it("ignores a delayed progress receipt after clear when the same item resumes", async () => {
+    const { pacer, sent } = createPlaybackPacer();
+
+    pacer.sendAudio(createSequencedAudio(30), { itemId: "item-a" });
+    await vi.advanceTimersByTimeAsync(160);
+    const oldMark = sentMarkAt(sent, 160);
+    pacer.clearAudio();
+    pacer.sendAudio(createSequencedAudio(30), { itemId: "item-a" });
+    pacer.acknowledgeMark(oldMark);
+
+    expect(pacer.getPlaybackState()).toEqual([{ itemId: "item-a", audioEndMs: 0 }]);
   });
 
   it("fires the playback reset hook on every clear and close", async () => {
@@ -539,24 +637,45 @@ describe("RealtimeAudioPacer playback retention", () => {
     expect(onBackpressure).toHaveBeenCalledOnce();
   });
 
-  it("drops fully played segments at the retention limit without backpressure", async () => {
+  it("does not evict fully sent segments without receipts after elapsed playout time", async () => {
     const { pacer, onBackpressure } = createRetentionPolicyPacer();
 
-    // 128 distinct items whose audio is fully sent and played out.
     for (let index = 1; index <= 128; index += 1) {
       pacer.sendAudio(createSequencedAudio(1), { itemId: `item-${index}` });
     }
     await vi.advanceTimersByTimeAsync(128 * 20 + 500);
     expect(pacer.hasPendingAudio()).toBe(false);
+    expect(pacer.getPlaybackState()).toEqual(
+      Array.from({ length: 128 }, (_, index) => ({
+        itemId: `item-${index + 1}`,
+        audioEndMs: 0,
+      })),
+    );
 
-    // The head segment has been fully consumed, so the retention bound can
-    // release it and admit the 129th item without tearing the call down.
     pacer.sendAudio(createSequencedAudio(1), { itemId: "item-129" });
-    expect(onBackpressure).not.toHaveBeenCalled();
+    expect(onBackpressure).toHaveBeenCalledOnce();
+    expect(pacer.hasPendingAudio()).toBe(false);
+  });
 
-    const state = pacer.getPlaybackState();
-    expect(state).toHaveLength(128);
-    expect(state.at(0)).toEqual({ itemId: "item-2", audioEndMs: 20 });
-    expect(state.at(-1)).toEqual({ itemId: "item-129", audioEndMs: 0 });
+  it("reuses retention capacity only after receipts confirm completed prefixes", async () => {
+    const { pacer, sent, onBackpressure } = createRetentionPolicyPacer();
+
+    for (let index = 1; index <= 128; index += 1) {
+      pacer.sendAudio(createSequencedAudio(1), { itemId: `item-${index}` });
+    }
+    await vi.advanceTimersByTimeAsync(128 * 20 + 500);
+    pacer.acknowledgeMark(sentMarkAt(sent, 160));
+
+    expect(pacer.getPlaybackState()).toHaveLength(120);
+    expect(pacer.getPlaybackState().at(0)).toEqual({ itemId: "item-9", audioEndMs: 0 });
+    for (let index = 129; index <= 136; index += 1) {
+      pacer.sendAudio(createSequencedAudio(1), { itemId: `item-${index}` });
+    }
+    expect(onBackpressure).not.toHaveBeenCalled();
+    expect(pacer.getPlaybackState()).toHaveLength(128);
+    expect(pacer.getPlaybackState().at(-1)).toEqual({ itemId: "item-136", audioEndMs: 0 });
+
+    pacer.sendAudio(createSequencedAudio(1), { itemId: "item-137" });
+    expect(onBackpressure).toHaveBeenCalledOnce();
   });
 });
