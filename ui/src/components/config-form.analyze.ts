@@ -77,6 +77,11 @@ const RENDERABLE_UNION_TYPES = new Set([
   "object",
   "array",
 ]);
+// Only string scalars stay in a passthrough union beside literal branches: the
+// renderer's mixed-primitive path picks a text input only when a string
+// branch exists, and a numeric input cannot display or commit a boolean
+// sentinel, so number/integer unions stay in Raw mode.
+const PLAIN_UNION_STRING_TYPE = "string";
 
 function isAnySchema(schema: JsonSchema): boolean {
   const keys = Object.keys(schema ?? {}).filter((key) => !META_KEYS.has(key));
@@ -613,16 +618,34 @@ function normalizeUnion(
     const booleanBranch = remaining.length === 1 ? remaining[0] : undefined;
     const plainBooleanBranch =
       booleanBranch?.type === "boolean" && Object.keys(booleanBranch).length === 1;
-    if (
-      !plainBooleanBranch ||
-      literals.includes("true") ||
-      literals.includes("false") ||
-      (schema.anyOf === undefined && literals.some((literal) => typeof literal === "boolean"))
-    ) {
-      return null;
+    if (plainBooleanBranch) {
+      if (
+        literals.includes("true") ||
+        literals.includes("false") ||
+        (schema.anyOf === undefined && literals.some((literal) => typeof literal === "boolean"))
+      ) {
+        return null;
+      }
+      remaining.pop();
+      literals.unshift(true, false);
+    } else {
+      // A single plain string branch alongside literal branches (e.g. zod
+      // union([string(), literal(false)])) stays a passthrough union: the
+      // renderer's mixed-primitive path renders a text input and each edited
+      // candidate is coerced and validated against the original union schema.
+      // Non-string scalar branches keep Raw mode because their number input
+      // cannot represent the literal sentinels.
+      const scalarBranch = remaining.length === 1 ? remaining[0] : undefined;
+      const plainStringBranch =
+        scalarBranch?.type === PLAIN_UNION_STRING_TYPE && Object.keys(scalarBranch).length === 1;
+      if (!plainStringBranch || literals.includes("true") || literals.includes("false")) {
+        return null;
+      }
+      return {
+        schema: { ...schema, nullable },
+        unsupportedPaths: [],
+      };
     }
-    remaining.pop();
-    literals.unshift(true, false);
   }
 
   if (literals.length > 0 && remaining.length === 0) {

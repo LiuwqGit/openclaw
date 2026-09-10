@@ -337,7 +337,11 @@ describe("config form map integrity", () => {
         type: "object",
         properties: {
           name: { type: "string" },
-          retained: { anyOf: [{ type: "string" }, { const: false }] },
+          // A constrained string branch beside the literal keeps this union
+          // Raw-only even after plain string-sentinel unions became editable.
+          retained: {
+            anyOf: [{ type: "string", minLength: 1 }, { const: false }],
+          },
         },
       } satisfies JsonSchema;
       const collection = (name: string) =>

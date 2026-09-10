@@ -746,6 +746,65 @@ describe("config form renderer", () => {
     expect(analysis.unsupportedPaths).toEqual([]);
   });
 
+  it("renders literal-plus-scalar unions as text inputs", () => {
+    const onPatch = vi.fn();
+    const container = document.createElement("div");
+    const schema = {
+      type: "object",
+      properties: {
+        cron: {
+          type: "object",
+          properties: {
+            sessionRetention: {
+              title: "Automations Session Retention",
+              anyOf: [{ type: "string" }, { type: "boolean", const: false }],
+            },
+          },
+        },
+        strictTransportSecurity: {
+          title: "Strict Transport Security Header",
+          anyOf: [{ type: "string" }, { type: "boolean", const: false }],
+        },
+        retryOnLiteralTrue: {
+          anyOf: [{ type: "string" }, { type: "boolean", const: true }],
+        },
+      },
+    };
+    const analysis = analyzeConfigSchema(schema);
+    expect(analysis.unsupportedPaths).toEqual([]);
+
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        uiHints: {},
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: {
+          cron: { sessionRetention: false },
+          strictTransportSecurity: "max-age=63072000",
+          retryOnLiteralTrue: "1h",
+        },
+        onPatch,
+      }),
+      container,
+    );
+    expect(container.textContent).not.toContain("Unsupported schema node");
+
+    const inputs = Array.from(
+      container.querySelectorAll<HTMLInputElement>("input.settings-input[type='text']"),
+    );
+    const retentionInput = expectElement(
+      inputs.find((input) => input.value === "false"),
+      "session retention text input",
+    );
+    retentionInput.value = "7d";
+    retentionInput.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenLastCalledWith(["cron", "sessionRetention"], "7d");
+
+    retentionInput.value = "false";
+    retentionInput.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenLastCalledWith(["cron", "sessionRetention"], false);
+  });
+
   it("accepts transform-backed public config schema shapes", () => {
     const schema = {
       type: "object",

@@ -86,12 +86,18 @@ describe("config form composition integrity", () => {
     expect(unsupportedUnion.unsupportedPaths).toEqual(["mixed"]);
   });
 
-  it("renders finite boolean unions while keeping open typed unions in Raw mode", () => {
+  it("renders string-sentinel and finite boolean unions while keeping unrepresentable unions in Raw mode", () => {
     const analysis = analyzeConfigSchema({
       type: "object",
       properties: {
         retention: {
           anyOf: [{ type: "string" }, { const: false }],
+        },
+        numericRetention: {
+          anyOf: [{ type: "number" }, { type: "boolean", const: false }],
+        },
+        integerRetention: {
+          anyOf: [{ type: "integer" }, { const: false }],
         },
         guarded: {
           anyOf: [{ type: "boolean", not: { const: true } }, { const: "auto" }],
@@ -124,12 +130,15 @@ describe("config form composition integrity", () => {
     });
 
     expect(analysis.unsupportedPaths).toEqual([
-      "retention",
+      "numericRetention",
+      "integerRetention",
       "guarded",
       "nullableBoolean",
       "ambiguousBooleanLabel",
       "overlappingOneOf",
     ]);
+    // The retention union stays a passthrough: the mixed-primitive renderer
+    // owns display and every edit is validated against the original union.
     expect(analysis.schema?.properties?.retention).toMatchObject({
       anyOf: [{ type: "string" }, { const: false }],
     });
@@ -161,6 +170,15 @@ describe("config form composition integrity", () => {
       }),
       container,
     );
+
+    // The passthrough union renders through the mixed-primitive text input.
+    const retentionInput = Array.from(
+      container.querySelectorAll<HTMLInputElement>("input.settings-input[type='text']"),
+    ).find((input) => input.value === "30d");
+    expect(retentionInput).toBeDefined();
+    retentionInput!.value = "false";
+    retentionInput!.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenCalledWith(["retention"], false);
 
     const modeControl = [
       ...container.querySelectorAll<HTMLElement & { value: string }>(
