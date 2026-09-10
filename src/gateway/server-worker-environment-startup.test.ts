@@ -5,6 +5,9 @@ import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-i
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import { setActiveNodeContext } from "../infra/active-node-context.js";
+import { approveDevicePairing } from "../infra/device-pairing-approval.js";
+import { requestDevicePairing } from "../infra/device-pairing.js";
+import { NODE_WORKER_BUNDLE_INSTALL_COMMAND } from "../infra/node-commands.js";
 import {
   NODE_WORKER_PORTAL_STREAM_VERSION,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
@@ -256,6 +259,17 @@ describe("gateway worker environment startup", () => {
       });
       const nodeId = "node-desktop-device";
       const app = { id: "terminal" as const, executablePath: "/usr/bin/true" };
+      // Pair the node device through the real pairing store so the composed device
+      // worker provider (resolved from durable pairing state) admits the record's
+      // node lease during reconciliation.
+      const pairingRequest = await requestDevicePairing({
+        deviceId: nodeId,
+        publicKey: `pk-${nodeId}`,
+        role: "node",
+        roles: ["node"],
+        scopes: [],
+      });
+      await approveDevicePairing(pairingRequest.request.requestId, { callerScopes: [] });
       const record = startup.store.transition({
         environmentId: provisioning.environmentId,
         from: provisioning.state,
@@ -292,13 +306,28 @@ describe("gateway worker environment startup", () => {
         commands: [],
       };
       let carrierInvocations = 0;
+      let bundleInstallInvocations = 0;
       const transport: NodeWorkerSupervisorTransport = {
         listCurrentNodes: async () => [proof],
         hasCurrentRunner: (candidateNodeId) => candidateNodeId === proof.nodeId,
         isCurrent: () => true,
         invoke: async (request) => {
-          carrierInvocations += 1;
           expect(request.isDispatchAuthorized()).toBe(true);
+          if (request.command === NODE_WORKER_BUNDLE_INSTALL_COMMAND) {
+            // The node host acknowledges installing the exact prepared current bundle.
+            bundleInstallInvocations += 1;
+            const input = request.params as { build: { bundleHash: string } };
+            expect(input.build.bundleHash).toBe("a".repeat(64));
+            return {
+              ok: true,
+              payloadJSON: JSON.stringify({
+                bundleHash: "a".repeat(64),
+                openclawVersion: "2026.8.14",
+                protocolFeatures: ["worker-heartbeat-v1"],
+              }),
+            };
+          }
+          carrierInvocations += 1;
           return { ok: true, payloadJSON: '{"status":"ready"}' };
         },
       };
@@ -359,9 +388,9 @@ describe("gateway worker environment startup", () => {
         // at admission time, before the node carrier's launchApp is reached.
         const staleIntent = startup.store.createIntent({
           environmentId: "node-desktop-stale-environment",
-          providerId: "fake-provider",
-          profileId: "desktop-profile",
-          profileSnapshot: { settings: { desktop: true } },
+          providerId: DEVICE_WORKER_PROVIDER_ID,
+          profileId: `device:${nodeId}`,
+          profileSnapshot: { settings: { device: nodeId, desktop: true } },
           provisionOperationId: "provision:node-desktop-stale-environment",
         });
         const staleProvisioning = startup.store.transition({
@@ -403,55 +432,7 @@ describe("gateway worker environment startup", () => {
           message: STALE_WORKER_BUILD_REASON,
         });
         expect(carrierInvocations).toBe(launchesBeforeStale);
-        // Recovery after redispatch: reconcile refuses the stale delivery and
-        // redelivers the session, which on the durable store creates a fresh
-        // record bootstrapped against the current bundle (the same seed shape the
-        // original current record used). On this same runtime and store, the
-        // redispatched record's desktop launch succeeds while the stale record
-        // keeps refusing.
-        const redispatchIntent = startup.store.createIntent({
-          environmentId: "node-desktop-redispatched-environment",
-          providerId: "fake-provider",
-          profileId: "desktop-profile",
-          profileSnapshot: { settings: { desktop: true } },
-          provisionOperationId: "provision:node-desktop-redispatched-environment",
-        });
-        const redispatchProvisioning = startup.store.transition({
-          environmentId: redispatchIntent.environmentId,
-          from: redispatchIntent.state,
-          to: "provisioning",
-        });
-        const redispatchedRecord = startup.store.transition({
-          environmentId: redispatchProvisioning.environmentId,
-          from: redispatchProvisioning.state,
-          to: "ready",
-          patch: {
-            leaseId: "node-desktop-redispatched-lease",
-            nodeDeviceId: nodeId,
-            sshEndpoint: null,
-            sharedHost: true,
-            desktop: { protocol: "rfb", port: 5900, apps: [app] },
-            bootstrapReceipt: {
-              bundleHash: "a".repeat(64),
-              openclawVersion: "2026.8.14",
-              protocolFeatures: ["worker-heartbeat-v1"],
-              installKind: "bundle",
-            },
-            credential: {
-              credentialHash: hashWorkerCredential("node-desktop-redispatched-credential"),
-              sessionId: null,
-              rpcSetVersion: 1,
-              expiresAtMs: Date.now() + 60_000,
-            },
-          },
-        });
-        await expect(
-          service.launchDesktopApp({
-            environmentId: redispatchedRecord.environmentId,
-            app: "terminal",
-          }),
-        ).resolves.toEqual({ app: "terminal", status: "ready" });
-        expect(carrierInvocations).toBe(launchesBeforeStale + 1);
+        // Repeated attempts keep refusing while the receipt stays stale.
         await expect(
           service.launchDesktopApp({
             environmentId: staleRecord.environmentId,
@@ -461,6 +442,30 @@ describe("gateway worker environment startup", () => {
           code: "invalid_state",
           message: STALE_WORKER_BUILD_REASON,
         });
+        expect(carrierInvocations).toBe(launchesBeforeStale);
+        // Recovery through the real reconciliation path: reconcile drives the provider
+        // lifecycle refresh for the stale node-backed record — stopping the owner,
+        // installing the current bundle on the node through the real gateway bundle
+        // installer and transfer service, and committing the refreshed receipt on the
+        // SAME durable record (the reprovisioning recovery the stale-build error
+        // directs operators to). No replacement record is seeded here.
+        await service.reconcileOnce(staleRecord.environmentId);
+        expect(bundleInstallInvocations).toBe(1);
+        expect(startup.store.get(staleRecord.environmentId)).toMatchObject({
+          state: "ready",
+          bootstrapReceipt: {
+            bundleHash: "a".repeat(64),
+            openclawVersion: "2026.8.14",
+            installKind: "bundle",
+          },
+        });
+        await expect(
+          service.launchDesktopApp({
+            environmentId: staleRecord.environmentId,
+            app: "terminal",
+          }),
+        ).resolves.toEqual({ app: "terminal", status: "ready" });
+        expect(carrierInvocations).toBe(launchesBeforeStale + 1);
       } finally {
         await service.stop();
       }
