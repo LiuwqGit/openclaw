@@ -14,6 +14,7 @@ import type { PrepareAssistantTranscriptMessage } from "../config/sessions/trans
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TtsAutoMode } from "../config/types.tts.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
+import type { InputProvenance } from "../sessions/input-provenance.js";
 import type {
   PluginHookBeforeModelResolveEvent,
   PluginHookBeforeModelResolveResult,
@@ -319,6 +320,12 @@ export type PluginHookAgentContext = {
   senderId?: string;
   trigger?: string;
   channelId?: string;
+  /**
+   * Typed origin of the turn's user-role input. Present when the host classified
+   * the input (e.g. inter-session handoffs reuse the user trigger); absent for
+   * ordinary human turns from paths without provenance.
+   */
+  inputProvenance?: InputProvenance;
   /** Resolved effective context-token budget after model/config/agent caps. */
   contextTokenBudget?: number;
   /** Source that supplied the resolved context-token budget. */
