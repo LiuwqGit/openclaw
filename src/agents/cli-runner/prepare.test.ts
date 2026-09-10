@@ -2529,6 +2529,18 @@ describe("prepareCliRunContext", () => {
     expect(context.params.prompt).toContain("isUser=false");
     expect(context.params.prompt).toContain("trusted hook context");
     expect(context.params.prompt).toContain("foreign reply text");
+    const interSessionHookCalls = hookRunner.runBeforePromptBuild.mock.calls as unknown as Array<
+      [unknown, unknown]
+    >;
+    expect(interSessionHookCalls[0]?.[1]).toMatchObject({
+      trigger: "user",
+      inputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: "agent:main:slack:dm:U123",
+        sourceChannel: "slack",
+        sourceTool: "sessions_send",
+      },
+    });
   });
 
   it("applies agent_turn_prepare-only context on the CLI path", async () => {
@@ -2606,11 +2618,17 @@ describe("prepareCliRunContext", () => {
       [unknown, unknown]
     >;
     const promptContext = beforePromptBuildCalls[0]?.[1] as
-      | { channel?: string; chatId?: string; senderId?: string }
+      | {
+          channel?: string;
+          chatId?: string;
+          senderId?: string;
+          inputProvenance?: { kind: string };
+        }
       | undefined;
     expect(promptContext?.channel).toBe("discord");
     expect(promptContext?.chatId).toBe("room-1");
     expect(promptContext?.senderId).toBe("user-789");
+    expect(promptContext?.inputProvenance).toBeUndefined();
   });
 
   it("applies turn-authorized prompt enrichment after CLI tool preparation", async () => {
