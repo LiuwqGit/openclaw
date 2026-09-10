@@ -3,13 +3,12 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { MissingPublicSurfaceError } from "../plugin-sdk/facade-loader.js";
+import { normalizePluginsConfig } from "../plugins/config-state.js";
+import { resolveManifestOwnerBasePolicyBlock } from "../plugins/manifest-owner-policy.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 // Metadata reads stay behind the registration bridge so media root resolution
 // never pulls the control-plane/kysely graph into light call paths.
-import {
-  getCurrentPluginMetadataSnapshotRuntime,
-  resolvePluginMetadataSnapshotRuntime,
-} from "../plugins/plugin-metadata-snapshot.runtime.js";
+import { getCurrentPluginMetadataSnapshotRuntime } from "../plugins/plugin-metadata-snapshot.runtime.js";
 import {
   loadBundledPluginPublicArtifactModuleSync,
   loadPluginPublicArtifactModuleSync,
@@ -74,22 +73,27 @@ type ChannelMediaContractOwner = Pick<PluginManifestRecord, "id" | "rootDir">;
  *
  * Bundled owners are resolved from the bundled plugin surface; workspace and
  * community installs never gain attachment-root authority, so only
- * host-verified official npm installs qualify.
+ * host-verified official npm installs qualify. Current operator policy still
+ * wins over install provenance: denylisted, explicitly disabled, and
+ * out-of-allowlist plugins lose attachment-root authority.
  */
 export function listTrustedInstalledChannelMediaContractOwners(params: {
   channelId: string;
+  cfg: OpenClawConfig;
   plugins: readonly PluginManifestRecord[];
 }): ChannelMediaContractOwner[] {
   const channelId = normalizeOptionalLowercaseString(params.channelId);
   if (!channelId) {
     return [];
   }
+  const normalizedConfig = normalizePluginsConfig(params.cfg.plugins);
   return params.plugins
     .filter(
       (plugin) =>
         plugin.origin === "global" &&
         plugin.trustedOfficialInstall === true &&
-        declaresChannel(plugin, channelId),
+        declaresChannel(plugin, channelId) &&
+        resolveManifestOwnerBasePolicyBlock({ plugin, normalizedConfig }) === null,
     )
     .map((plugin) => ({ id: plugin.id, rootDir: plugin.rootDir }))
     .toSorted((left, right) => left.id.localeCompare(right.id));
@@ -100,21 +104,23 @@ function resolveInstalledChannelMediaContractOwners(params: {
   cfg: OpenClawConfig;
 }): ChannelMediaContractOwner[] {
   try {
-    const snapshot =
-      getCurrentPluginMetadataSnapshotRuntime({
-        config: params.cfg,
-        allowScopedSnapshot: true,
-        allowWorkspaceScopedSnapshot: true,
-      }) ?? resolvePluginMetadataSnapshotRuntime({ config: params.cfg });
+    // Read the current plugin metadata generation only. Attachment-root
+    // resolution must never start plugin discovery or index work of its own.
+    const snapshot = getCurrentPluginMetadataSnapshotRuntime({
+      config: params.cfg,
+      allowScopedSnapshot: true,
+      allowWorkspaceScopedSnapshot: true,
+    });
     if (!snapshot) {
       return [];
     }
     return listTrustedInstalledChannelMediaContractOwners({
       channelId: params.channelId,
+      cfg: params.cfg,
       plugins: snapshot.manifestRegistry.plugins,
     });
   } catch {
-    // Discovery must never turn a missing channel artifact into a hard failure.
+    // Snapshot reads must never turn a missing channel artifact into a hard failure.
     return [];
   }
 }
