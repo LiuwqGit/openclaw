@@ -21,6 +21,7 @@ type SandboxSkillRuntimeContext = Pick<SandboxContext, "enabled"> &
     Pick<
       SandboxContext,
       | "backendId"
+      | "skillsMountLayout"
       | "skillsEligibility"
       | "skillsWorkspaceDir"
       | "containerWorkdir"
@@ -162,13 +163,15 @@ export function resolveSandboxSkillRuntimeInputs(params: {
 } {
   if (params.sandbox?.enabled === true) {
     const skillsWorkspaceDir = params.sandbox.skillsWorkspaceDir ?? params.skillsAnchorWorkspace;
-    const usesContainerMount =
-      params.sandbox.backendId === "docker" || params.sandbox.backendId === "podman";
+    const usesDirectMount =
+      params.sandbox.skillsMountLayout === "direct" ||
+      (params.sandbox.skillsMountLayout === undefined &&
+        (params.sandbox.backendId === "docker" || params.sandbox.backendId === "podman"));
     const skillsPromptWorkspaceDir =
       params.sandbox.workspaceAccess === "rw" &&
       params.sandbox.skillsWorkspaceDir &&
       params.sandbox.containerWorkdir
-        ? usesContainerMount
+        ? usesDirectMount
           ? containerJoin(params.sandbox.containerWorkdir, SANDBOX_MATERIALIZED_SKILLS_DIRNAME)
           : containerJoin(
               params.sandbox.containerWorkdir,

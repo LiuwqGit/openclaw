@@ -370,6 +370,7 @@ async function resolveProvisionedSandboxContext(
     runtimeLabel: backend.runtimeLabel,
     containerName: backend.runtimeId,
     containerWorkdir: backend.workdir,
+    ...(backend.skillsMountLayout ? { skillsMountLayout: backend.skillsMountLayout } : {}),
     docker: resolvedCfg.docker,
     tools: resolvedCfg.tools,
     browserAllowHostControl: resolvedCfg.browser.allowHostControl,

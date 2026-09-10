@@ -82,6 +82,50 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
     });
   });
 
+  it("keeps prompt paths on the nested layout for retained old-layout containers", () => {
+    expect(
+      resolveSandboxSkillRuntimeInputs({
+        sandbox: {
+          backendId: "docker",
+          skillsMountLayout: "nested",
+          enabled: true,
+          containerWorkdir: "/workspace",
+          skillsWorkspaceDir: "/state/sandbox-skills",
+          workspaceAccess: "rw",
+        },
+        skillsAnchorWorkspace: "/workspace",
+        skillsSnapshot: snapshot,
+      }),
+    ).toEqual({
+      skillsSnapshot: undefined,
+      skillsPromptWorkspaceDir: "/workspace/.openclaw/sandbox-skills",
+      skillsWorkspaceDir: "/state/sandbox-skills",
+      workspaceOnly: true,
+    });
+  });
+
+  it("prefers an explicit direct layout over the backend default", () => {
+    expect(
+      resolveSandboxSkillRuntimeInputs({
+        sandbox: {
+          backendId: "docker",
+          skillsMountLayout: "direct",
+          enabled: true,
+          containerWorkdir: "/workspace",
+          skillsWorkspaceDir: "/state/sandbox-skills",
+          workspaceAccess: "rw",
+        },
+        skillsAnchorWorkspace: "/workspace",
+        skillsSnapshot: snapshot,
+      }),
+    ).toEqual({
+      skillsSnapshot: undefined,
+      skillsPromptWorkspaceDir: "/workspace/.openclaw-skills",
+      skillsWorkspaceDir: "/state/sandbox-skills",
+      workspaceOnly: true,
+    });
+  });
+
   it("uses the skills anchor for sandbox contexts without materialized skills", () => {
     expect(
       resolveSandboxSkillRuntimeInputs({

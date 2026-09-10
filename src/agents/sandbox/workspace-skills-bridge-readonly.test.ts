@@ -116,6 +116,81 @@ describe("workspace skills bridge mount policy", () => {
   );
 
   it.runIf(process.platform !== "win32")(
+    "maps materialized skills through the nested layout for the shipped SDK context shape",
+    async () => {
+      // plugin-sdk v2026.9.3 SandboxFsBridgeContext has neither backendId nor
+      // skillsMountLayout. An unchanged remote plugin built against it must keep
+      // reading materialized skills through the nested remote layout: the local
+      // materialized skill maps to <remote-workdir>/.openclaw/sandbox-skills/...,
+      // not the Docker-only direct destination.
+      await withTempDir("openclaw-skills-remote-sdk-shape-", async (stateDir) => {
+        const workspaceDir = path.join(stateDir, "workspace");
+        const skillsWorkspaceDir = path.join(stateDir, "sandbox-state");
+        const remoteWorkspaceDir = path.join(stateDir, "remote-workspace");
+        await fs.mkdir(workspaceDir, { recursive: true });
+        await fs.mkdir(
+          path.join(remoteWorkspaceDir, ".openclaw", "sandbox-skills", "skills", "demo"),
+          { recursive: true },
+        );
+        await fs.mkdir(path.join(skillsWorkspaceDir, "skills", "demo"), { recursive: true });
+        await fs.writeFile(
+          path.join(skillsWorkspaceDir, "skills", "demo", "SKILL.md"),
+          "# Demo\n",
+          "utf8",
+        );
+        const canonicalWorkspaceDir = await fs.realpath(workspaceDir);
+        const canonicalSkillsWorkspaceDir = await fs.realpath(skillsWorkspaceDir);
+        const canonicalRemoteWorkspaceDir = await fs.realpath(remoteWorkspaceDir);
+
+        const { backendId: _omitBackendId, ...sdkShapedSandbox } = createSandbox({
+          workspaceDir: canonicalWorkspaceDir,
+          agentWorkspaceDir: canonicalWorkspaceDir,
+          skillsWorkspaceDir: canonicalSkillsWorkspaceDir,
+        });
+
+        const bridge = createRemoteShellSandboxFsBridge({
+          sandbox: sdkShapedSandbox,
+          runtime: {
+            remoteWorkspaceDir: canonicalRemoteWorkspaceDir,
+            remoteAgentWorkspaceDir: canonicalRemoteWorkspaceDir,
+            runRemoteShellScript,
+          },
+        });
+
+        const nestedSkillContainerPath = path.posix.join(
+          canonicalRemoteWorkspaceDir,
+          ".openclaw",
+          "sandbox-skills",
+          "skills",
+          "demo",
+          "SKILL.md",
+        );
+        // The local materialized skill must map to the nested remote
+        // destination — the path the shipped remote layout uploads it to — and
+        // never to the Docker-only direct destination.
+        expect(
+          bridge.resolvePath({
+            filePath: path.join(canonicalSkillsWorkspaceDir, "skills", "demo", "SKILL.md"),
+          }).containerPath,
+        ).toBe(nestedSkillContainerPath);
+
+        // Reads through the nested container path stay inside the mounts and
+        // map back to the local materialized skill source.
+        expect(bridge.resolvePath({ filePath: nestedSkillContainerPath })).toMatchObject({
+          containerPath: nestedSkillContainerPath,
+        });
+
+        await expect(
+          bridge.writeFile({
+            filePath: nestedSkillContainerPath,
+            data: "# Tampered\n",
+          }),
+        ).rejects.toThrow(/read-only/);
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "rejects remote bridge mkdirp under skill roots from container cwd",
     async () => {
       await withTempDir("openclaw-skills-remote-cwd-", async (stateDir) => {

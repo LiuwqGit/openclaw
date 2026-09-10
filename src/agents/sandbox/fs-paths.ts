@@ -99,6 +99,7 @@ export function buildSandboxFsMounts(sandbox: SandboxFsBridgeContext): SandboxFs
     workdir: sandbox.containerWorkdir,
     workspaceAccess: sandbox.workspaceAccess,
     backendId: sandbox.backendId,
+    skillsMountLayout: sandbox.skillsMountLayout,
   });
 
   for (const mount of protectedSkillMounts) {
