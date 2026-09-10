@@ -75,9 +75,10 @@ type ChannelMediaContractOwner = Pick<PluginManifestRecord, "id" | "rootDir">;
  * community installs never gain attachment-root authority, so only
  * host-verified official npm installs qualify. Current operator policy still
  * wins over install provenance: denylisted, explicitly disabled, and
- * out-of-allowlist plugins lose attachment-root authority.
+ * out-of-allowlist plugins lose attachment-root authority before their artifact
+ * executes or supplies file-access roots.
  */
-export function listTrustedInstalledChannelMediaContractOwners(params: {
+function listTrustedInstalledChannelMediaContractOwners(params: {
   channelId: string;
   cfg: OpenClawConfig;
   plugins: readonly PluginManifestRecord[];

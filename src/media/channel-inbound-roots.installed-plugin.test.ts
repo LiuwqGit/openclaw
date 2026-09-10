@@ -163,6 +163,46 @@ describe("channel media contract resolution for installed plugins", () => {
     },
   );
 
+  it("revokes attachment-root authority after an earlier successful resolution", () => {
+    const pluginRoot = tempDirs.make("openclaw-media-installed-");
+    const pluginDir = writeInstalledChannelPlugin({
+      pluginRoot,
+      pluginId: "imessage",
+      marker: "/policy-reload",
+    });
+    const enabledCfg = { channels: { imessage: { enabled: true } } } as OpenClawConfig;
+
+    withInstalledChannelPlugin({ cfg: enabledCfg, pluginDir }, () => {
+      expect(
+        resolveChannelRemoteInboundAttachmentRoots({
+          cfg: enabledCfg,
+          ctx: createContext("imessage"),
+        }),
+      ).toEqual(["/policy-reload/remote"]);
+
+      clearPluginMetadataLifecycleCaches();
+      const deniedCfg = {
+        channels: { imessage: { enabled: true } },
+        plugins: { deny: ["imessage"] },
+      } as OpenClawConfig;
+      withInstalledChannelPlugin({ cfg: deniedCfg, pluginDir }, () => {
+        expect(
+          resolveChannelRemoteInboundAttachmentRoots({
+            cfg: deniedCfg,
+            ctx: createContext("imessage"),
+          }),
+        ).toBeUndefined();
+        expect(
+          resolveChannelInboundAttachmentRootsForChannel({
+            cfg: deniedCfg,
+            channelId: "imessage",
+            accountId: "work",
+          }),
+        ).toBeUndefined();
+      });
+    });
+  });
+
   it("keeps bundled channel media contracts ahead of installed plugin owners", () => {
     const pluginRoot = tempDirs.make("openclaw-media-installed-");
     const pluginDir = writeInstalledChannelPlugin({
