@@ -519,6 +519,34 @@ describe("pairing setup code", () => {
     await expectResolvedSetupFailureCase({ config, options, expectedError });
   });
 
+  it.each(["none", "trusted-proxy"] as const)(
+    "names gateway.auth.mode %s when setup code generation lacks a shared secret",
+    async (mode) => {
+      await expectResolvedSetupFailureCase({
+        config: createCustomGatewayConfig({ mode }),
+        options: { env: {} },
+        expectedError: `Pairing setup requires gateway.auth.mode "token" or "password"; current mode is "${mode}".`,
+      });
+      expect(issueDevicePairSetupBootstrapTokenMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps the unconfigured-auth error when gateway.auth.mode is unset", async () => {
+    await expectResolvedSetupFailureCase({
+      config: createCustomGatewayConfig({}),
+      options: { env: {} },
+      expectedError: "Gateway auth is not configured (no token or password).",
+    });
+  });
+
+  it("keeps the configured-password fallback for trusted-proxy mode", async () => {
+    await expectResolvedCustomGatewaySetupOk({
+      auth: { mode: "trusted-proxy", password: "secret" },
+      env: {},
+      expectedAuthLabel: "password",
+    });
+  });
+
   async function resolveInferredModeWithPasswordEnv(token: SecretInput) {
     return await resolvePairingSetupFromConfig(
       {
