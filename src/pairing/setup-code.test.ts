@@ -256,12 +256,8 @@ describe("pairing setup code", () => {
     options?: ResolveSetupOptions;
     expectedError: string;
   }) {
-    try {
-      const resolved = await resolvePairingSetupFromConfig(params.config, params.options);
-      expectResolvedSetupError(resolved, params.expectedError);
-    } catch (error) {
-      expect(String(error)).toContain(params.expectedError);
-    }
+    const resolved = await resolvePairingSetupFromConfig(params.config, params.options);
+    expectResolvedSetupError(resolved, params.expectedError);
   }
 
   async function expectResolveCustomGatewayRejects(params: {
@@ -516,7 +512,7 @@ describe("pairing setup code", () => {
       expectedError: "MISSING_GW_PASSWORD",
     },
   ] as const)("$name", async ({ config, options, expectedError }) => {
-    await expectResolvedSetupFailureCase({ config, options, expectedError });
+    await expect(resolvePairingSetupFromConfig(config, options)).rejects.toThrow(expectedError);
   });
 
   it.each(["none", "trusted-proxy"] as const)(
