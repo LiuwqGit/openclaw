@@ -401,6 +401,37 @@ async function waitForNodeReady(operator: GatewayClient, nodeId: string): Promis
   );
 }
 
+type EnvironmentSummaryRead = {
+  id?: string;
+  status?: string;
+  desktop?: boolean;
+  worker?: { desktopApps?: string[] };
+};
+
+/**
+ * Waits for the state a Gateway restart produces on the durable record: available
+ * again, and still advertising the attested desktop and its app. E2E readiness
+ * synchronizes on that state instead of on elapsed time or on retrying the
+ * downstream request (test/AGENTS.md).
+ */
+async function waitForDesktopReady(operator: GatewayClient, environmentId: string): Promise<void> {
+  await vi.waitFor(
+    async () => {
+      const result = await operator.request<{ environments?: EnvironmentSummaryRead[] }>(
+        "environments.list",
+        {},
+      );
+      const environment = result.environments?.find((entry) => entry.id === environmentId);
+      expect(environment).toMatchObject({
+        status: "available",
+        desktop: true,
+        worker: { desktopApps: ["terminal"] },
+      });
+    },
+    { timeout: 120_000, interval: 500 },
+  );
+}
+
 async function readEnvironmentReceipt(
   gateway: WireGateway,
   environmentId: string,
@@ -606,45 +637,21 @@ describe("paired node worker desktop admission wire", () => {
         );
         await workerNode.connect();
         await waitForNodeReady(operator, workerNode.identity.deviceId);
-        // Let the restarted Gateway's startup reconciliation settle before
-        // driving the desktop paths.
-        await new Promise((resolve) => {
-          setTimeout(resolve, 10_000);
-        });
 
         enterPhase("observing the current worker's real desktop");
-        // The freshly restarted Gateway's startup reconcile and state-database
-        // activity can briefly stall the desktop observe path; retry the RPC
-        // with hard deadlines instead of hanging on a single attempt.
-        let observed: DesktopObserveResult | undefined;
-        for (let attempt = 1; attempt <= 3 && !observed; attempt += 1) {
-          logLine(`observe attempt ${attempt} starting`);
-          if (attempt > 1) {
-            await new Promise((resolve) => {
-              setTimeout(resolve, 15_000);
-            });
-          }
-          observed = await raceWithDiagnostics(
-            operator.request<DesktopObserveResult>("worker.desktop.observe", {
-              environmentId,
-              control: false,
-            }),
-            `worker.desktop.observe attempt ${attempt}`,
-            90_000,
-          ).catch((error: unknown) => {
-            logLine(`observe attempt ${attempt} failed: ${String(error).slice(0, 1500)}`);
-            if (attempt === 3) {
-              throw error;
-            }
-            return undefined;
-          });
-          if (observed) {
-            logLine(`observe attempt ${attempt} resolved wsPath`);
-          }
-        }
-        if (!observed) {
-          throw new Error("worker.desktop.observe did not resolve");
-        }
+        // Readiness is the state the restart produced, not a settled duration: the
+        // record must be available and still advertise the attested desktop before
+        // admission can serve it. One bounded observation request follows.
+        await waitForDesktopReady(operator, environmentId);
+        const observed = await raceWithDiagnostics(
+          operator.request<DesktopObserveResult>("worker.desktop.observe", {
+            environmentId,
+            control: false,
+          }),
+          "worker.desktop.observe",
+          90_000,
+        );
+        logLine("observe resolved wsPath on the first bounded request");
         expect(observed).toMatchObject({ transport: "rfb", control: false });
         expect(observed.wsPath).toMatch(/^\/desktop\/observe\?token=/u);
         const desktop = await observeDesktopFrames({ gateway, wsPath: observed.wsPath });
@@ -855,51 +862,63 @@ describe("paired node worker desktop admission wire", () => {
           ),
         );
       } finally {
-        const withCleanupLog = (
-          step: string,
-          task: Promise<unknown>,
-        ): Promise<"done" | "timeout"> =>
-          Promise.race([
+        // Every teardown step runs even if an earlier one fails or hangs, and each
+        // outcome is reported: a leaked node host, Gateway, provider or Xvnc must
+        // fail the proof instead of passing silently behind a swallowed rejection.
+        type CleanupOutcome =
+          | { step: string; status: "done" }
+          | { step: string; status: "failed"; error: unknown }
+          | { step: string; status: "timeout" };
+        const CLEANUP_TIMEOUT_MS = 60_000;
+        const withCleanupLog = (step: string, task: Promise<unknown>): Promise<CleanupOutcome> =>
+          Promise.race<CleanupOutcome>([
             task.then(
-              () => "done" as const,
-              (error: unknown) => {
-                void fs
-                  .appendFile(
-                    "/tmp/desktop-admission-cleanup.log",
-                    `${step} FAILED: ${String(error)}\n`,
-                  )
-                  .catch(() => undefined);
-                return "done" as const;
-              },
+              () => ({ step, status: "done" as const }),
+              (error: unknown) => ({ step, status: "failed" as const, error }),
             ),
-            new Promise<"timeout">((resolve) => {
-              setTimeout(() => {
-                void fs
-                  .appendFile(progressPath, `${step} TIMED OUT after 60s\n`)
-                  .catch(() => undefined);
-                resolve("timeout");
-              }, 60_000).unref();
+            new Promise<CleanupOutcome>((resolve) => {
+              setTimeout(
+                () => resolve({ step, status: "timeout" as const }),
+                CLEANUP_TIMEOUT_MS,
+              ).unref();
             }),
-          ]);
-        const cleanup = await Promise.allSettled([
-          withCleanupLog("workerNode.stop", workerNode?.stop() ?? Promise.resolve()).then(
-            () => undefined,
-          ),
+          ]).then(async (outcome) => {
+            if (outcome.status !== "done") {
+              logLine(
+                outcome.status === "timeout"
+                  ? `cleanup ${outcome.step} timed out after ${CLEANUP_TIMEOUT_MS}ms`
+                  : `cleanup ${outcome.step} failed: ${String(outcome.error).slice(0, 500)}`,
+              );
+            }
+            return outcome;
+          });
+        const cleanup = await Promise.all([
+          withCleanupLog("workerNode.stop", workerNode?.stop() ?? Promise.resolve()),
           withCleanupLog(
             "operator.stopAndWait",
             operator?.stopAndWait({ timeoutMs: 2_000 }) ?? Promise.resolve(),
-          ).then(() => undefined),
-          withCleanupLog("stopQaGatewayFixture", stopQaGatewayFixture(gatewayOwner)).then(
-            () => undefined,
           ),
-          withCleanupLog("provider.stop", provider.stop()).then(() => undefined),
-          withCleanupLog("closeWireServer", closeWireServer(published.server)).then(
-            () => undefined,
-          ),
-          withCleanupLog("vnc.stop", vnc.stop()).then(() => undefined),
+          withCleanupLog("stopQaGatewayFixture", stopQaGatewayFixture(gatewayOwner)),
+          withCleanupLog("provider.stop", provider.stop()),
+          withCleanupLog("closeWireServer", closeWireServer(published.server)),
+          withCleanupLog("vnc.stop", vnc.stop()),
         ]);
         failures.push(
-          ...cleanup.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
+          ...cleanup.flatMap((outcome) => {
+            if (outcome.status === "timeout") {
+              return [new Error(`cleanup ${outcome.step} timed out after ${CLEANUP_TIMEOUT_MS}ms`)];
+            }
+            if (outcome.status === "failed") {
+              return [
+                outcome.error instanceof Error
+                  ? new Error(`cleanup ${outcome.step} failed: ${outcome.error.message}`, {
+                      cause: outcome.error,
+                    })
+                  : new Error(`cleanup ${outcome.step} failed: ${String(outcome.error)}`),
+              ];
+            }
+            return [];
+          }),
         );
       }
       if (failures.length === 1) {
