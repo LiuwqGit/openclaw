@@ -7,7 +7,7 @@ metadata:
     "openclaw":
       {
         "emoji": "🔊",
-        "requires": { "bins": ["sag"], "env": ["ELEVENLABS_API_KEY"] },
+        "requires": { "bins": ["sag"] },
         "primaryEnv": "ELEVENLABS_API_KEY",
         "install":
           [
@@ -27,10 +27,16 @@ metadata:
 
 Use `sag` for ElevenLabs TTS with local playback.
 
-API key (required)
+API key (required — resolved by `sag` itself, not by OpenClaw readiness)
 
 - `ELEVENLABS_API_KEY` (preferred)
 - `SAG_API_KEY` also supported by the CLI
+- Key file via `--api-key-file`, `ELEVENLABS_API_KEY_FILE`, or `SAG_API_KEY_FILE`
+- OpenClaw never marks this skill unavailable for a missing env var: the `sag`
+  binary owns credential validation and fails loudly on its own if no key is
+  configured. If an older `openclaw doctor --fix` run disabled the entry while
+  it was actually working, re-enable it with
+  `openclaw config set skills.entries.sag.enabled true`.
 
 Quick start
 

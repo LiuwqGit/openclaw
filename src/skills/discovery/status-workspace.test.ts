@@ -181,6 +181,56 @@ describe("buildWorkspaceSkillStatus", () => {
     expect(skill.install[0]?.bins).toEqual(["fakebin"]);
   });
 
+  it("keeps the bundled sag skill ready when only the sag binary is installed", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    const binDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sag-bins-"));
+    tempDirs.push(binDir);
+    await fs.writeFile(path.join(binDir, "sag"), "", { mode: 0o755 });
+    const bundledSkillsDir = path.resolve("skills");
+    const entries = loadWorkspaceSkills(workspaceDir, {
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+      bundledSkillsDir,
+    });
+    const sagEntry = requireSkillEntry(
+      entries.find((entry) => entry.skill.name === "sag"),
+      "sag",
+    );
+
+    // Regression (#147346): sag resolves credentials itself (SAG_API_KEY, key
+    // files, or ELEVENLABS_API_KEY), so readiness must gate on the binary
+    // alone; env-only absence must not mark the skill unavailable — otherwise
+    // `doctor --fix` disables a working skill.
+    const report = withEnv(
+      {
+        PATH: binDir,
+        ELEVENLABS_API_KEY: undefined,
+        SAG_API_KEY: undefined,
+        ELEVENLABS_API_KEY_FILE: undefined,
+        SAG_API_KEY_FILE: undefined,
+      },
+      () => buildWorkspaceSkillStatus(workspaceDir, { entries: [sagEntry] }),
+    );
+    const skill = requireReportedSkill(report, "sag");
+
+    expect(skill.requirements.bins).toEqual(["sag"]);
+    expect(skill.missing.env).toStrictEqual([]);
+    expect(skill.eligible).toBe(true);
+
+    // The binary requirement still gates readiness when sag is absent.
+    const missingBinReport = withEnv(
+      {
+        PATH: "",
+        ELEVENLABS_API_KEY: undefined,
+        SAG_API_KEY: undefined,
+      },
+      () => buildWorkspaceSkillStatus(workspaceDir, { entries: [sagEntry] }),
+    );
+    const missingBinSkill = requireReportedSkill(missingBinReport, "sag");
+
+    expect(missingBinSkill.missing.bins).toEqual(["sag"]);
+    expect(missingBinSkill.eligible).toBe(false);
+  });
+
   it("respects OS-gated skills", () => {
     const entry = makeEntry({
       name: "os-skill",
