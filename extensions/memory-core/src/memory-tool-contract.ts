@@ -44,7 +44,7 @@ const MemoryGetSchema = {
   additionalProperties: false,
 } as const satisfies TSchema;
 
-type MemorySourceContract = Readonly<{ files: string; search: string; sessionsIndexed: boolean }>;
+type MemorySourceContract = Readonly<{ files: string; search: string }>;
 
 function resolveMemorySourceContract(
   settings: NonNullable<ReturnType<typeof resolveMemorySearchIndexConfig>>,
@@ -55,11 +55,11 @@ function resolveMemorySourceContract(
   ]
     .filter(Boolean)
     .join(", ");
-  const sessionsIndexed = settings.searchSources.includes("sessions");
   return {
     files,
-    search: sessionsIndexed ? `${files}, indexed session transcripts` : files,
-    sessionsIndexed,
+    search: settings.searchSources.includes("sessions")
+      ? `${files}, indexed session transcripts`
+      : files,
   };
 }
 
@@ -89,12 +89,8 @@ export const MEMORY_SEARCH_TOOL_CONTRACT = {
   label: "Memory Search",
   name: "memory_search",
   parameters: MemorySearchSchema,
-  describe: ({ search, sessionsIndexed }: MemorySourceContract) =>
-    `Mandatory recall step: semantically search ${search} before answering questions about prior work, decisions, dates, people, preferences, or todos. Session results are transcript search references, not readable memory-file paths. Optional \`corpus=wiki\` or \`corpus=all\` also searches registered compiled-wiki supplements. \`corpus=memory\` restricts hits to indexed memory files (excludes session transcript chunks from ranking). ${
-      sessionsIndexed
-        ? "`corpus=sessions` restricts hits to the session corpus under the same visibility rules as session history tools."
-        : '`corpus=sessions` is opt-in: enable memory.search.experimental.sessionMemory and add "sessions" to memory.search.sources to index session transcripts; for exact transcript lookup without indexing, use the sessions_search tool.'
-    } ${SEARCH_CORPUS_OUTCOME_GUIDANCE} If response has disabled=true or stale=true, tell the user and include the warning/action guidance.`,
+  describe: ({ search }: MemorySourceContract) =>
+    `Mandatory recall step: semantically search ${search} before answering questions about prior work, decisions, dates, people, preferences, or todos. Session results are transcript search references, not readable memory-file paths. Optional \`corpus=wiki\` or \`corpus=all\` also searches registered compiled-wiki supplements. \`corpus=memory\` restricts hits to indexed memory files (excludes session transcript chunks from ranking). \`corpus=sessions\` searches indexed session transcripts under the same visibility rules as session history tools and returns unavailable when semantic session indexing is disabled. ${SEARCH_CORPUS_OUTCOME_GUIDANCE} If response has disabled=true or stale=true, tell the user and include the warning/action guidance.`,
 } as const;
 
 export const MEMORY_GET_TOOL_CONTRACT = {
