@@ -518,13 +518,15 @@ Human output prints one block per hit: session key, role, ISO timestamp, FTS
 score, and a sanitized one-line snippet. Visibility and incognito-session
 filtering are enforced gateway-side, so results only cover sessions the
 connecting operator is allowed to read. A single call searches one agent's
-stored transcripts: the gateway resolves the scope to one agent (the `main`
-agent when no session keys are supplied) and rejects mixed-agent keys, so use
-`--agent <id>` together with at least one `--session <key>` to search another
-agent's sessions. Because results never merge across agents, an empty result is
-not proof that the term is absent from every agent's transcripts. The command
-exits non-zero when the Gateway is unreachable or rejects the query; an empty
-result set is a normal exit with `No matching sessions found`.
+stored transcripts, and the Gateway owns that selection for an unscoped query:
+it resolves the agent from the configured agents and the persisted owner of the
+session key, and it rejects ambiguous multi-agent configurations instead of
+guessing. Use `--agent <id>` together with at least one `--session <key>` (or
+agent-prefixed session keys) when you need a specific agent. Because results
+never merge across agents, an empty result is not proof that the term is absent
+from every agent's transcripts. The command exits non-zero when the Gateway is
+unreachable or rejects the query; an empty result set is a normal exit with
+`No matching sessions found`.
 
 ### sessions.search RPC
 

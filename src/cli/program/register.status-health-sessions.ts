@@ -564,7 +564,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
         `\n${theme.heading("Examples:")}\n${formatHelpExamples([
           [
             "openclaw sessions search 'deploy plan'",
-            "Search the default (main) agent's stored transcripts.",
+            "Search the Gateway-selected agent's stored transcripts.",
           ],
           [
             "openclaw sessions search 'timeout' --limit 25",
@@ -579,7 +579,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
             "Agent-scoped search with machine-readable output.",
           ],
         ])}\n\n${theme.muted(
-          "Backed by the sessions.search gateway RPC (the same full-text search the Control UI uses); visibility and incognito filtering are enforced gateway-side. One call searches one agent's stored transcripts and defaults to the `main` agent, so an empty result is not proof of absence across agents: pass --agent <id> with --session <key> to search another agent's sessions. --limit (1-25; 10 by default) is accepted before or after `search`.",
+          "Backed by the sessions.search gateway RPC (the same full-text search the Control UI uses); visibility and incognito filtering are enforced gateway-side. One call searches one agent's stored transcripts, and the gateway owns that selection for an unscoped query: it resolves the agent from the configured agents and the persisted session-key owner (and rejects ambiguous multi-agent configurations instead of guessing), so pass --agent <id> together with --session <key> keys when you need a specific agent. An empty result is not proof of absence across agents. --limit (1-25; 10 by default) is accepted before or after `search`.",
         )}`,
     )
     .action(async (query: string, rawOpts, command) => {

@@ -549,7 +549,7 @@ describe("registerStatusHealthSessionsCommands", () => {
     });
   });
 
-  it("documents the search limit flag and the single-agent search scope in help", () => {
+  it("documents the search limit flag and Gateway-owned agent selection in help", () => {
     const sessions = createProgram().commands.find((command) => command.name() === "sessions");
     const search = sessions?.commands.find((command) => command.name() === "search");
 
@@ -559,7 +559,8 @@ describe("registerStatusHealthSessionsCommands", () => {
     expect(search?.options.find((option) => option.long === "--limit")?.description).toBe(
       "Max hits to return (1-25; gateway default 10)",
     );
-    expect(help).toContain("defaults to the `main` agent");
+    expect(help).toContain("the gateway owns that selection for an unscoped query");
+    expect(help).not.toContain("defaults to the `main` agent");
     expect(help).not.toContain("Search all visible sessions");
   });
 
