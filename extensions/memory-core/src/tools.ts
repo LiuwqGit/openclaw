@@ -264,7 +264,7 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
             buildMemorySearchUnavailableResult("Session transcript search is not enabled.", {
               warning: "Session transcript search is unavailable for this agent.",
               action:
-                'Enable memory.search.experimental.sessionMemory and add "sessions" to memory.search.sources, then retry memory_search.',
+                'For exact transcript lookup, use the sessions_search tool. To enable semantic session search: enable memory.search.experimental.sessionMemory and add "sessions" to memory.search.sources.',
             }),
           );
         }

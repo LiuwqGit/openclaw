@@ -67,6 +67,41 @@ describe("memory tool schemas", () => {
   });
 });
 
+describe("memory_search sessions-corpus description", () => {
+  beforeEach(() => {
+    clearMemoryPluginState();
+  });
+
+  it("states the opt-in requirement and sessions_search alternative when transcripts are not indexed", () => {
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+      },
+      agentSessionKey: "agent:main:main",
+    });
+
+    expect(tool.description).toContain("memory.search.experimental.sessionMemory");
+    expect(tool.description).toContain("sessions_search");
+    expect(tool.description).not.toContain("restricts hits to the session corpus");
+  });
+
+  it("keeps the indexed sessions-corpus description when transcript search is configured", () => {
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+        memory: {
+          search: { rememberAcrossConversations: true, sources: ["sessions"] },
+        },
+      },
+      agentSessionKey: "agent:main:main",
+    });
+
+    expect(tool.description).toContain("indexed session transcripts");
+    expect(tool.description).toContain("restricts hits to the session corpus");
+    expect(tool.description).not.toContain("sessions_search");
+  });
+});
+
 describe("memory_search unavailable payloads", () => {
   beforeEach(() => {
     clearMemoryPluginState();
@@ -1002,7 +1037,7 @@ describe("memory_search corpus labels", () => {
         error: "Session transcript search is not enabled.",
         warning: "Session transcript search is unavailable for this agent.",
         action:
-          'Enable memory.search.experimental.sessionMemory and add "sessions" to memory.search.sources, then retry memory_search.',
+          'For exact transcript lookup, use the sessions_search tool. To enable semantic session search: enable memory.search.experimental.sessionMemory and add "sessions" to memory.search.sources.',
       });
       expect(getMemorySearchManagerMockCalls()).toBe(0);
     },
