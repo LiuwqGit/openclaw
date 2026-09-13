@@ -302,6 +302,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
           ["openclaw sessions --active 120", "Only last 2 hours."],
           ["openclaw sessions --limit 25", "Show the newest 25 sessions."],
           ["openclaw sessions --json", "Machine-readable output."],
+          ["openclaw sessions search 'deploy plan'", "Full-text search stored transcripts."],
           ["openclaw sessions --store ./tmp/sessions.sqlite", "Use a specific session store."],
         ])}\n\n${theme.muted(
           "Shows token usage per session when the agent reports it; set the model entry's contextTokens to cap the window and show %.",
@@ -526,6 +527,72 @@ export function registerStatusHealthSessionsCommands(program: Command) {
             key,
             agent: (opts.agent as string | undefined) ?? parentOpts?.agent,
             maxLines,
+            timeout: timeoutMs !== undefined ? String(timeoutMs) : undefined,
+            url: opts.url as string | undefined,
+            token: opts.token as string | undefined,
+            password: opts.password as string | undefined,
+            json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  addSessionsGatewayOptions(sessionsCmd.command("search <query>"))
+    .description("Full-text search stored session transcripts via the running gateway")
+    .option(
+      "--session <key>",
+      "Restrict the search to a session key (repeatable; required with --agent)",
+      (value: string, previous: string[]) => [...previous, value],
+      [] as string[],
+    )
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          ["openclaw sessions search 'deploy plan'", "Search all visible sessions."],
+          ["openclaw sessions search 'timeout' --limit 25", "Return up to 25 hits (max 25)."],
+          [
+            'openclaw sessions search "release checklist" --session "agent:main:main"',
+            "Search one session.",
+          ],
+          [
+            'openclaw sessions search "api key" --agent work --session "agent:work:main" --json',
+            "Agent-scoped search with machine-readable output.",
+          ],
+        ])}\n\n${theme.muted(
+          "Backed by the sessions.search gateway RPC (the same full-text search the Control UI uses); visibility and incognito filtering are enforced gateway-side. --limit is the inherited parent sessions option (1-25 hits; gateway default 10).",
+        )}`,
+    )
+    .action(async (query: string, opts, command) => {
+      // Like `compact`, merge parent `--agent`/`--json` and reject parent
+      // list-only options instead of silently dropping them. `--limit` is the
+      // exception: commander binds it to the parent `sessions` definition no
+      // matter where it appears on the line, and "max rows out" is the same
+      // idea for search (max hits, gateway-capped at 25), so honor it.
+      const parentOpts = command.parent?.opts() as SessionsListCliOptions | undefined;
+      rejectUnsupportedSessionsParentOptions(
+        "search",
+        parentOpts,
+        ["store", "allAgents", "active", "verbose"],
+        "the gateway resolves searchable stores from --agent and --session",
+      );
+      const limit = parseStrictPositiveInteger(parentOpts?.limit);
+      if (parentOpts?.limit !== undefined && limit === undefined) {
+        throwSessionsCliError("--limit must be a positive integer (1-25).");
+      }
+      const timeoutMs = parseStrictPositiveInteger(opts.timeout);
+      if (opts.timeout !== undefined && timeoutMs === undefined) {
+        throwSessionsCliError("--timeout must be a positive integer (milliseconds).");
+      }
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { sessionsSearchCommand } = await import("../../commands/sessions-search.js");
+        await sessionsSearchCommand(
+          {
+            query,
+            agent: (opts.agent as string | undefined) ?? parentOpts?.agent,
+            session: opts.session as string[] | undefined,
+            limit,
             timeout: timeoutMs !== undefined ? String(timeoutMs) : undefined,
             url: opts.url as string | undefined,
             token: opts.token as string | undefined,

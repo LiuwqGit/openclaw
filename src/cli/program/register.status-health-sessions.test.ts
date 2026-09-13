@@ -12,12 +12,14 @@ const mocks = vi.hoisted(() => ({
   sessionsCleanupCommand: vi.fn(),
   sessionsTailCommand: vi.fn(),
   sessionsCompactCommand: vi.fn(),
+  sessionsSearchCommand: vi.fn(),
   sessionsArchiveCommand: vi.fn(),
   sessionsDeleteCommand: vi.fn(),
   exportTrajectoryCommand: vi.fn(),
   sessionsCleanupModuleLoaded: vi.fn(),
   sessionsTailModuleLoaded: vi.fn(),
   sessionsCompactModuleLoaded: vi.fn(),
+  sessionsSearchModuleLoaded: vi.fn(),
   sessionsLifecycleModuleLoaded: vi.fn(),
   exportTrajectoryModuleLoaded: vi.fn(),
   setVerbose: vi.fn(),
@@ -34,6 +36,7 @@ const sessionsCommand = mocks.sessionsCommand;
 const sessionsCleanupCommand = mocks.sessionsCleanupCommand;
 const sessionsTailCommand = mocks.sessionsTailCommand;
 const sessionsCompactCommand = mocks.sessionsCompactCommand;
+const sessionsSearchCommand = mocks.sessionsSearchCommand;
 const sessionsArchiveCommand = mocks.sessionsArchiveCommand;
 const sessionsDeleteCommand = mocks.sessionsDeleteCommand;
 const exportTrajectoryCommand = mocks.exportTrajectoryCommand;
@@ -86,6 +89,11 @@ vi.mock("../../commands/sessions-tail.js", () => {
 vi.mock("../../commands/sessions-compact.js", () => {
   mocks.sessionsCompactModuleLoaded();
   return { sessionsCompactCommand: mocks.sessionsCompactCommand };
+});
+
+vi.mock("../../commands/sessions-search.js", () => {
+  mocks.sessionsSearchModuleLoaded();
+  return { sessionsSearchCommand: mocks.sessionsSearchCommand };
 });
 
 vi.mock("../../commands/sessions-lifecycle.js", () => {
@@ -143,6 +151,7 @@ describe("registerStatusHealthSessionsCommands", () => {
     sessionsCleanupCommand.mockResolvedValue(undefined);
     sessionsTailCommand.mockResolvedValue(undefined);
     sessionsCompactCommand.mockResolvedValue(undefined);
+    sessionsSearchCommand.mockResolvedValue(undefined);
     sessionsArchiveCommand.mockResolvedValue(undefined);
     sessionsDeleteCommand.mockResolvedValue(undefined);
     exportTrajectoryCommand.mockResolvedValue(undefined);
@@ -215,11 +224,31 @@ describe("registerStatusHealthSessionsCommands", () => {
       message: "--timeout must be a positive integer (milliseconds).",
       owner: sessionsCompactCommand,
     },
+    {
+      name: "search inherited store",
+      args: ["sessions", "--store", "/tmp/other.sqlite", "search", "deploy"],
+      message:
+        "`sessions search` does not support the parent `sessions` option --store; the gateway resolves searchable stores from --agent and --session.",
+      owner: sessionsSearchCommand,
+    },
+    {
+      name: "search invalid limit",
+      args: ["sessions", "search", "deploy", "--limit", "0"],
+      message: "--limit must be a positive integer (1-25).",
+      owner: sessionsSearchCommand,
+    },
+    {
+      name: "search invalid timeout",
+      args: ["sessions", "--json", "search", "deploy", "--timeout", "nope"],
+      message: "--timeout must be a positive integer (milliseconds).",
+      owner: sessionsSearchCommand,
+    },
   ])("rejects $name before loading any session owner", async ({ args, message, owner }) => {
     await expectSessionsRegistrationError(args, message, owner);
     expect(mocks.sessionsCleanupModuleLoaded).not.toHaveBeenCalled();
     expect(mocks.sessionsTailModuleLoaded).not.toHaveBeenCalled();
     expect(mocks.sessionsCompactModuleLoaded).not.toHaveBeenCalled();
+    expect(mocks.sessionsSearchModuleLoaded).not.toHaveBeenCalled();
     expect(mocks.sessionsLifecycleModuleLoaded).not.toHaveBeenCalled();
     expect(mocks.exportTrajectoryModuleLoaded).not.toHaveBeenCalled();
   });
@@ -462,6 +491,55 @@ describe("registerStatusHealthSessionsCommands", () => {
       "`sessions compact` does not support the parent `sessions` options --all-agents, --limit, --verbose; the gateway resolves the target store from <key> and --agent.",
       sessionsCompactCommand,
     );
+  });
+
+  it("forwards search query, repeatable --session keys, and a parsed --limit", async () => {
+    await runCli([
+      "sessions",
+      "search",
+      "deploy plan",
+      "--limit",
+      "5",
+      "--session",
+      "agent:main:main",
+      "--session",
+      "agent:main:scratch-1",
+    ]);
+
+    expectCommandOptions(sessionsSearchCommand, {
+      query: "deploy plan",
+      limit: 5,
+      session: ["agent:main:main", "agent:main:scratch-1"],
+      json: false,
+    });
+  });
+
+  it("honors the parent --limit placed before the search subcommand", async () => {
+    await runCli(["sessions", "--limit", "3", "search", "deploy"]);
+
+    expectCommandOptions(sessionsSearchCommand, {
+      query: "deploy",
+      limit: 3,
+    });
+  });
+
+  it("inherits the parent sessions --agent and --json for search", async () => {
+    await runCli(["sessions", "--agent", "work", "--json", "search", "release"]);
+
+    expectCommandOptions(sessionsSearchCommand, {
+      query: "release",
+      agent: "work",
+      json: true,
+    });
+  });
+
+  it("prefers the search-level --agent over the parent sessions --agent", async () => {
+    await runCli(["sessions", "--agent", "main", "search", "release", "--agent", "work"]);
+
+    expectCommandOptions(sessionsSearchCommand, {
+      query: "release",
+      agent: "work",
+    });
   });
 
   it("forwards multi-key archive options and inherits parent sessions output options", async () => {
