@@ -299,4 +299,56 @@ describe("diagnostic support redaction", () => {
     expect(serialized).toContain("--awsSecretAccessKey");
     expect(serialized).toContain("~\\\\AppData\\\\Local\\\\openclaw\\\\gateway-service.json");
   });
+
+  it("consumes Win32 namespace markers preceding redacted path prefixes", () => {
+    const userProfile = "C:\\Users\\support-user";
+    const stateDir = `${userProfile}\\AppData\\Roaming\\openclaw`;
+    const redaction = {
+      env: {
+        USERPROFILE: userProfile,
+        OPENCLAW_STATE_DIR: stateDir,
+      },
+      stateDir,
+    };
+
+    // Raw Windows fs errors can report paths in Win32-namespaced form ("\\?\" extended-length);
+    // the marker must be redacted together with the known prefix it decorates.
+    const namespacedStateDir = `\\\\?\\${stateDir}`;
+    expect(
+      redactSupportString(`mkdir '${namespacedStateDir}\\agents\\main\\agent'`, redaction),
+    ).toBe("mkdir '$OPENCLAW_STATE_DIR\\agents\\main\\agent'");
+    expect(
+      redactSupportString(
+        `failed at \\\\?\\${userProfile}\\Documents\\snapshot-error.txt`,
+        redaction,
+      ),
+    ).toBe("failed at ~\\Documents\\snapshot-error.txt");
+    expect(
+      redactSupportString(
+        "failed at \\\\?\\c:\\users\\support-user\\Documents\\snapshot-error.txt",
+        redaction,
+      ),
+    ).toBe("failed at ~\\Documents\\snapshot-error.txt");
+    // Device namespace ("\\.\\") markers are consumed the same way.
+    expect(
+      redactSupportString(
+        `failed at \\\\.\\${userProfile}\\Documents\\snapshot-error.txt`,
+        redaction,
+      ),
+    ).toBe("failed at ~\\Documents\\snapshot-error.txt");
+    // Whole-string namespaced paths redact through the absolute-path branch too.
+    expect(redactSupportString(`${namespacedStateDir}\\logs\\gateway.log`, redaction)).toBe(
+      "$OPENCLAW_STATE_DIR\\logs\\gateway.log",
+    );
+    // Markers that do not precede a known prefix stay untouched (no blanket stripping).
+    expect(redactSupportString("scanned \\\\?\\D:\\unrelated\\root", redaction)).toBe(
+      "scanned \\\\?\\D:\\unrelated\\root",
+    );
+    // Redaction stays stable across repeated support handoffs.
+    const once = redactSupportString(
+      `mkdir '${namespacedStateDir}\\agents\\main\\agent'`,
+      redaction,
+    );
+    expect(redactSupportString(once, redaction)).toBe(once);
+  });
 });
