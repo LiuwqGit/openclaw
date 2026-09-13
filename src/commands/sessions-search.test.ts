@@ -56,6 +56,19 @@ describe("sessionsSearchCommand", () => {
     expect(callGatewayCli).not.toHaveBeenCalled();
   });
 
+  it("rejects blank --session values instead of dropping the filter", async () => {
+    const runtime = createRuntime();
+
+    await expect(
+      sessionsSearchCommand({ query: "deploy", session: ["", "   "] }, runtime),
+    ).rejects.toThrow("--session must not be blank");
+    await expect(
+      sessionsSearchCommand({ query: "deploy", session: ["agent:main:main", " "] }, runtime),
+    ).rejects.toThrow("--session must not be blank");
+
+    expect(callGatewayCli).not.toHaveBeenCalled();
+  });
+
   it("forwards query, limit, agentId, and sessionKeys to sessions.search", async () => {
     callGatewayCli.mockResolvedValue({ results: [] });
     const runtime = createRuntime();

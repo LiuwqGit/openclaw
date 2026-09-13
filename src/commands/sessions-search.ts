@@ -71,7 +71,14 @@ export async function sessionsSearchCommand(
   if (opts.agent !== undefined && !agent) {
     throw new Error("--agent must not be blank");
   }
-  const sessionKeys = (opts.session ?? []).map((key) => key.trim()).filter((key) => key.length > 0);
+  const sessionKeys = (opts.session ?? []).map((key) => key.trim());
+  if (sessionKeys.some((key) => key.length === 0)) {
+    // An explicitly blank --session is almost always an unset shell variable
+    // (`--session "$SESSION_KEY"`). Dropping it would silently widen the
+    // search from the intended session to the agent's whole visible store, so
+    // reject the selector before the RPC instead of removing the key.
+    throw new Error("--session must not be blank; pass an explicit session key or drop the flag");
+  }
   if (agent && sessionKeys.length === 0) {
     // Mirrors the gateway rule "agentId requires sessionKeys" with an
     // actionable CLI-level message before paying the RPC round-trip.

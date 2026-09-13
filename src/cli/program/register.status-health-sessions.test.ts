@@ -522,6 +522,16 @@ describe("registerStatusHealthSessionsCommands", () => {
     });
   });
 
+  it("forwards a blank --session value to the command instead of dropping it", async () => {
+    await runCli(["sessions", "search", "deploy", "--session", ""]);
+
+    expectCommandOptions(sessionsSearchCommand, {
+      query: "deploy",
+      session: [""],
+      json: false,
+    });
+  });
+
   it("honors the parent --limit placed before the search subcommand", async () => {
     await runCli(["sessions", "--limit", "3", "search", "deploy"]);
 

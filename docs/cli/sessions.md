@@ -500,7 +500,10 @@ openclaw sessions search "api key" --agent work --session "agent:work:main" --js
 ```
 
 - `<query>`: full-text query over stored transcripts (1–4096 characters).
-- `--session <key>`: restrict the search to a session key; repeatable.
+- `--session <key>`: restrict the search to a session key; repeatable. Blank
+  values are rejected instead of being dropped, so an unset shell variable
+  (`--session "$SESSION_KEY"`) cannot silently widen the search to the agent's
+  whole store.
 - `--agent <id>`: agent that owns the listed session keys. The gateway scopes
   agent searches to explicit `--session` keys, so `--agent` requires at least
   one `--session`.
