@@ -504,20 +504,27 @@ openclaw sessions search "api key" --agent work --session "agent:work:main" --js
 - `--agent <id>`: agent that owns the listed session keys. The gateway scopes
   agent searches to explicit `--session` keys, so `--agent` requires at least
   one `--session`.
-- `--limit <n>`: max hits to return (1–25; gateway default 10). This is the
-  inherited parent `sessions` option, honored in both spellings:
-  `openclaw sessions --limit 5 search <query>` and
-  `openclaw sessions search <query> --limit 5`.
+- `--limit <n>`: max hits to return (1–25; gateway default 10). The flag is
+  registered on `search` itself and on the parent `sessions` command, so both
+  spellings work: `openclaw sessions search <query> --limit 5` and
+  `openclaw sessions --limit 5 search <query>`.
 - `--url` / `--token` / `--password`: Gateway connection overrides.
-- `--timeout <ms>`: optional client-side RPC timeout in milliseconds.
+- `--timeout <ms>`: optional client-side RPC timeout in milliseconds. When the
+  flag is omitted the command uses its bounded default request deadline instead
+  of waiting indefinitely on a connected but unresponsive Gateway.
 - `--json`: print the raw `SessionsSearchResult` payload.
 
 Human output prints one block per hit: session key, role, ISO timestamp, FTS
 score, and a sanitized one-line snippet. Visibility and incognito-session
 filtering are enforced gateway-side, so results only cover sessions the
-connecting operator is allowed to read. The command exits non-zero when the
-Gateway is unreachable or rejects the query; an empty result set is a normal
-exit with `No matching sessions found`.
+connecting operator is allowed to read. A single call searches one agent's
+stored transcripts: the gateway resolves the scope to one agent (the `main`
+agent when no session keys are supplied) and rejects mixed-agent keys, so use
+`--agent <id>` together with at least one `--session <key>` to search another
+agent's sessions. Because results never merge across agents, an empty result is
+not proof that the term is absent from every agent's transcripts. The command
+exits non-zero when the Gateway is unreachable or rejects the query; an empty
+result set is a normal exit with `No matching sessions found`.
 
 ### sessions.search RPC
 

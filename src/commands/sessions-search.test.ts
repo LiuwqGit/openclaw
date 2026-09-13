@@ -76,6 +76,29 @@ describe("sessionsSearchCommand", () => {
     });
   });
 
+  it("leaves the timeout unset when --timeout is omitted so the bounded RPC default applies", async () => {
+    callGatewayCli.mockResolvedValue({ results: [] });
+    const runtime = createRuntime();
+
+    await sessionsSearchCommand({ query: "deploy" }, runtime);
+
+    const [, rpcOpts, , extra] = callGatewayCli.mock.calls[0]!;
+    // null (not undefined) disables the request deadline in the transport, which
+    // lets a connected-but-silent Gateway stall the command indefinitely.
+    expect((rpcOpts as { timeout?: string | null }).timeout).toBeUndefined();
+    expect(extra).toMatchObject({ defaultTimeoutMs: 15_000 });
+  });
+
+  it("forwards an explicit --timeout override to the transport", async () => {
+    callGatewayCli.mockResolvedValue({ results: [] });
+    const runtime = createRuntime();
+
+    await sessionsSearchCommand({ query: "deploy", timeout: "2500" }, runtime);
+
+    const [, rpcOpts] = callGatewayCli.mock.calls[0]!;
+    expect((rpcOpts as { timeout?: string | null }).timeout).toBe("2500");
+  });
+
   it("prints hits with session key, role, timestamp, score, and snippet", async () => {
     callGatewayCli.mockResolvedValue({
       results: [

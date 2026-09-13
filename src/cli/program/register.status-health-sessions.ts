@@ -34,6 +34,17 @@ const SESSIONS_PARENT_OPTION_FLAGS = {
   limit: "--limit",
 } satisfies Record<keyof SessionsListCliOptions, string>;
 
+type SessionsSearchCliOptions = {
+  session?: string[];
+  limit?: string;
+  timeout?: string;
+  agent?: string;
+  url?: string;
+  token?: string;
+  password?: string;
+  json?: boolean;
+};
+
 function throwSessionsCliError(message: string): never {
   throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
 }
@@ -544,14 +555,21 @@ export function registerStatusHealthSessionsCommands(program: Command) {
       "--session <key>",
       "Restrict the search to a session key (repeatable; required with --agent)",
       (value: string, previous: string[]) => [...previous, value],
-      [] as string[],
+      [] as string[], // SAFETY: Commander passes the parser accumulator declared on the previous line.
     )
+    .option("--limit <count>", "Max hits to return (1-25; gateway default 10)")
     .addHelpText(
       "after",
       () =>
         `\n${theme.heading("Examples:")}\n${formatHelpExamples([
-          ["openclaw sessions search 'deploy plan'", "Search all visible sessions."],
-          ["openclaw sessions search 'timeout' --limit 25", "Return up to 25 hits (max 25)."],
+          [
+            "openclaw sessions search 'deploy plan'",
+            "Search the default (main) agent's stored transcripts.",
+          ],
+          [
+            "openclaw sessions search 'timeout' --limit 25",
+            "Return at most 25 hits (gateway max).",
+          ],
           [
             'openclaw sessions search "release checklist" --session "agent:main:main"',
             "Search one session.",
@@ -561,15 +579,24 @@ export function registerStatusHealthSessionsCommands(program: Command) {
             "Agent-scoped search with machine-readable output.",
           ],
         ])}\n\n${theme.muted(
-          "Backed by the sessions.search gateway RPC (the same full-text search the Control UI uses); visibility and incognito filtering are enforced gateway-side. --limit is the inherited parent sessions option (1-25 hits; gateway default 10).",
+          "Backed by the sessions.search gateway RPC (the same full-text search the Control UI uses); visibility and incognito filtering are enforced gateway-side. One call searches one agent's stored transcripts and defaults to the `main` agent, so an empty result is not proof of absence across agents: pass --agent <id> with --session <key> to search another agent's sessions. --limit (1-25; 10 by default) is accepted before or after `search`.",
         )}`,
     )
-    .action(async (query: string, opts, command) => {
+    .action(async (query: string, rawOpts, command) => {
+      // Commander fills this action's options from the flags registered by
+      // addSessionsGatewayOptions plus --session/--limit on this subcommand.
+      // SAFETY: The action option bag is exactly those registered flags.
+      const opts = rawOpts as SessionsSearchCliOptions;
       // Like `compact`, merge parent `--agent`/`--json` and reject parent
-      // list-only options instead of silently dropping them. `--limit` is the
-      // exception: commander binds it to the parent `sessions` definition no
-      // matter where it appears on the line, and "max rows out" is the same
-      // idea for search (max hits, gateway-capped at 25), so honor it.
+      // list-only options instead of silently dropping them. `--agent` and
+      // `--limit` are registered at both levels because
+      // `enablePositionalOptions()` stops the parent scan at `search`: the
+      // parent form (`sessions --limit 5 search q`) is only visible on
+      // parentOpts, the trailing form (`sessions search q --limit 5`) only on
+      // the child, and the child wins when both are supplied.
+      // Commander parses the parent `sessions` options declared by
+      // addSessionsListOptions; those are exactly this shape.
+      // SAFETY: Parent option bag is the declared SessionsListCliOptions.
       const parentOpts = command.parent?.opts() as SessionsListCliOptions | undefined;
       rejectUnsupportedSessionsParentOptions(
         "search",
@@ -577,8 +604,9 @@ export function registerStatusHealthSessionsCommands(program: Command) {
         ["store", "allAgents", "active", "verbose"],
         "the gateway resolves searchable stores from --agent and --session",
       );
-      const limit = parseStrictPositiveInteger(parentOpts?.limit);
-      if (parentOpts?.limit !== undefined && limit === undefined) {
+      const requestedLimit = opts.limit ?? parentOpts?.limit;
+      const limit = parseStrictPositiveInteger(requestedLimit);
+      if (requestedLimit !== undefined && limit === undefined) {
         throwSessionsCliError("--limit must be a positive integer (1-25).");
       }
       const timeoutMs = parseStrictPositiveInteger(opts.timeout);
@@ -590,13 +618,13 @@ export function registerStatusHealthSessionsCommands(program: Command) {
         await sessionsSearchCommand(
           {
             query,
-            agent: (opts.agent as string | undefined) ?? parentOpts?.agent,
-            session: opts.session as string[] | undefined,
+            agent: opts.agent ?? parentOpts?.agent,
+            session: opts.session,
             limit,
             timeout: timeoutMs !== undefined ? String(timeoutMs) : undefined,
-            url: opts.url as string | undefined,
-            token: opts.token as string | undefined,
-            password: opts.password as string | undefined,
+            url: opts.url,
+            token: opts.token,
+            password: opts.password,
             json: Boolean(opts.json || parentOpts?.json),
           },
           defaultRuntime,

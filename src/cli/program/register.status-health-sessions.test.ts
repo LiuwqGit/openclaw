@@ -120,7 +120,9 @@ vi.mock("../../runtime.js", async (importOriginal) => ({
 
 describe("registerStatusHealthSessionsCommands", () => {
   function createProgram() {
-    const program = new Command();
+    // Mirrors buildProgram(): the real root program enables positional options, which is
+    // what makes trailing subcommand options parse on the subcommand instead of the parent.
+    const program = new Command().enablePositionalOptions();
     registerStatusHealthSessionsCommands(program);
     return program;
   }
@@ -234,6 +236,12 @@ describe("registerStatusHealthSessionsCommands", () => {
     {
       name: "search invalid limit",
       args: ["sessions", "search", "deploy", "--limit", "0"],
+      message: "--limit must be a positive integer (1-25).",
+      owner: sessionsSearchCommand,
+    },
+    {
+      name: "search invalid parent limit",
+      args: ["sessions", "--limit", "all", "search", "deploy"],
       message: "--limit must be a positive integer (1-25).",
       owner: sessionsSearchCommand,
     },
@@ -521,6 +529,38 @@ describe("registerStatusHealthSessionsCommands", () => {
       query: "deploy",
       limit: 3,
     });
+  });
+
+  it("prefers a trailing search --limit over the parent sessions --limit", async () => {
+    await runCli(["sessions", "--limit", "3", "search", "deploy", "--limit", "7"]);
+
+    expectCommandOptions(sessionsSearchCommand, {
+      query: "deploy",
+      limit: 7,
+    });
+  });
+
+  it("leaves the limit undefined for search when neither spelling supplies one", async () => {
+    await runCli(["sessions", "search", "deploy"]);
+
+    expectCommandOptions(sessionsSearchCommand, {
+      query: "deploy",
+      limit: undefined,
+    });
+  });
+
+  it("documents the search limit flag and the single-agent search scope in help", () => {
+    const sessions = createProgram().commands.find((command) => command.name() === "sessions");
+    const search = sessions?.commands.find((command) => command.name() === "search");
+
+    let help = "";
+    search?.configureOutput({ writeOut: (text) => (help += text) }).outputHelp();
+
+    expect(search?.options.find((option) => option.long === "--limit")?.description).toBe(
+      "Max hits to return (1-25; gateway default 10)",
+    );
+    expect(help).toContain("defaults to the `main` agent");
+    expect(help).not.toContain("Search all visible sessions");
   });
 
   it("inherits the parent sessions --agent and --json for search", async () => {
