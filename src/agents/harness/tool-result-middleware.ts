@@ -328,9 +328,17 @@ function sanitizeMiddlewareDetailsValue(value: unknown): unknown {
     return null;
   }
   const bytes = Buffer.byteLength(serialized, "utf8");
-  return bytes > MAX_MIDDLEWARE_DETAILS_BYTES
-    ? { truncated: true, originalSizeBytes: bytes }
-    : JSON.parse(serialized);
+  if (bytes > MAX_MIDDLEWARE_DETAILS_BYTES) {
+    return { truncated: true, originalSizeBytes: bytes };
+  }
+  const parsed = JSON.parse(serialized);
+  // Byte size is not the only bound: tool emitters can also produce payloads
+  // that stay under the byte cap but exceed the recursive key-count or depth
+  // limits (e.g. wiki_lint's per-issue details). Collapsing those to the same
+  // truncation marker keeps the summary text instead of failing closed.
+  return hasValidMiddlewareDetailsShape(parsed)
+    ? parsed
+    : { truncated: true, originalSizeBytes: bytes };
 }
 
 /**
