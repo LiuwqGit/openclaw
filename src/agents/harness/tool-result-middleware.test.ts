@@ -67,14 +67,17 @@ describe("createAgentToolResultMiddlewareRunner", () => {
     expect(result.details).toEqual({ status: "error", middlewareError: true });
   });
 
-  it("rejects oversized multibyte middleware details", async () => {
+  it.each([
+    { name: "multibyte", details: { payload: "é".repeat(60_000) } },
+    { name: "shape", details: Array.from({ length: 1_001 }, () => null) },
+  ])("rejects oversized $name middleware details", async ({ details }) => {
     // Details are serialized into harness/tool payloads; cap them before a
     // middleware result can create unbounded transcript growth.
     const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
       () => ({
         result: {
           content: [{ type: "text", text: "compacted" }],
-          details: { payload: "é".repeat(60_000) },
+          details,
         },
       }),
     ]);
@@ -572,58 +575,42 @@ describe("createAgentToolResultMiddlewareRunner", () => {
     });
   });
 
-  it("collapses shape-oversized details under the byte cap to a truncation marker", async () => {
-    // Mirrors #147776: wiki_lint details stay under the 100 KB byte cap but
-    // exceed MAX_MIDDLEWARE_DETAILS_KEYS recursively; the summary text must
-    // survive with a validator-compliant truncation marker on details.
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
-      async (event) => ({ result: event.result }),
+  it.each([10, 147])("preserves the wiki_lint summary with %i issues", async (count) => {
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, [
+      (event) => ({ result: event.result }),
     ]);
+    const issues = Array.from({ length: count }, (_, i) => ({
+      severity: "warning",
+      category: "quality",
+      code: "stale-page",
+      path: `sources/example-${i}.md`,
+      message: "Synthetic freshness warning.",
+    }));
+    const details = {
+      issueCount: count,
+      issues,
+      issuesByCategory: { quality: [...issues] },
+      reportPath: "reports/lint.md",
+    };
+    // The wiki shares issue objects; incoming normalization removes repeated references.
+    const normalizedDetails = {
+      ...details,
+      issuesByCategory: { quality: issues.map(() => null) },
+    };
+    const originalSizeBytes = Buffer.byteLength(JSON.stringify(normalizedDetails));
+    expect(originalSizeBytes).toBeLessThanOrEqual(100_000);
+    const summary = `Issues: ${count} total (0 errors, ${count} warnings)`;
+    const result = await runner.applyToolResultMiddleware({
+      toolCallId: "call-1",
+      toolName: "wiki_lint",
+      args: {},
+      result: { content: [{ type: "text", text: summary }], details },
+    });
 
-    const buildIssues = (count: number) =>
-      Array.from({ length: count }, (_, i) => ({
-        severity: "warning",
-        category: "quality",
-        code: "stale-page",
-        path: `sources/example-${i}.md`,
-        message: "Synthetic freshness warning.",
-      }));
-
-    const apply = async (issues: { path: string }[]) =>
-      runner.applyToolResultMiddleware({
-        toolCallId: "call-1",
-        toolName: "wiki_lint",
-        args: {},
-        result: {
-          content: [
-            {
-              type: "text",
-              text: `Issues: ${issues.length} total (0 errors, ${issues.length} warnings)`,
-            },
-          ],
-          details: {
-            issueCount: issues.length,
-            issues,
-            issuesByCategory: { quality: structuredClone(issues) },
-            reportPath: "reports/lint.md",
-          },
-        },
-      });
-
-    const control = await apply(buildIssues(10));
-    expect(control.content).toEqual([
-      { type: "text", text: "Issues: 10 total (0 errors, 10 warnings)" },
-    ]);
-    expect(control.details).toMatchObject({ issueCount: 10 });
-
-    const result = await apply(buildIssues(147));
-    expect(result.content).toEqual([
-      { type: "text", text: "Issues: 147 total (0 errors, 147 warnings)" },
-    ]);
-    const sanitized = result.details as { truncated?: boolean; originalSizeBytes?: number };
-    expect(sanitized.truncated).toBe(true);
-    expect(sanitized.originalSizeBytes ?? 0).toBeGreaterThan(0);
-    expect(sanitized.originalSizeBytes ?? 0).toBeLessThanOrEqual(100_000);
+    expect(result.content).toEqual([{ type: "text", text: summary }]);
+    expect(result.details).toEqual(
+      count === 10 ? normalizedDetails : { truncated: true, originalSizeBytes },
+    );
   });
 
   it("snapshots confirmed delivery before oversized details are collapsed", async () => {
