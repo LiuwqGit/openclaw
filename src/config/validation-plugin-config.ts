@@ -292,6 +292,11 @@ export function validateExplicitPluginConfig(params: {
   // Normalized entries gain optional keys, so inspect the original disable marker shape.
   const hasIntentionalDisableMarker = (pluginId: string) =>
     isExplicitPluginDisableMarker(entries?.[pluginId]) && !isRetiredPluginId(pluginId);
+  // A first-write native catalog opt-out is not installed-plugin intent, so it must not be
+  // reported back as authored config that has no effect while the bundled plugin stays disabled.
+  // Normalized entries gain optional keys here too, so classify the original entry map.
+  const hasNativeCatalogOptOutOnly = (pluginId: string) =>
+    isNativeSessionCatalogOptOutOnly(pluginId, entries?.[pluginId]);
   if (entries && isRecord(entries)) {
     for (const pluginId of Object.keys(entries)) {
       if (
@@ -444,7 +449,8 @@ export function validateExplicitPluginConfig(params: {
       }
     }
     const suppressDisabledConfigWarning =
-      ensureCompatPluginIds().has(pluginId) && !ensureOverriddenPluginIds().has(pluginId);
+      (ensureCompatPluginIds().has(pluginId) && !ensureOverriddenPluginIds().has(pluginId)) ||
+      hasNativeCatalogOptOutOnly(pluginId);
     if (!enabled && entryHasConfig && !suppressDisabledConfigWarning) {
       warnings.push({
         path: `plugins.entries.${pluginId}`,
