@@ -695,6 +695,7 @@ export function resolveEffectiveModelFallbacks(params: {
   hasSessionModelOverride: boolean;
   modelOverrideSource?: "auto" | "user";
   hasAutoFallbackProvenance?: boolean;
+  subagentSpawnLineage?: boolean;
 }): string[] | undefined {
   return modelFallbackOverrideFromAvailability(resolveModelFallbackAvailability(params));
 }

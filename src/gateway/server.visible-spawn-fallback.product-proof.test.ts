@@ -34,7 +34,9 @@ const CHILD_BACKUP = "proof-backup/child-backup";
 const PROFILE = "proof-primary:preferred";
 const WORKER = "SPAWN-FALLBACK-WORKER";
 const SUCCESS = "SPAWN-FALLBACK-SUCCESS";
+const INITIAL_SUCCESS = "SPAWN-INITIAL-SUCCESS";
 type Receipt = { status: string; runId: string; childSessionKey: string };
+type History = { messages: Array<{ role?: string; content?: unknown; stopReason?: string }> };
 type ProviderRequest = {
   model: string;
   input: Array<{ type?: string; role?: string; call_id?: string; output?: string }>;
@@ -48,6 +50,8 @@ type Scenario = {
   configuredAlias?: boolean;
   emptyFallbacks?: boolean;
   backup?: string;
+  directAgent?: boolean;
+  directModel?: string;
 };
 
 async function startProvider(scenario: Scenario) {
@@ -55,6 +59,7 @@ async function startProvider(scenario: Scenario) {
   const errors: unknown[] = [];
   let spawn: Receipt | undefined;
   let spawnRequested = false;
+  let primaryRateLimited = !scenario.directAgent;
   const server = createServer((request, response) => {
     void (async () => {
       if (request.method !== "POST" || request.url !== "/v1/responses") {
@@ -73,7 +78,7 @@ async function startProvider(scenario: Scenario) {
         child: child && !title,
         authorization: request.headers.authorization,
       });
-      if (child && !title && body.model === "primary") {
+      if (child && !title && body.model === "primary" && primaryRateLimited) {
         response.writeHead(429, { "content-type": "application/json" });
         response.end(
           JSON.stringify({
@@ -97,7 +102,13 @@ async function startProvider(scenario: Scenario) {
           errors.push(new Error("Missing sessions_spawn receipt"));
         }
         writeOpenAiResponsesText(response, {
-          text: title ? "Fallback proof" : child ? SUCCESS : "Parent complete",
+          text: title
+            ? "Fallback proof"
+            : child
+              ? primaryRateLimited
+                ? SUCCESS
+                : INITIAL_SUCCESS
+              : "Parent complete",
           messageId: `msg_${requests.length}`,
           responseId: `resp_${requests.length}`,
         });
@@ -159,6 +170,9 @@ async function startProvider(scenario: Scenario) {
     get spawn() {
       return spawn;
     },
+    rateLimitPrimary() {
+      primaryRateLimited = true;
+    },
     async stop() {
       server.closeAllConnections();
       await new Promise<void>((resolve, reject) => {
@@ -199,9 +213,27 @@ const scenarios: Scenario[] = [
   { name: "hidden child control", visible: false, backup: "backup" },
 ];
 
+const directAgentScenarios: Scenario[] = [
+  {
+    name: "direct agent distinct child ladder",
+    directAgent: true,
+    backup: "child-backup",
+  },
+  {
+    name: "direct agent empty child ladder",
+    directAgent: true,
+    emptyFallbacks: true,
+  },
+  {
+    name: "direct agent explicit model pin",
+    directAgent: true,
+    directModel: PRIMARY,
+  },
+];
+
 describe("sessions_spawn model fallback through the Gateway", () => {
   afterAll(resetGatewayTestState);
-  it.each(scenarios)(
+  it.each([...scenarios, ...directAgentScenarios])(
     "$name",
     async (scenario) => {
       resetGatewayTestState();
@@ -228,7 +260,7 @@ describe("sessions_spawn model fallback through the Gateway", () => {
                 subagents: {
                   allowAgents: ["*"],
                   maxConcurrent: 2,
-                  ...(scenario.inherited || scenario.emptyFallbacks
+                  ...(scenario.inherited || scenario.emptyFallbacks || scenario.directAgent
                     ? { model: { fallbacks: scenario.emptyFallbacks ? [] : [CHILD_BACKUP] } }
                     : {}),
                 },
@@ -306,7 +338,43 @@ describe("sessions_spawn model fallback through the Gateway", () => {
           if (!spawn) {
             throw new Error("Parent did not receive the sessions_spawn result");
           }
-          const terminal = await wait(spawn.runId);
+          let terminal = await wait(spawn.runId);
+          let requestOffset = 0;
+          let historyOffset = 0;
+          if (scenario.directAgent) {
+            expect(terminal.status).toBe("ok");
+            const initialHistory = await client.request<History>("chat.history", {
+              sessionKey: spawn.childSessionKey,
+              limit: 100,
+            });
+            const initialReplies = initialHistory.messages.filter(
+              (message) => message.role === "assistant",
+            );
+            expect(
+              initialReplies.map((message) => extractTextFromChatContent(message.content)),
+            ).toEqual([INITIAL_SUCCESS]);
+            expect(
+              new Set(
+                provider.requests.filter((request) => request.child).map(({ model }) => model),
+              ),
+            ).toEqual(new Set(["primary"]));
+            historyOffset = initialHistory.messages.length;
+            requestOffset = provider.requests.length;
+            provider.rateLimitPrimary();
+            const followup = await client.request<{ runId: string; status: string }>(
+              "agent",
+              {
+                sessionKey: spawn.childSessionKey,
+                message: `Return exactly ${SUCCESS}. ${WORKER}`,
+                deliver: false,
+                idempotencyKey: randomUUID(),
+                ...(scenario.directModel ? { model: scenario.directModel } : {}),
+              },
+              { expectFinal: false },
+            );
+            expect(followup.status).toBe("accepted");
+            terminal = await wait(followup.runId);
+          }
           expect(spawn.childSessionKey).toMatch(
             scenario.visible === false ? /^agent:main:subagent:/ : /^agent:main:dashboard:/,
           );
@@ -319,10 +387,13 @@ describe("sessions_spawn model fallback through the Gateway", () => {
           if (scenario.visible !== false) {
             expect(child).toMatchObject({ parentSessionKey: parentKey });
           }
-          const history = await client.request<{
-            messages: Array<{ role?: string; content?: unknown; stopReason?: string }>;
-          }>("chat.history", { sessionKey: spawn.childSessionKey, limit: 100 });
-          const replies = history.messages.filter((message) => message.role === "assistant");
+          const history = await client.request<History>("chat.history", {
+            sessionKey: spawn.childSessionKey,
+            limit: 100,
+          });
+          const replies = history.messages
+            .slice(historyOffset)
+            .filter((message) => message.role === "assistant");
           const text = replies
             .map((message) => extractTextFromChatContent(message.content))
             .join("\n");
@@ -330,10 +401,15 @@ describe("sessions_spawn model fallback through the Gateway", () => {
             sessionKey: spawn.childSessionKey,
             agentId: "main",
           });
-          const childRequests = provider.requests.filter((request) => request.child);
+          const childRequests = provider.requests
+            .slice(requestOffset)
+            .filter((request) => request.child);
           console.info(
             JSON.stringify({
               scenario: scenario.name,
+              ...(scenario.directAgent
+                ? { initialChildReply: INITIAL_SUCCESS, requestOffset, historyOffset }
+                : {}),
               childRequests: childRequests.map(({ model }) => model),
               terminal,
               childSessionKey: spawn.childSessionKey,
@@ -357,7 +433,7 @@ describe("sessions_spawn model fallback through the Gateway", () => {
           if (scenario.backup) {
             expect(childRequests.map((request) => request.model)).toContain(scenario.backup);
             expect(text).toContain(SUCCESS);
-            if (scenario.inherited) {
+            if (scenario.inherited || scenario.directAgent) {
               expect(childRequests.map((request) => request.model)).not.toContain("backup");
             }
           } else {
