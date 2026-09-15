@@ -267,6 +267,15 @@ export async function maybeSpawnVisibleSession(params: {
     return { status: "error", error: modelPlan.error };
   }
   const resolvedModel = modelPlan.resolvedModel;
+  // The shared planner splits a trailing auth-profile suffix out of the model ref;
+  // re-attach it so sessions.create's existing profile validation and persistence
+  // path still receives the complete caller selection.
+  const authProfileOverride = normalizeOptionalString(
+    modelPlan.initialSessionPatch.authProfileOverride,
+  );
+  const resolvedModelRef = authProfileOverride
+    ? `${resolvedModel}@${authProfileOverride}`
+    : resolvedModel;
   const spawnModelAutoSelection =
     modelPlan.initialSessionPatch.modelOverrideSource === "auto"
       ? (() => {
@@ -385,7 +394,7 @@ export async function maybeSpawnVisibleSession(params: {
         ...(params.label ? { label: params.label } : {}),
         // sessions.create persists the group under the legacy wire field `category`.
         ...(group ? { category: group } : {}),
-        model: resolvedModel,
+        model: resolvedModelRef,
         task: buildSubagentTaskMessage({
           task: params.task,
           spawnMode: "session",

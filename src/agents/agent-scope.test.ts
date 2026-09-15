@@ -251,6 +251,96 @@ describe("resolveAgentConfig", () => {
       expect(availability).toEqual({ kind: "disabled_by_model_override" });
       expect(availability.kind === "active" ? availability.models : []).toEqual([]);
     });
+
+    it("applies the subagent fallback ladder to spawn-owned visible children", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          list: [
+            {
+              id: "main",
+              model: {
+                primary: "openai/gpt-test-primary",
+                fallbacks: ["openai/gpt-agent-fallback"],
+              },
+              subagents: {
+                model: {
+                  primary: "openai/gpt-test-primary",
+                  fallbacks: ["custom/subagent-backup"],
+                },
+              },
+            },
+          ],
+        },
+      };
+      expect(
+        resolveModelFallbackAvailability({
+          cfg,
+          agentId: "main",
+          sessionKey: "agent:main:dashboard:spawned",
+          hasSessionModelOverride: true,
+          modelOverrideSource: "auto",
+          subagentSpawnLineage: true,
+        }),
+      ).toEqual({ kind: "active", models: ["custom/subagent-backup"], source: "explicit" });
+    });
+
+    it("keeps an explicitly empty subagent ladder for spawn-owned visible children", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          list: [
+            {
+              id: "main",
+              model: {
+                primary: "openai/gpt-test-primary",
+                fallbacks: ["openai/gpt-agent-fallback"],
+              },
+              subagents: { model: { fallbacks: [] } },
+            },
+          ],
+        },
+      };
+      expect(
+        resolveModelFallbackAvailability({
+          cfg,
+          agentId: "main",
+          sessionKey: "agent:main:dashboard:spawned",
+          hasSessionModelOverride: true,
+          modelOverrideSource: "auto",
+          subagentSpawnLineage: true,
+        }),
+      ).toEqual({ kind: "none_configured", source: "explicit" });
+    });
+
+    it("keeps the ordinary agent ladder for dashboard sessions without spawn lineage", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          list: [
+            {
+              id: "main",
+              model: {
+                primary: "openai/gpt-test-primary",
+                fallbacks: ["openai/gpt-agent-fallback"],
+              },
+              subagents: {
+                model: {
+                  primary: "openai/gpt-test-primary",
+                  fallbacks: ["custom/subagent-backup"],
+                },
+              },
+            },
+          ],
+        },
+      };
+      expect(
+        resolveModelFallbackAvailability({
+          cfg,
+          agentId: "main",
+          sessionKey: "agent:main:dashboard:operator",
+          hasSessionModelOverride: true,
+          modelOverrideSource: "auto",
+        }),
+      ).toEqual({ kind: "active", models: ["openai/gpt-agent-fallback"], source: "explicit" });
+    });
   });
 
   describe("modelFallbackOverrideFromAvailability", () => {

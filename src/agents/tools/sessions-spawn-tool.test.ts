@@ -1489,6 +1489,88 @@ describe("sessions_spawn tool", () => {
     expect(creation.spawnModelAutoSelection).toBeUndefined();
   });
 
+  it("forwards a profile-qualified caller model selection intact", async () => {
+    hoisted.inProcessCreationMock.mockResolvedValue({
+      key: "agent:main:dashboard:profile-child",
+      runStarted: true,
+      runId: "run-visible-profile",
+    });
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      config: { agents: { list: [{ id: "main" }] } },
+      registerRun: vi.fn(),
+      countActiveRuns: () => 0,
+    });
+
+    const result = await tool.execute("visible-profile", {
+      task: "inspect",
+      visible: true,
+      model: "anthropic/claude-sonnet-4-6@work",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      childSessionKey: "agent:main:dashboard:profile-child",
+    });
+    // The auth-profile suffix must reach sessions.create so its existing profile
+    // validation and persistence path still runs.
+    expect(hoisted.inProcessCreationMock).toHaveBeenCalledWith(
+      "sessions.create",
+      expect.objectContaining({ model: "anthropic/claude-sonnet-4-6@work" }),
+      expect.anything(),
+    );
+    const creation = hoisted.inProcessCreationMock.mock.calls[0]?.[2] as Record<string, unknown>;
+    expect(creation.spawnModelAutoSelection).toBeUndefined();
+  });
+
+  it("keeps a profile-qualified configured model intact on visible spawns", async () => {
+    hoisted.inProcessCreationMock.mockResolvedValue({
+      key: "agent:main:dashboard:config-profile-child",
+      runStarted: true,
+      runId: "run-visible-config-profile",
+    });
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      config: {
+        agents: {
+          list: [
+            {
+              id: "main",
+              model: {
+                primary: "openai/gpt-test-primary@work",
+                fallbacks: ["custom/fallback-model"],
+              },
+            },
+          ],
+        },
+      },
+      registerRun: vi.fn(),
+      countActiveRuns: () => 0,
+    });
+
+    const result = await tool.execute("visible-config-profile", {
+      task: "inspect",
+      visible: true,
+    });
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      childSessionKey: "agent:main:dashboard:config-profile-child",
+    });
+    expect(hoisted.inProcessCreationMock).toHaveBeenCalledWith(
+      "sessions.create",
+      expect.objectContaining({ model: "openai/gpt-test-primary@work" }),
+      expect.objectContaining({
+        spawnModelAutoSelection: {
+          provider: "openai",
+          model: "gpt-test-primary",
+          fallbackOriginProvider: "openai",
+          fallbackOriginModel: "gpt-test-primary",
+        },
+      }),
+    );
+  });
+
   it("blocks unsandboxed visible targets for a sandboxed caller runtime", async () => {
     const callGateway = vi.fn();
     const tool = createSessionsSpawnTool({

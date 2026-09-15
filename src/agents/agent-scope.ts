@@ -654,6 +654,11 @@ export function resolveModelFallbackAvailability(params: {
   hasAutoFallbackProvenance?: boolean;
   modelSelectionLocked?: boolean;
   modelFallbacksOverride?: string[];
+  /**
+   * Spawn-owned visible children keep dashboard session keys; lineage carries
+   * the subagent fallback ladder to them like hidden subagent keys already do.
+   */
+  subagentSpawnLineage?: boolean;
 }): ModelFallbackAvailability {
   if (params.modelSelectionLocked) {
     return { kind: "disabled_by_model_selection_lock" };
@@ -677,9 +682,10 @@ export function resolveModelFallbackAvailability(params: {
   if (!canUseConfiguredFallbacks) {
     return { kind: "disabled_by_model_override" };
   }
-  const subagentFallbacksOverride = isSubagentSessionKey(params.sessionKey)
-    ? resolveSubagentSpawnModelFallbacksOverride(params.cfg, params.agentId)
-    : undefined;
+  const subagentFallbacksOverride =
+    isSubagentSessionKey(params.sessionKey) || params.subagentSpawnLineage === true
+      ? resolveSubagentSpawnModelFallbacksOverride(params.cfg, params.agentId)
+      : undefined;
   if (subagentFallbacksOverride !== undefined) {
     return modelFallbackAvailabilityFromModels(subagentFallbacksOverride, "explicit");
   }
