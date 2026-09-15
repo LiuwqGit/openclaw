@@ -36,6 +36,7 @@ import { projectSessionDeliveryFields } from "../utils/delivery-context.shared.j
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import { buildControlUiChannelAvatarUrl } from "./control-ui-contract.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
+import { readPreparedGatewayModelCatalogMetadata } from "./server-model-catalog-view.js";
 import { sessionHasAutomation } from "./session-automation-index.js";
 import { sessionClassificationForRow } from "./session-classification.js";
 import {
@@ -52,12 +53,10 @@ import type {
   SessionListRowContext,
 } from "./session-utils-contracts.js";
 import {
-  buildCompactionCheckpointPreview,
   deriveSessionTitle,
   resolveEstimatedSessionCostUsd,
-  resolveLatestCompactionCheckpoint,
+  resolveSessionCompactionSummary,
   resolvePositiveNumber,
-  resolveProjectableCompactionCheckpoints,
   buildStoreChildSessionIndex,
 } from "./session-utils-core.js";
 import {
@@ -66,13 +65,13 @@ import {
   projectGatewaySessionRunState,
   resolveGatewaySessionGoal,
 } from "./session-utils-display.js";
+import { resolveSessionSelectedModelRef } from "./session-utils-model-selection.js";
 import {
   resolveGatewaySessionThinkingProjectionInternal,
   resolveSessionDisplayModelIdentityRefCached,
 } from "./session-utils-model.js";
 import {
   buildSessionListRowMetadataContext,
-  resolveSessionSelectedModelRef,
   resolveTranscriptUsageFallback,
 } from "./session-utils-projection.js";
 import { parseGroupKey } from "./session-utils-store.js";
@@ -145,6 +144,9 @@ export function buildGatewaySessionRow(params: {
     : undefined;
   const displayName = resolveGatewaySessionDisplayName(key, entry);
   const sessionAgentId = params.agentId;
+  const preparedCatalog =
+    params.modelCatalog instanceof Map ? params.modelCatalog.get(sessionAgentId) : undefined;
+  const metadataSnapshot = readPreparedGatewayModelCatalogMetadata(preparedCatalog);
   const skipTranscriptUsage = params.skipTranscriptUsageFallback === true;
   const {
     subagentRun,
@@ -158,6 +160,7 @@ export function buildGatewaySessionRow(params: {
     agentId: sessionAgentId,
     rowContext,
     allowPluginNormalization: !lightweight,
+    manifestPlugins: metadataSnapshot,
   });
   const freshSessionTotalTokens = asNonNegativeFiniteNumber(resolveFreshSessionTotalTokens(entry));
   const transcriptUsage = !skipTranscriptUsage
@@ -199,13 +202,8 @@ export function buildGatewaySessionRow(params: {
     entry?.pinnedAt !== undefined && isPinnableSessionEntry(key, entry)
       ? entry.pinnedAt
       : undefined;
-  const compactionCheckpoints = resolveProjectableCompactionCheckpoints(entry);
-  const compactionCheckpointCount = Array.isArray(entry?.compactionCheckpoints)
-    ? compactionCheckpoints.length
-    : undefined;
-  const latestCompactionCheckpoint = buildCompactionCheckpointPreview(
-    resolveLatestCompactionCheckpoint(compactionCheckpoints),
-  );
+  const { compactionCheckpointCount, latestCompactionCheckpoint } =
+    resolveSessionCompactionSummary(entry);
   const rowModelProvider = selectedModel.provider;
   const rowModel = selectedModel.model;
   const rowModelIdentity = resolveSessionDisplayModelIdentityRefCached({
@@ -269,8 +267,6 @@ export function buildGatewaySessionRow(params: {
   const thinkingModel = rowModel ?? DEFAULT_MODEL;
   // Entries and provider policy must stay bound to the same prepared agent owner;
   // the Gateway startup registry can contain a different set of plugins.
-  const preparedCatalog =
-    params.modelCatalog instanceof Map ? params.modelCatalog.get(sessionAgentId) : undefined;
   const rowModelCatalog =
     params.modelCatalog instanceof Map ? preparedCatalog?.entries : params.modelCatalog;
   // Event/list rows must not rediscover plugin-backed configured catalog metadata.
@@ -285,6 +281,8 @@ export function buildGatewaySessionRow(params: {
     sessionKey: acpSessionKey,
     entry,
     modelCatalog: thinkingModelCatalog,
+    modelCatalogRouteVariants: preparedCatalog?.routeVariants,
+    metadataSnapshot,
     rowContext,
     providerPolicySource: preparedCatalog?.pluginRegistry ?? (lightweight ? "active" : undefined),
   });
@@ -495,6 +493,7 @@ export function buildGatewaySessionRow(params: {
         ? "inherited"
         : resolveSessionModelOverrideSource(entry),
     modelSelectionLocked: entry?.modelSelectionLocked,
+    runtimeSelectionLocked: thinkingProjection.runtimeSelectionLocked,
     agentRuntime: projectWorkerPlacementAgentRuntime(thinkingProjection.agentRuntime),
     contextTokens,
     contextBudgetStatus: resolveProjectedSessionContextBudgetStatus({
