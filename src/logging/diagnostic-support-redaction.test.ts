@@ -1,7 +1,8 @@
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  redactPathForSupport,
   redactSupportString,
   redactTextForSupport,
   sanitizeSupportConfigValue,
@@ -350,5 +351,31 @@ describe("diagnostic support redaction", () => {
       redaction,
     );
     expect(redactSupportString(once, redaction)).toBe(once);
+  });
+
+  it("does not resolve stripped namespace suffixes against the working directory", () => {
+    const userProfile = "C:\\Users\\support-user";
+    const redaction = {
+      env: {
+        USERPROFILE: userProfile,
+      },
+      stateDir: `${userProfile}\\AppData\\Roaming\\openclaw`,
+    };
+
+    // Reproduce the reported defect conditions: cwd equals USERPROFILE, so a
+    // relative "UNC\\server\\share\\..." suffix would resolve under the home
+    // directory and wrongly match the "~" prefix.
+    const cwd = vi.spyOn(process, "cwd").mockReturnValue(userProfile);
+    try {
+      expect(redactPathForSupport("\\\\?\\UNC\\server\\share\\config.json", redaction)).toBe(
+        "\\\\?\\UNC\\server\\share\\config.json",
+      );
+      // Device namespace paths have no unmarked spelling; they stay untouched.
+      expect(redactPathForSupport("\\\\.\\pipe\\openclaw-gateway", redaction)).toBe(
+        "\\\\.\\pipe\\openclaw-gateway",
+      );
+    } finally {
+      cwd.mockRestore();
+    }
   });
 });

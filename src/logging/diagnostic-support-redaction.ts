@@ -217,11 +217,22 @@ function pathCandidates(file: string): string[] {
   const resolved = path.win32.resolve(file);
   const candidates = [resolved, resolved.replaceAll("\\", "/")];
   // path.win32.resolve preserves "\\?\" / "\\.\" namespace markers, but configured
-  // prefixes never carry them; also match the unmarked spelling.
+  // prefixes never carry them; also match the unmarked spelling when one exists.
   const marker = WINDOWS_NAMESPACE_MARKER_RE.exec(file);
   if (marker) {
-    const unmarked = path.win32.resolve(file.slice(marker[0].length));
-    candidates.push(unmarked, unmarked.replaceAll("\\", "/"));
+    const stripped = file.slice(marker[0].length);
+    let unmarked: string | undefined;
+    if (/^UNC[\\/]/iu.test(stripped)) {
+      // "\\?\UNC\server\share" spells "\\server\share" without the marker.
+      unmarked = path.win32.resolve(`\\\\${stripped.slice(4)}`);
+    } else if (/^[A-Za-z]:[\\/]/u.test(stripped)) {
+      unmarked = path.win32.resolve(stripped);
+    }
+    // Device paths ("\\.\pipe\...") and other suffixes without an absolute
+    // unmarked spelling must not be resolved against the working directory.
+    if (unmarked !== undefined) {
+      candidates.push(unmarked, unmarked.replaceAll("\\", "/"));
+    }
   }
   return candidates;
 }
