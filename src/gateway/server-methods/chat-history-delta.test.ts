@@ -14,6 +14,7 @@ import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-d
 import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
 import { readChatHistoryDelta } from "./chat-history-delta.js";
 import { readChatHistoryPage } from "./chat-history-pages.js";
+import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
 
 const tempDirs = createTempDirTracker();
 afterEach(() => {
@@ -510,22 +511,23 @@ describe("chat history TTS supplement cursor reconciliation", () => {
       eventId: "answer",
       message: { role: "assistant", content: [{ type: "text", text: visibleText }] },
     });
-    expect(readDelta(scope, cursor)).toMatchObject({ kind: "delta" });
+    const answerDelta = readDelta(scope, cursor);
+    expect(answerDelta.kind).toBe("delta");
+    if (answerDelta.kind !== "delta") {
+      throw new Error("Expected the answer delta");
+    }
 
-    await appendTranscriptMessage(scope, {
-      eventId: "tts-supplement",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Audio reply" }, attachment],
-        openclawTtsSupplement: {
-          textSha256: createHash("sha256").update(visibleText).digest("hex"),
-        },
+    const appended = await appendInjectedAssistantMessageToTranscript({
+      ...scope,
+      message: "Audio reply",
+      content: [{ type: "text", text: "Audio reply" }, attachment],
+      ttsSupplement: {
+        textSha256: createHash("sha256").update(visibleText).digest("hex"),
       },
     });
+    expect(appended.ok).toBe(true);
 
-    // The supplement merges into the reply above, which is before this cursor:
-    // an append-only delta would emit it as a standalone "Audio reply" row.
-    expect(readDelta(scope, cursor)).toEqual({ kind: "reset" });
+    expect(readDelta(scope, answerDelta.deltaCursor)).toEqual({ kind: "reset" });
     const refreshed = await readTail(scope);
     expect(refreshed.messages).toMatchObject([
       {

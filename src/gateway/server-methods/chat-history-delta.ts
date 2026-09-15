@@ -92,9 +92,7 @@ export function readChatHistoryDelta(params: {
       return { kind: "reset" };
     }
     if (isAssistantTtsSupplementMessage(entryMessage)) {
-      // A TTS supplement merges into an earlier assistant reply by text hash. That
-      // source can be before this cursor, so an append-only delta would emit the
-      // supplement as a standalone "Audio reply" row. Let full history own the merge.
+      // Full history owns merging audio into a reply that can precede this cursor.
       return { kind: "reset" };
     }
     const messageId = asOptionalRecord(row.event)?.id;

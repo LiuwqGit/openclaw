@@ -78,14 +78,13 @@ function readAssistantTtsSupplementMarker(
   return hasSupplementBlock ? marker : undefined;
 }
 
-/**
- * True when the row is a TTS supplement that projects onto an earlier assistant reply.
- * Such a row is never meaningful on its own: merging it needs the preceding source
- * message, which a single-message projection cannot supply.
- */
+/** Recognize stored supplements using the same display content as full history. */
 export function isAssistantTtsSupplementMessage(message: unknown): boolean {
   const record = readRecord(message);
-  return record !== undefined && readAssistantTtsSupplementMarker(record) !== undefined;
+  return (
+    record !== undefined &&
+    readAssistantTtsSupplementMarker(projectAssistantDisplayContent(record)) !== undefined
+  );
 }
 
 function readTtsSupplementTargetText(message: Record<string, unknown>): string {
