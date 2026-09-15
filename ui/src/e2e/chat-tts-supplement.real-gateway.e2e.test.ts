@@ -17,11 +17,6 @@ const replies = [
   "The second spoken answer stays visible.",
   "This answer has no speech attachment.",
 ] as const;
-const prompts = [
-  "Please give spoken answer 1.",
-  "Please give spoken answer 2.",
-  "Please give a text-only answer.",
-] as const;
 type ProviderRequest = {
   model: string;
 };
@@ -325,7 +320,7 @@ suite.define(() => {
               await send("/tts chat on");
               await page.locator(".chat-bubble").getByText("TTS enabled for this chat.").waitFor();
               for (const [index, text] of replies.slice(0, 2).entries()) {
-                await send(prompts[index]);
+                await send(`Please give spoken answer ${index + 1}.`);
                 await answer(text).waitFor();
                 await expect.poll(() => provider.speech.length).toBe(index + 1);
                 // Keep synthesis pending until the browser has accepted the answer's history cursor.
@@ -347,7 +342,7 @@ suite.define(() => {
               }
               await send("/tts chat off");
               await page.locator(".chat-bubble").getByText("TTS disabled for this chat.").waitFor();
-              await send(prompts[2]);
+              await send("Please give a text-only answer.");
               await answer(replies[2]).waitFor();
               await page
                 .getByRole("button", { name: "Stop generating", exact: true })
