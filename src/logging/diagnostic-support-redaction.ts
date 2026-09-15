@@ -269,8 +269,9 @@ export function redactPathForSupport(
     return file;
   }
   const candidates = pathCandidates(file);
+  const prefixes = pathRedactionPrefixes(options);
   for (const next of candidates) {
-    for (const prefix of pathRedactionPrefixes(options)) {
+    for (const prefix of prefixes) {
       const suffix = matchPathPrefix(next, prefix);
       if (suffix !== undefined) {
         return `${prefix.label}${suffix}`;
