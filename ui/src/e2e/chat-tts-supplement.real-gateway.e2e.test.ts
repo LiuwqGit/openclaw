@@ -292,7 +292,9 @@ suite.define(() => {
                 await expect.poll(() => bubble.locator("audio").count()).toBe(1);
                 const audio = bubble.locator("audio");
                 await audio.evaluate((element) => {
-                  if (!(element instanceof HTMLAudioElement)) throw new Error("Expected audio");
+                  if (!(element instanceof HTMLAudioElement)) {
+                    throw new Error("Expected audio");
+                  }
                   element.load();
                 });
                 await expect
@@ -306,7 +308,9 @@ suite.define(() => {
                   )
                   .toBe(true);
                 await audio.evaluate(async (element) => {
-                  if (!(element instanceof HTMLAudioElement)) throw new Error("Expected audio");
+                  if (!(element instanceof HTMLAudioElement)) {
+                    throw new Error("Expected audio");
+                  }
                   await element.play();
                   element.pause();
                 });
@@ -368,7 +372,9 @@ suite.define(() => {
       ]) {
         gatewayLog = gatewayLog.split(value).join("<fixture>");
       }
-      if (process.env.HOME) gatewayLog = gatewayLog.split(process.env.HOME).join("<home>");
+      if (process.env.HOME) {
+        gatewayLog = gatewayLog.split(process.env.HOME).join("<home>");
+      }
       await writeFile(
         path.join(suite.artifactDir, "speech-fixture.failure.json"),
         JSON.stringify(
