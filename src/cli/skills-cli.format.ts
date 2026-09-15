@@ -253,9 +253,7 @@ export function formatSkillInfo(
       const missing = skill.missing[key];
       let requirementStatus: string;
       if (key === "anyBins" || key === "os") {
-        // Alternative groups are satisfied when any single option matches, so
-        // render one status for the whole group (matching the hooks CLI)
-        // instead of implying that every alternative was found.
+        // Missing arrays describe the whole alternative group, not individual availability.
         const prefix = key === "anyBins" ? "any of: " : "";
         requirementStatus = formatRequirementStatus(
           `(${prefix}${required.join(", ")})`,

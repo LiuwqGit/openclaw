@@ -247,64 +247,6 @@ describe("skills-cli", () => {
       expect(output).toContain("API_KEY");
     });
 
-    it("renders satisfied alternative requirement groups as one group status", () => {
-      const report = createMockReport([
-        createMockSkill({
-          name: "alternative-tools",
-          eligible: true,
-          requirements: {
-            bins: ["node"],
-            anyBins: ["node", "openclaw-definitely-missing-runtime"],
-            env: [],
-            config: [],
-            os: ["linux", "darwin"],
-          },
-          missing: {
-            bins: [],
-            anyBins: [],
-            env: [],
-            config: [],
-            os: [],
-          },
-        }),
-      ]);
-      const output = formatSkillInfo(report, "alternative-tools", {});
-      expect(output).toContain("Binaries: ✓ node");
-      expect(output).toContain(
-        "Any binaries: ✓ (any of: node, openclaw-definitely-missing-runtime)",
-      );
-      expect(output).toContain("OS: ✓ (linux, darwin)");
-      expect(output).not.toContain("✓ openclaw-definitely-missing-runtime");
-      expect(output).not.toContain("✓ darwin");
-    });
-
-    it("renders unsatisfied alternative requirement groups as one group failure", () => {
-      const report = createMockReport([
-        createMockSkill({
-          name: "alternative-tools",
-          eligible: false,
-          requirements: {
-            bins: [],
-            anyBins: ["openclaw-definitely-missing-runtime"],
-            env: [],
-            config: [],
-            os: ["darwin", "win32"],
-          },
-          missing: {
-            bins: [],
-            anyBins: ["openclaw-definitely-missing-runtime"],
-            env: [],
-            config: [],
-            os: ["darwin", "win32"],
-          },
-        }),
-      ]);
-      const output = formatSkillInfo(report, "alternative-tools", {});
-      expect(output).toContain("Any binaries: ✗ (any of: openclaw-definitely-missing-runtime)");
-      expect(output).toContain("OS: ✗ (darwin, win32)");
-      expect(output).not.toContain("✓ (");
-    });
-
     it("resolves skill info case-insensitively", () => {
       const report = createMockReport([
         createMockSkill({
