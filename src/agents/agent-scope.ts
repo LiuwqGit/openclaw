@@ -668,6 +668,19 @@ export function resolveModelFallbackAvailability(params: {
   }
   const agentFallbacksOverride = resolveAgentModelFallbacksOverride(params.cfg, params.agentId);
   if (!params.hasSessionModelOverride) {
+    // A spawn-owned child can land here without an effective override: a primary
+    // inherited from `agents.defaults.model` is not a configured subagent selection,
+    // so its stored entry carries no origin metadata and reads back as legacy.
+    // The subagent ladder still owns those children; user pins keep the agent ladder.
+    if (params.subagentSpawnLineage === true && params.modelOverrideSource !== "user") {
+      const spawnFallbacksOverride = resolveSubagentSpawnModelFallbacksOverride(
+        params.cfg,
+        params.agentId,
+      );
+      if (spawnFallbacksOverride !== undefined) {
+        return modelFallbackAvailabilityFromModels(spawnFallbacksOverride, "explicit");
+      }
+    }
     if (agentFallbacksOverride !== undefined) {
       return modelFallbackAvailabilityFromModels(agentFallbacksOverride, "explicit");
     }
@@ -686,6 +699,8 @@ export function resolveModelFallbackAvailability(params: {
     isSubagentSessionKey(params.sessionKey) || params.subagentSpawnLineage === true
       ? resolveSubagentSpawnModelFallbacksOverride(params.cfg, params.agentId)
       : undefined;
+  // Same subagent policy as the no-override path above; kept separate because an
+  // auto-provenance override must still project an explicit (never inherited) ladder.
   if (subagentFallbacksOverride !== undefined) {
     return modelFallbackAvailabilityFromModels(subagentFallbacksOverride, "explicit");
   }

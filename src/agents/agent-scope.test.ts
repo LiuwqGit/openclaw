@@ -311,6 +311,85 @@ describe("resolveAgentConfig", () => {
       ).toEqual({ kind: "none_configured", source: "explicit" });
     });
 
+    it.each([
+      {
+        name: "explicitly empty",
+        subagentsModel: { fallbacks: [] as string[] },
+        expected: { kind: "none_configured", source: "explicit" },
+      },
+      {
+        name: "distinct",
+        subagentsModel: { fallbacks: ["custom/subagent-backup"] },
+        expected: { kind: "active", models: ["custom/subagent-backup"], source: "explicit" },
+      },
+    ])(
+      "keeps the $name subagent ladder for spawn children whose primary is inherited",
+      ({ subagentsModel, expected }) => {
+        const cfg: OpenClawConfig = {
+          agents: {
+            defaults: {
+              model: {
+                primary: "openai/gpt-global-primary",
+                fallbacks: ["openai/gpt-global-fallback"],
+              },
+              subagents: { model: subagentsModel },
+            },
+            list: [{ id: "main" }],
+          },
+        };
+        // A primary inherited from `agents.defaults.model` is not a configured
+        // subagent selection, so the stored entry carries no origin metadata and
+        // the run arrives here without an effective session model override.
+        expect(
+          resolveModelFallbackAvailability({
+            cfg,
+            agentId: "main",
+            sessionKey: "agent:main:dashboard:spawned",
+            hasSessionModelOverride: false,
+            subagentSpawnLineage: true,
+          }),
+        ).toEqual(expected);
+      },
+    );
+
+    it("keeps the inherited global ladder without spawn lineage or with a user pin", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-global-primary",
+              fallbacks: ["openai/gpt-global-fallback"],
+            },
+            subagents: { model: { fallbacks: [] } },
+          },
+          list: [{ id: "main" }],
+        },
+      };
+      const inherited = {
+        kind: "active",
+        models: ["openai/gpt-global-fallback"],
+        source: "inherited",
+      } as const;
+      expect(
+        resolveModelFallbackAvailability({
+          cfg,
+          agentId: "main",
+          sessionKey: "agent:main:dashboard:operator",
+          hasSessionModelOverride: false,
+        }),
+      ).toEqual(inherited);
+      expect(
+        resolveModelFallbackAvailability({
+          cfg,
+          agentId: "main",
+          sessionKey: "agent:main:dashboard:spawned",
+          hasSessionModelOverride: false,
+          modelOverrideSource: "user",
+          subagentSpawnLineage: true,
+        }),
+      ).toEqual(inherited);
+    });
+
     it("keeps the ordinary agent ladder for dashboard sessions without spawn lineage", () => {
       const cfg: OpenClawConfig = {
         agents: {
