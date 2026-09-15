@@ -244,16 +244,29 @@ export function formatSkillInfo(
   if (requirementGroups.length > 0) {
     lines.push("");
     lines.push(theme.heading("Requirements:"));
+    const formatRequirementStatus = (value: string, satisfied: boolean) =>
+      satisfied ? theme.success(`✓ ${value}`) : theme.error(`✗ ${value}`);
     for (const [key, label] of requirementGroups) {
-      const missingRequirements = skill.missing[key];
-      const requirementStatus = skill.requirements[key].map((requirement) => {
-        const missing =
-          key === "anyBins"
-            ? missingRequirements.length > 0
-            : missingRequirements.includes(requirement);
-        return missing ? theme.error(`✗ ${requirement}`) : theme.success(`✓ ${requirement}`);
-      });
-      lines.push(`${theme.muted(`  ${label}:`)} ${requirementStatus.join(", ")}`);
+      const required = skill.requirements[key];
+      const missing = skill.missing[key];
+      let requirementStatus: string;
+      if (key === "anyBins" || key === "os") {
+        // Alternative groups are satisfied when any single option matches, so
+        // render one status for the whole group (matching the hooks CLI)
+        // instead of implying that every alternative was found.
+        const prefix = key === "anyBins" ? "any of: " : "";
+        requirementStatus = formatRequirementStatus(
+          `(${prefix}${required.join(", ")})`,
+          missing.length === 0,
+        );
+      } else {
+        requirementStatus = required
+          .map((requirement) =>
+            formatRequirementStatus(requirement, !missing.includes(requirement)),
+          )
+          .join(", ");
+      }
+      lines.push(`${theme.muted(`  ${label}:`)} ${requirementStatus}`);
     }
   }
 
