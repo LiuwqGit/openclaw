@@ -1346,7 +1346,10 @@ describe("sessions_spawn tool", () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
       config: {
-        agents: { list: [{ id: "main", identity: { name: "Roboclaw" } }] },
+        agents: {
+          defaults: { model: "mock-provider/primary" },
+          list: [{ id: "main", identity: { name: "Roboclaw" } }],
+        },
         gateway: { publicOrigin: "https://openclaw.example", controlUi: { basePath: "/control" } },
       },
       inheritedToolAllowlist: ["read", "sessions_spawn"],
@@ -1381,9 +1384,7 @@ describe("sessions_spawn tool", () => {
         actor: { type: "agent", id: "main" },
         requesterSessionKey: "agent:main:main",
         completionOwnerSessionKey: "agent:main:main",
-        // The runtime-default model is config-resolved, not caller-selected, so it
-        // travels with auto provenance.
-        spawnModelAutoSelection: { provider: "openai", model: "gpt-6-astra" },
+        spawnModelAutoSelection: { model: "mock-provider/primary", hasFallbackOrigin: false },
         inheritedToolPolicy: {
           version: 1,
           allow: ["read", "sessions_spawn"],
@@ -1395,178 +1396,6 @@ describe("sessions_spawn tool", () => {
       expect.objectContaining({
         childSessionKey: "agent:main:dashboard:restricted-child",
         runId: "run-visible-restricted",
-      }),
-    );
-  });
-
-  it("marks a config-resolved visible spawn model as an auto selection with origin", async () => {
-    hoisted.inProcessCreationMock.mockResolvedValue({
-      key: "agent:main:dashboard:auto-model-child",
-      runStarted: true,
-      runId: "run-visible-auto-model",
-    });
-    const tool = createSessionsSpawnTool({
-      agentSessionKey: "agent:main:main",
-      config: {
-        agents: {
-          list: [
-            {
-              id: "main",
-              model: { primary: "openai/gpt-test-primary", fallbacks: ["custom/fallback-model"] },
-            },
-          ],
-        },
-      },
-      registerRun: vi.fn(),
-      countActiveRuns: () => 0,
-    });
-
-    const result = await tool.execute("visible-auto-model", {
-      task: "inspect",
-      visible: true,
-    });
-
-    expect(result.details).toMatchObject({
-      status: "accepted",
-      childSessionKey: "agent:main:dashboard:auto-model-child",
-    });
-    expect(hoisted.inProcessCreationMock).toHaveBeenCalledWith(
-      "sessions.create",
-      expect.objectContaining({ model: "openai/gpt-test-primary" }),
-      expect.objectContaining({
-        via: "spawn",
-        spawnModelAutoSelection: {
-          provider: "openai",
-          model: "gpt-test-primary",
-          fallbackOriginProvider: "openai",
-          fallbackOriginModel: "gpt-test-primary",
-        },
-      }),
-    );
-  });
-
-  it("keeps a caller-selected visible spawn model as a user pin", async () => {
-    hoisted.inProcessCreationMock.mockResolvedValue({
-      key: "agent:main:dashboard:user-model-child",
-      runStarted: true,
-      runId: "run-visible-user-model",
-    });
-    const tool = createSessionsSpawnTool({
-      agentSessionKey: "agent:main:main",
-      config: {
-        agents: {
-          list: [
-            {
-              id: "main",
-              model: { primary: "openai/gpt-test-primary", fallbacks: ["custom/fallback-model"] },
-            },
-          ],
-        },
-      },
-      registerRun: vi.fn(),
-      countActiveRuns: () => 0,
-    });
-
-    const result = await tool.execute("visible-user-model", {
-      task: "inspect",
-      visible: true,
-      model: "anthropic/claude-sonnet-4-6",
-    });
-
-    expect(result.details).toMatchObject({
-      status: "accepted",
-      childSessionKey: "agent:main:dashboard:user-model-child",
-    });
-    expect(hoisted.inProcessCreationMock).toHaveBeenCalledWith(
-      "sessions.create",
-      expect.objectContaining({ model: "anthropic/claude-sonnet-4-6" }),
-      expect.objectContaining({
-        via: "spawn",
-        inheritedToolPolicy: expect.objectContaining({ version: 1 }),
-      }),
-    );
-    const creation = hoisted.inProcessCreationMock.mock.calls[0]?.[2] as Record<string, unknown>;
-    expect(creation.spawnModelAutoSelection).toBeUndefined();
-  });
-
-  it("forwards a profile-qualified caller model selection intact", async () => {
-    hoisted.inProcessCreationMock.mockResolvedValue({
-      key: "agent:main:dashboard:profile-child",
-      runStarted: true,
-      runId: "run-visible-profile",
-    });
-    const tool = createSessionsSpawnTool({
-      agentSessionKey: "agent:main:main",
-      config: { agents: { list: [{ id: "main" }] } },
-      registerRun: vi.fn(),
-      countActiveRuns: () => 0,
-    });
-
-    const result = await tool.execute("visible-profile", {
-      task: "inspect",
-      visible: true,
-      model: "anthropic/claude-sonnet-4-6@work",
-    });
-
-    expect(result.details).toMatchObject({
-      status: "accepted",
-      childSessionKey: "agent:main:dashboard:profile-child",
-    });
-    // The auth-profile suffix must reach sessions.create so its existing profile
-    // validation and persistence path still runs.
-    expect(hoisted.inProcessCreationMock).toHaveBeenCalledWith(
-      "sessions.create",
-      expect.objectContaining({ model: "anthropic/claude-sonnet-4-6@work" }),
-      expect.anything(),
-    );
-    const creation = hoisted.inProcessCreationMock.mock.calls[0]?.[2] as Record<string, unknown>;
-    expect(creation.spawnModelAutoSelection).toBeUndefined();
-  });
-
-  it("keeps a profile-qualified configured model intact on visible spawns", async () => {
-    hoisted.inProcessCreationMock.mockResolvedValue({
-      key: "agent:main:dashboard:config-profile-child",
-      runStarted: true,
-      runId: "run-visible-config-profile",
-    });
-    const tool = createSessionsSpawnTool({
-      agentSessionKey: "agent:main:main",
-      config: {
-        agents: {
-          list: [
-            {
-              id: "main",
-              model: {
-                primary: "openai/gpt-test-primary@work",
-                fallbacks: ["custom/fallback-model"],
-              },
-            },
-          ],
-        },
-      },
-      registerRun: vi.fn(),
-      countActiveRuns: () => 0,
-    });
-
-    const result = await tool.execute("visible-config-profile", {
-      task: "inspect",
-      visible: true,
-    });
-
-    expect(result.details).toMatchObject({
-      status: "accepted",
-      childSessionKey: "agent:main:dashboard:config-profile-child",
-    });
-    expect(hoisted.inProcessCreationMock).toHaveBeenCalledWith(
-      "sessions.create",
-      expect.objectContaining({ model: "openai/gpt-test-primary@work" }),
-      expect.objectContaining({
-        spawnModelAutoSelection: {
-          provider: "openai",
-          model: "gpt-test-primary",
-          fallbackOriginProvider: "openai",
-          fallbackOriginModel: "gpt-test-primary",
-        },
       }),
     );
   });

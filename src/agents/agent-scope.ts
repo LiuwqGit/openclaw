@@ -654,10 +654,7 @@ export function resolveModelFallbackAvailability(params: {
   hasAutoFallbackProvenance?: boolean;
   modelSelectionLocked?: boolean;
   modelFallbacksOverride?: string[];
-  /**
-   * Spawn-owned visible children keep dashboard session keys; lineage carries
-   * the subagent fallback ladder to them like hidden subagent keys already do.
-   */
+  /** Declared child lineage includes visible sessions with dashboard keys. */
   subagentSpawnLineage?: boolean;
 }): ModelFallbackAvailability {
   if (params.modelSelectionLocked) {
@@ -666,50 +663,28 @@ export function resolveModelFallbackAvailability(params: {
   if (params.modelFallbacksOverride !== undefined) {
     return modelFallbackAvailabilityFromModels(params.modelFallbacksOverride, "explicit");
   }
-  const agentFallbacksOverride = resolveAgentModelFallbacksOverride(params.cfg, params.agentId);
-  if (!params.hasSessionModelOverride) {
-    // A spawn-owned child can land here without an effective override: a primary
-    // inherited from `agents.defaults.model` is not a configured subagent selection,
-    // so its stored entry carries no origin metadata and reads back as legacy.
-    // The subagent ladder still owns those children; user pins keep the agent ladder.
-    if (params.subagentSpawnLineage === true && params.modelOverrideSource !== "user") {
-      const spawnFallbacksOverride = resolveSubagentSpawnModelFallbacksOverride(
-        params.cfg,
-        params.agentId,
-      );
-      if (spawnFallbacksOverride !== undefined) {
-        return modelFallbackAvailabilityFromModels(spawnFallbacksOverride, "explicit");
-      }
-    }
-    if (agentFallbacksOverride !== undefined) {
-      return modelFallbackAvailabilityFromModels(agentFallbacksOverride, "explicit");
-    }
-    return modelFallbackAvailabilityFromModels(
-      resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model),
-      "inherited",
-    );
-  }
   const canUseConfiguredFallbacks =
     params.modelOverrideSource === "auto" ||
     (params.modelOverrideSource === undefined && params.hasAutoFallbackProvenance === true);
-  if (!canUseConfiguredFallbacks) {
+  if (params.hasSessionModelOverride && !canUseConfiguredFallbacks) {
     return { kind: "disabled_by_model_override" };
   }
-  const subagentFallbacksOverride =
-    isSubagentSessionKey(params.sessionKey) || params.subagentSpawnLineage === true
-      ? resolveSubagentSpawnModelFallbacksOverride(params.cfg, params.agentId)
-      : undefined;
-  // Same subagent policy as the no-override path above; kept separate because an
-  // auto-provenance override must still project an explicit (never inherited) ladder.
-  if (subagentFallbacksOverride !== undefined) {
-    return modelFallbackAvailabilityFromModels(subagentFallbacksOverride, "explicit");
-  }
-  // Auto-provenance routes have always consumed a resolved list (no configured-primary
-  // append), so inheriting from defaults still projects as an explicit ladder here.
-  const defaultFallbacks = resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model);
+  const hiddenSubagent = isSubagentSessionKey(params.sessionKey);
+  // Hidden children without an effective override retain their existing agent policy.
+  const useSubagentFallbacks = params.hasSessionModelOverride
+    ? hiddenSubagent || params.subagentSpawnLineage === true
+    : !hiddenSubagent &&
+      params.subagentSpawnLineage === true &&
+      params.modelOverrideSource !== "user";
+  const fallbacksOverride = useSubagentFallbacks
+    ? resolveSubagentSpawnModelFallbacksOverride(params.cfg, params.agentId)
+    : resolveAgentModelFallbacksOverride(params.cfg, params.agentId);
+  // Auto overrides consume an explicit list, preventing a configured-primary append.
+  const source =
+    fallbacksOverride !== undefined || params.hasSessionModelOverride ? "explicit" : "inherited";
   return modelFallbackAvailabilityFromModels(
-    agentFallbacksOverride ?? defaultFallbacks,
-    "explicit",
+    fallbacksOverride ?? resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model),
+    source,
   );
 }
 

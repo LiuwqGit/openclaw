@@ -1307,16 +1307,10 @@ export async function createGatewaySession(params: {
         if (!patched.ok) {
           return patched;
         }
-        // A trusted config-resolved spawn model keeps auto provenance so the child
-        // retains the configured fallback ladder. The stored selection must match
-        // the trusted pair before provenance is restamped; anything else stays a
-        // user pin exactly like a hand-picked model.
-        const spawnModelAutoOrigin =
-          params.creation?.spawnModelAutoSelection &&
-          patched.entry.modelOverride === params.creation.spawnModelAutoSelection.model &&
-          (params.creation.spawnModelAutoSelection.provider === undefined ||
-            patched.entry.providerOverride === params.creation.spawnModelAutoSelection.provider)
-            ? params.creation.spawnModelAutoSelection
+        // Bind automatic intent before using the patch owner's canonical selection.
+        const spawnModelAutoSelection =
+          params.creation?.spawnModelAutoSelection?.model === requestedModel
+            ? params.creation?.spawnModelAutoSelection
             : undefined;
         if (
           requestedToolOverrides &&
@@ -1372,18 +1366,13 @@ export async function createGatewaySession(params: {
           ...patched.entry,
           ...inheritedWorkspace,
           ...(createdNewEntry && displayName ? { displayName } : {}),
-          // A config-resolved spawn model carries auto provenance and the primary
-          // origin that keeps auto-fallback recovery working, exactly like hidden
-          // subagent spawns store their initial selection.
-          ...(createdNewEntry && spawnModelAutoOrigin
+          ...(createdNewEntry && spawnModelAutoSelection
             ? {
                 modelOverrideSource: "auto" as const,
-                ...(spawnModelAutoOrigin.fallbackOriginProvider &&
-                spawnModelAutoOrigin.fallbackOriginModel
+                ...(spawnModelAutoSelection.hasFallbackOrigin
                   ? {
-                      modelOverrideFallbackOriginProvider:
-                        spawnModelAutoOrigin.fallbackOriginProvider,
-                      modelOverrideFallbackOriginModel: spawnModelAutoOrigin.fallbackOriginModel,
+                      modelOverrideFallbackOriginProvider: patched.entry.providerOverride,
+                      modelOverrideFallbackOriginModel: patched.entry.modelOverride,
                     }
                   : {}),
               }

@@ -33,7 +33,6 @@ import { resolveSubagentSpawnOwnership } from "../subagents/spawn/subagent-spawn
 import {
   resolveConfiguredSubagentRunTimeoutSeconds,
   resolveSubagentModelAndThinkingPlan,
-  splitModelRef,
 } from "../subagents/spawn/subagent-spawn-plan.js";
 import { buildSubagentTaskMessage } from "../subagents/spawn/subagent-system-prompt.js";
 import { resolveSubagentTargetPolicy } from "../subagents/spawn/subagent-target-policy.js";
@@ -255,9 +254,6 @@ export async function maybeSpawnVisibleSession(params: {
   if (!targetPolicy.ok) {
     return { status: "forbidden", error: targetPolicy.error };
   }
-  // Visible children share the hidden-spawn model plan so a config-resolved model
-  // keeps auto provenance; a caller-selected model still pins the child as a user
-  // selection and disables the configured fallback ladder.
   const modelPlan = resolveSubagentModelAndThinkingPlan({
     cfg,
     targetAgentId,
@@ -266,37 +262,18 @@ export async function maybeSpawnVisibleSession(params: {
   if (modelPlan.status === "error") {
     return { status: "error", error: modelPlan.error };
   }
-  const resolvedModel = modelPlan.resolvedModel;
-  // The shared planner splits a trailing auth-profile suffix out of the model ref;
-  // re-attach it so sessions.create's existing profile validation and persistence
-  // path still receives the complete caller selection.
-  const authProfileOverride = normalizeOptionalString(
-    modelPlan.initialSessionPatch.authProfileOverride,
-  );
+  const { resolvedModel, initialSessionPatch } = modelPlan;
+  const { authProfileOverride } = initialSessionPatch;
+  // Creation validates the complete profile-qualified selection.
   const resolvedModelRef = authProfileOverride
     ? `${resolvedModel}@${authProfileOverride}`
     : resolvedModel;
   const spawnModelAutoSelection =
-    modelPlan.initialSessionPatch.modelOverrideSource === "auto"
-      ? (() => {
-          const { provider, model } = splitModelRef(resolvedModel);
-          if (!model) {
-            return undefined;
-          }
-          const fallbackOriginProvider = normalizeOptionalString(
-            modelPlan.initialSessionPatch.modelOverrideFallbackOriginProvider,
-          );
-          const fallbackOriginModel = normalizeOptionalString(
-            modelPlan.initialSessionPatch.modelOverrideFallbackOriginModel,
-          );
-          return {
-            ...(provider ? { provider } : {}),
-            model,
-            ...(fallbackOriginProvider && fallbackOriginModel
-              ? { fallbackOriginProvider, fallbackOriginModel }
-              : {}),
-          };
-        })()
+    initialSessionPatch.modelOverrideSource === "auto"
+      ? {
+          model: resolvedModelRef,
+          hasFallbackOrigin: initialSessionPatch.modelOverrideFallbackOriginModel !== undefined,
+        }
       : undefined;
   const runTimeoutSeconds = resolveConfiguredSubagentRunTimeoutSeconds({
     cfg,

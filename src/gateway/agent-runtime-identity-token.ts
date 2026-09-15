@@ -137,10 +137,8 @@ const stringListSchema = z
   .array(z.string())
   .transform((entries) => entries.map((entry) => entry.trim()).filter(Boolean));
 const spawnModelAutoSelectionSchema = z.object({
-  provider: normalizedRequiredStringSchema.optional(),
   model: normalizedRequiredStringSchema,
-  fallbackOriginProvider: normalizedRequiredStringSchema.optional(),
-  fallbackOriginModel: normalizedRequiredStringSchema.optional(),
+  hasFallbackOrigin: z.boolean(),
 });
 const sessionSpawnContextSchema = z
   .object({
