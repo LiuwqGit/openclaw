@@ -1,4 +1,4 @@
-import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
+import { coerceErrorMessage, extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 
 const STORAGE_ERRORS = [
@@ -32,6 +32,106 @@ export function classifyGatewayStorageFailure(error: unknown): GatewayStorageFai
         (value) => typeof value === "string" && value.trim() === message,
       ),
     ))?.[0];
+}
+
+/** Bounded, owner-generated names for the read-only inspection operations that can fail. */
+const SQLITE_INSPECTION_OPERATIONS = {
+  coordinator: "acquiring its state-handles coordinator",
+  source: "opening the source database",
+  snapshot: "creating its private snapshot",
+} as const;
+type SqliteInspectionOperation = keyof typeof SQLITE_INSPECTION_OPERATIONS;
+
+const SQLITE_INSPECTION_OPERATION_MARKER = Symbol.for("openclaw.sqliteInspectionOperation");
+const SQLITE_INSPECTION_OPERATION_DEPTH = 8;
+
+function isSqliteInspectionOperation(value: string): value is SqliteInspectionOperation {
+  return Object.hasOwn(SQLITE_INSPECTION_OPERATIONS, value);
+}
+
+function readSqliteInspectionOperation(value: unknown): SqliteInspectionOperation | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const operation = Reflect.get(value, SQLITE_INSPECTION_OPERATION_MARKER);
+  return typeof operation === "string" && isSqliteInspectionOperation(operation)
+    ? operation
+    : undefined;
+}
+
+/**
+ * Tag the operation that was in flight without replacing the error, so existing
+ * `instanceof` handling, native codes, and messages stay intact. The innermost
+ * tag wins: a wrapper must not relabel the operation that actually failed.
+ */
+function markSqliteInspectionOperation(error: unknown, operation: SqliteInspectionOperation): void {
+  if (
+    error === null ||
+    typeof error !== "object" ||
+    readSqliteInspectionOperation(error) !== undefined
+  ) {
+    return;
+  }
+  Object.defineProperty(error, SQLITE_INSPECTION_OPERATION_MARKER, {
+    value: operation,
+    enumerable: false,
+    configurable: true,
+  });
+}
+
+/** Run a synchronous inspection operation and tag its failure with that operation. */
+export function withSqliteInspectionOperation<T>(
+  operation: SqliteInspectionOperation,
+  run: () => T,
+): T {
+  try {
+    return run();
+  } catch (error) {
+    markSqliteInspectionOperation(error, operation);
+    throw error;
+  }
+}
+
+/** Run an awaited inspection operation and tag its failure with that operation. */
+export async function withSqliteInspectionOperationAsync<T>(
+  operation: SqliteInspectionOperation,
+  run: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    markSqliteInspectionOperation(error, operation);
+    throw error;
+  }
+}
+
+/** Resolve the tagged operation across the bounded cause chain. */
+function resolveSqliteInspectionOperation(error: unknown): SqliteInspectionOperation | undefined {
+  for (
+    let current = error, depth = 0;
+    depth < SQLITE_INSPECTION_OPERATION_DEPTH && isRecord(current);
+    depth += 1
+  ) {
+    const operation = readSqliteInspectionOperation(current);
+    if (operation !== undefined) {
+      return operation;
+    }
+    current = Reflect.get(current, "cause");
+  }
+  return undefined;
+}
+
+/**
+ * Render a read-only inspection failure with its failing operation. Only fixed
+ * owner-generated wording is added; the native message and bounded codes are
+ * preserved and no cause prose, path, or metadata is serialized.
+ */
+export function formatSqliteReadOnlyInspectionFailure(error: unknown): string {
+  const details = `${coerceErrorMessage(error)}${formatSqliteErrorCodeSuffix(error)}`;
+  const operation = resolveSqliteInspectionOperation(error);
+  return operation === undefined
+    ? details
+    : `failed while ${SQLITE_INSPECTION_OPERATIONS[operation]}: ${details}`;
 }
 
 export function formatSqliteErrorCodeSuffix(error: unknown): string {

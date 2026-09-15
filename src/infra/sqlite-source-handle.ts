@@ -5,6 +5,7 @@ import {
   createSqliteLifecycleAggregateError,
   runWithSqliteCoordinator,
 } from "./sqlite-coordinator.js";
+import { withSqliteInspectionOperation } from "./sqlite-error-diagnostics.js";
 import { acquireStateDatabaseHandleLease } from "./state-database-coordinator.js";
 
 // A failed native close cannot let GC retire its admission before child exit.
@@ -30,7 +31,9 @@ export function withSqliteSourceReadDatabase<T>(
   const lease = acquireStateDatabaseHandleLease({ databasePath: pathname, busyTimeoutMs: 0 });
   let database: DatabaseSync | undefined;
   try {
-    database = openNodeSqliteDatabase(pathname, { readOnly: true });
+    database = withSqliteInspectionOperation("source", () =>
+      openNodeSqliteDatabase(pathname, { readOnly: true }),
+    );
     return operation(database);
   } finally {
     try {

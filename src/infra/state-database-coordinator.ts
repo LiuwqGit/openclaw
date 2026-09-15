@@ -13,6 +13,7 @@ import {
   tryAcquireExclusiveSqliteCoordinator,
   tryAcquireSharedSqliteCoordinator,
 } from "./sqlite-coordinator.js";
+import { withSqliteInspectionOperation } from "./sqlite-error-diagnostics.js";
 import type { PreparedSqliteReadOnlyLocation } from "./sqlite-readonly-location.types.js";
 import {
   attachCoordinatorDelegate,
@@ -525,14 +526,18 @@ export function acquireStateDatabaseHandleLease(params: CoordinatorOptions) {
     sourceScope.assertCurrent();
     return sourceScope.pin();
   }
-  ensurePrivateSqliteCoordinatorDirectory(path.dirname(pathname), "state-handles coordinator");
-  const coordinator = tryAcquireSharedSqliteCoordinator(pathname, {
-    busyTimeoutMs: params.busyTimeoutMs,
+  // Readers acquire this coordinator before touching the source, so its failures
+  // must not look like an unreadable source database.
+  return withSqliteInspectionOperation("coordinator", () => {
+    ensurePrivateSqliteCoordinatorDirectory(path.dirname(pathname), "state-handles coordinator");
+    const coordinator = tryAcquireSharedSqliteCoordinator(pathname, {
+      busyTimeoutMs: params.busyTimeoutMs,
+    });
+    if (!coordinator) {
+      throw new StateDatabaseCoordinatorContentionError("state-handles");
+    }
+    return coordinator;
   });
-  if (!coordinator) {
-    throw new StateDatabaseCoordinatorContentionError("state-handles");
-  }
-  return coordinator;
 }
 
 /** Acquire only after closing local cached owners under the state lifecycle gate. */

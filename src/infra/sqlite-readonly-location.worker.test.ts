@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withSqliteInspectionOperation } from "./sqlite-error-diagnostics.js";
 
 const { prepare } = vi.hoisted(() => ({ prepare: vi.fn() }));
 vi.mock("./sqlite-readonly-location.js", () => ({
@@ -101,4 +102,29 @@ describe("SQLite read-only worker diagnostics", () => {
       `failure (code=${code}, errcode=2147483647)`,
     );
   });
+
+  it.each([
+    ["coordinator", "acquiring its state-handles coordinator"],
+    ["source", "opening the source database"],
+    ["snapshot", "creating its private snapshot"],
+  ] as const)(
+    "names the %s operation beside the preserved native message and codes",
+    async (operation, context) => {
+      let failure: unknown;
+      try {
+        withSqliteInspectionOperation(operation, () => {
+          throw Object.assign(new Error("unable to open database file"), {
+            code: "ERR_SQLITE_ERROR",
+            errcode: 14,
+          });
+        });
+      } catch (error) {
+        failure = error;
+      }
+      await expectWorkerFailure(
+        failure,
+        `failed while ${context}: unable to open database file (code=ERR_SQLITE_ERROR, errcode=14)`,
+      );
+    },
+  );
 });

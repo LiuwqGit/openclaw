@@ -10,6 +10,10 @@ import {
 } from "./node-sqlite.js";
 import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import {
+  withSqliteInspectionOperation,
+  withSqliteInspectionOperationAsync,
+} from "./sqlite-error-diagnostics.js";
+import {
   createPrivateSqliteTempDirectory,
   createPrivateSqliteTempDirectorySync,
   resolvePrivateSqliteSnapshotStagingRoot,
@@ -309,7 +313,9 @@ function recoverPrivateRollbackCopy(snapshotPath: string): void {
       `SQLite hot rollback journal references a super-journal and cannot be recovered privately: ${snapshotPath}`,
     );
   }
-  const snapshot = openNodeSqliteDatabase(snapshotPath);
+  const snapshot = withSqliteInspectionOperation("snapshot", () =>
+    openNodeSqliteDatabase(snapshotPath),
+  );
   try {
     snapshot.exec("PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF;");
     snapshot.prepare("PRAGMA schema_version;").get();
@@ -424,20 +430,26 @@ async function createOnlineReadOnlyBackup(
     if (process.platform !== "win32") {
       fs.chmodSync(tempDir, 0o700);
     }
-    const source = openNodeSqliteDatabase(pathname, { readOnly: true });
+    const source = withSqliteInspectionOperation("source", () =>
+      openNodeSqliteDatabase(pathname, { readOnly: true }),
+    );
     try {
       source.exec(
         `PRAGMA busy_timeout = ${SQLITE_SOURCE_READ_BUSY_TIMEOUT_MS}; PRAGMA trusted_schema = OFF; BEGIN;`,
       );
       source.prepare("PRAGMA schema_version;").get();
-      await sqlite.backup(source, resolveSqliteFilesystemPath(snapshotPath));
+      await withSqliteInspectionOperationAsync("snapshot", () =>
+        sqlite.backup(source, resolveSqliteFilesystemPath(snapshotPath)),
+      );
       source.exec("ROLLBACK;");
     } finally {
       if (source.isOpen) {
         source.close();
       }
     }
-    const snapshot = openNodeSqliteDatabase(snapshotPath);
+    const snapshot = withSqliteInspectionOperation("snapshot", () =>
+      openNodeSqliteDatabase(snapshotPath),
+    );
     try {
       snapshot.exec("PRAGMA journal_mode = DELETE;");
     } finally {

@@ -1,6 +1,5 @@
-import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
-import { formatSqliteErrorCodeSuffix } from "./sqlite-error-diagnostics.js";
+import { formatSqliteReadOnlyInspectionFailure } from "./sqlite-error-diagnostics.js";
 import {
   inspectSqliteSchemaHeaderInProcess,
   prepareSqliteReadOnlyLocationInProcess,
@@ -47,8 +46,9 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
         : await prepareSqliteReadOnlyLocationInProcess(pathname, stagingRoot);
     return { ok: true, location: prepared.location };
   } catch (error) {
-    const message = `${coerceErrorMessage(error)}${formatSqliteErrorCodeSuffix(error)}`;
-    return { ok: false, message };
+    // Name the failing operation so a denied coordinator open is not mistaken
+    // for an unreadable source database.
+    return { ok: false, message: formatSqliteReadOnlyInspectionFailure(error) };
   }
 }
 
