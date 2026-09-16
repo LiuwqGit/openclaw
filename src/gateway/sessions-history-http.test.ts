@@ -703,12 +703,21 @@ describe("session history HTTP endpoints", () => {
     const cases = [
       {
         body: "Verified sender body\n    indented line",
+        promptSessionKey: "agent:grimwald:asserted",
         sourceSessionKey: "agent:helper:ops",
         senderLabel: "Forwarded from helper",
         senderSession: { sessionKey: "agent:helper:ops", agentId: "helper" },
       },
       {
         body: "Unverified sender body\n    indented line",
+        promptSessionKey: "agent:grimwald:asserted",
+        sourceSessionKey: undefined,
+        senderLabel: "Forwarded agent message",
+        senderSession: undefined,
+      },
+      {
+        body: "Malformed asserted sender body\n    indented line",
+        promptSessionKey: "not-a-session",
         sourceSessionKey: undefined,
         senderLabel: "Forwarded agent message",
         senderSession: undefined,
@@ -722,7 +731,7 @@ describe("session history HTTP endpoints", () => {
         sessionKey,
         storePath,
         input: {
-          text: `[Inter-session message] sourceSession=agent:grimwald:asserted sourceTool=sessions_send isUser=false\n${entry.body}`,
+          text: `[Inter-session message] sourceSession=${entry.promptSessionKey} sourceTool=sessions_send isUser=false\n${entry.body}`,
           provenance: {
             kind: "inter_session",
             sourceTool: "sessions_send",
@@ -759,9 +768,9 @@ describe("session history HTTP endpoints", () => {
             if (!entry.senderSession) {
               expect(page?.messages?.[0]).not.toHaveProperty("senderSession");
             }
-            expect(page?.hasMore).toBe(offset === 0);
+            expect(page?.hasMore).toBe(offset < cases.length - 1);
           }
-          if (offset === 0) {
+          if (offset < cases.length - 1) {
             expect(http.nextCursor).toEqual(expect.any(String));
           }
           cursor = http.nextCursor;
