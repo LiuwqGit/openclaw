@@ -3,6 +3,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 
 vi.mock("./node-sqlite.js", async (importOriginal) => {
@@ -83,7 +84,7 @@ async function inspectFailure(
   }
   const diagnostics = await import("./sqlite-error-diagnostics.js");
   const format = vi.spyOn(diagnostics, "formatSqliteReadOnlyInspectionFailure");
-  const completed = Promise.withResolvers<void>();
+  const completed = createDeferred();
   const write = vi.spyOn(process.stdout, "write").mockImplementation(() => {
     completed.resolve();
     return true;
@@ -102,7 +103,7 @@ async function inspectFailure(
   });
   expect(process.exitCode).toBe(1);
   expect(format).toHaveBeenCalledOnce();
-  const [observedFailure] = expectDefined(format.mock.calls[0]);
+  const [observedFailure] = expectDefined(format.mock.calls[0], "inspection failure");
   expect(opened.every((database) => !database.isOpen)).toBe(true);
   expect(fs.readdirSync(stagingRoot)).toEqual([]);
   expect(fs.readFileSync(sourcePath)).toEqual(before);
@@ -249,7 +250,7 @@ describe("registered SQLite read-only worker operation diagnostics", () => {
         "failed while opening the source database: disk full (SQLite errcode=13)",
       ),
     );
-    const [message] = expectDefined(write.mock.calls[0]);
+    const [message] = expectDefined(write.mock.calls[0], "worker output");
     expect(message).toContain("code=ERR_SQLITE_ERROR, errcode=13");
     expect(message).not.toContain("hidden cause prose");
   });
