@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 
@@ -101,7 +102,7 @@ async function inspectFailure(
   });
   expect(process.exitCode).toBe(1);
   expect(format).toHaveBeenCalledOnce();
-  const [[observedFailure]] = format.mock.calls;
+  const [observedFailure] = expectDefined(format.mock.calls[0]);
   expect(opened.every((database) => !database.isOpen)).toBe(true);
   expect(fs.readdirSync(stagingRoot)).toEqual([]);
   expect(fs.readFileSync(sourcePath)).toEqual(before);
@@ -116,6 +117,19 @@ async function inspectFailure(
 }
 
 describe("registered SQLite read-only worker operation diagnostics", () => {
+  it("reads cause metadata once through the registered worker", async () => {
+    let causeReads = 0;
+    const failure = Object.defineProperty(new Error("open failure"), "cause", {
+      get() {
+        causeReads += 1;
+        return undefined;
+      },
+    });
+    const { observedFailure } = await inspectFailure("coordinator", failure);
+    expect(observedFailure).toBe(failure);
+    expect(causeReads).toBe(1);
+  });
+
   it("inspectSqliteSchemaHeader reports a native coordinator denial through its real child and parent", async () => {
     const root = tempDirs.make("sqlite-inspection-parent-");
     const sourcePath = path.join(root, "source.sqlite");
@@ -235,7 +249,8 @@ describe("registered SQLite read-only worker operation diagnostics", () => {
         "failed while opening the source database: disk full (SQLite errcode=13)",
       ),
     );
-    expect(write.mock.calls[0][0]).toContain("code=ERR_SQLITE_ERROR, errcode=13");
-    expect(write.mock.calls[0][0]).not.toContain("hidden cause prose");
+    const [message] = expectDefined(write.mock.calls[0]);
+    expect(message).toContain("code=ERR_SQLITE_ERROR, errcode=13");
+    expect(message).not.toContain("hidden cause prose");
   });
 });

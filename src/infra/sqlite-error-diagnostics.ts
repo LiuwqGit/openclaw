@@ -68,29 +68,26 @@ export function withSqliteInspectionOperation<T>(
   }
 }
 
-function* sqliteErrorCauses(error: unknown) {
-  for (let current = error, depth = 0; depth < 8 && isRecord(current); depth += 1) {
-    yield current;
-    current = current.cause;
-  }
-}
-
 export function formatSqliteReadOnlyInspectionFailure(error: unknown): string {
-  const details = `${coerceErrorMessage(error)}${formatSqliteErrorCodeSuffix(error)}`;
-  let operation: SqliteInspectionOperation | undefined;
-  for (const cause of sqliteErrorCauses(error)) {
-    operation = inspectionOperations.get(cause) ?? operation;
-  }
+  const message = coerceErrorMessage(error);
+  const { suffix, operation } = readSqliteErrorDetails(error);
+  const details = `${message}${suffix}`;
   return operation === undefined
     ? details
     : `failed while ${SQLITE_INSPECTION_OPERATIONS[operation]}: ${details}`;
 }
 
 export function formatSqliteErrorCodeSuffix(error: unknown): string {
+  return readSqliteErrorDetails(error).suffix;
+}
+
+function readSqliteErrorDetails(error: unknown) {
   const details = new Set<string>();
+  let operation: SqliteInspectionOperation | undefined;
   // Preserve native codes through wrappers without exposing cause prose or metadata.
   // The depth cap also bounds cyclic causes; Node's SQLite errcode is a signed int.
-  for (const current of sqliteErrorCauses(error)) {
+  for (let current = error, depth = 0; depth < 8 && isRecord(current); depth += 1) {
+    operation = inspectionOperations.get(current) ?? operation;
     const code = extractErrorCode(current);
     if (code && /^[A-Z0-9_]{1,64}$/u.test(code)) {
       details.add(`code=${code}`);
@@ -104,8 +101,9 @@ export function formatSqliteErrorCodeSuffix(error: unknown): string {
     ) {
       details.add(`errcode=${errcode}`);
     }
+    current = current.cause;
   }
-  return details.size > 0 ? ` (${[...details].join(", ")})` : "";
+  return { suffix: details.size > 0 ? ` (${[...details].join(", ")})` : "", operation };
 }
 
 // Native snapshot coordination needs classification without loading transaction logging.
