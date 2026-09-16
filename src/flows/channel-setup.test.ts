@@ -12,19 +12,20 @@ import { createPluginCache, getPluginCache, withPluginCache } from "../plugins/p
 import { PluginInstance } from "../plugins/plugin-instance.js";
 import { hasPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
-import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createInstallAccountPolicyFixture } from "../plugins/test-helpers/install-account-policy.test-support.js";
 import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
 import { WizardCancelledError, WizardNavigationError } from "../wizard/prompts.js";
 import {
+  externalChatSetupEntries,
   makeCatalogEntry,
   makeChannelSetupEntries,
+  makeExternalChatSetupPlugin,
   makeMeta,
+  makePluginRegistry,
+  makeSetupPlugin,
 } from "./channel-setup.test-helpers.js";
 
 type ChannelSetupPlugin = import("../channels/plugins/setup-wizard-types.js").ChannelSetupPlugin;
-type ChannelSetupWizardAdapter =
-  import("../channels/plugins/setup-wizard-types.js").ChannelSetupWizardAdapter;
 type ResolveChannelSetupEntries =
   typeof import("../commands/channel-setup/discovery.js").resolveChannelSetupEntries;
 type CollectChannelStatus = typeof import("./channel-setup.status.js").collectChannelStatus;
@@ -32,64 +33,6 @@ type EnsureChannelSetupPluginInstalled =
   typeof import("../commands/channel-setup/plugin-install.js").ensureChannelSetupPluginInstalled;
 type LoadChannelSetupPluginRegistrySnapshotForChannel =
   typeof import("../commands/channel-setup/plugin-install.js").loadChannelSetupPluginRegistrySnapshotForChannel;
-type PluginRegistry = ReturnType<LoadChannelSetupPluginRegistrySnapshotForChannel>;
-
-function makeSetupPlugin(params: {
-  id: string;
-  label: string;
-  setupWizard?: ChannelSetupPlugin["setupWizard"];
-}): ChannelSetupPlugin {
-  return {
-    id: params.id as ChannelSetupPlugin["id"],
-    meta: makeMeta(params.id, params.label),
-    capabilities: { chatTypes: [] },
-    config: {
-      resolveAccount: vi.fn(() => ({})),
-    } as unknown as ChannelSetupPlugin["config"],
-    ...(params.setupWizard ? { setupWizard: params.setupWizard } : {}),
-  };
-}
-
-function makeExternalChatSetupPlugin(
-  setupWizard: Pick<ChannelSetupWizardAdapter, "configure"> & Partial<ChannelSetupWizardAdapter>,
-): ChannelSetupPlugin {
-  return makeSetupPlugin({
-    id: "external-chat",
-    label: "External Chat",
-    setupWizard: {
-      channel: "external-chat",
-      getStatus: vi.fn(async () => ({
-        channel: "external-chat",
-        configured: false,
-        statusLines: [],
-      })),
-      ...setupWizard,
-    },
-  });
-}
-
-function externalChatSetupEntries(overrides: Partial<ReturnType<ResolveChannelSetupEntries>> = {}) {
-  return makeChannelSetupEntries({
-    entries: [
-      {
-        id: "external-chat",
-        meta: makeMeta("external-chat", "External Chat"),
-      },
-    ],
-    ...overrides,
-  });
-}
-
-function makePluginRegistry(overrides: Partial<PluginRegistry> = {}): PluginRegistry {
-  const registry = createEmptyPluginRegistry();
-  for (const key of Object.keys(overrides) as Array<keyof PluginRegistry>) {
-    const value = overrides[key];
-    if (value !== undefined) {
-      Object.assign(registry, { [key]: value });
-    }
-  }
-  return registry;
-}
 
 function callArg<T>(mock: { mock: { calls: unknown[][] } }, index = 0, _type?: (value: T) => T): T {
   const call = expectDefined(mock.mock.calls[index], `mock call ${index}`);

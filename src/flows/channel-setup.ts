@@ -20,10 +20,7 @@ import {
 } from "../commands/channel-setup/discovery.js";
 import { loadChannelSetupPluginRegistrySnapshotForChannel } from "../commands/channel-setup/plugin-install.js";
 import { resolveChannelSetupWizardAdapterForPlugin } from "../commands/channel-setup/registry.js";
-import {
-  getTrustedChannelPluginCatalogEntry,
-  listTrustedChannelPluginCatalogEntries,
-} from "../commands/channel-setup/trusted-catalog.js";
+import { listTrustedChannelPluginCatalogEntries } from "../commands/channel-setup/trusted-catalog.js";
 import { withCommandPluginMetadata } from "../commands/config-validation.js";
 import { hasConfiguredCommandOwners } from "../commands/doctor-command-owner.js";
 import type { ChannelChoice } from "../commands/onboard-types.js";
@@ -42,6 +39,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { t } from "../wizard/i18n/index.js";
 import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capability-consent.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import { resolveSetupFallbackCatalogEntry } from "./channel-setup-fallback.js";
 import {
   ensureChannelSetupPluginInstalledWithNavigation as runPluginInstallWithNavigation,
   runScopedChannelStep as runNavigationScope,
@@ -912,10 +910,18 @@ export async function setupChannels(
       // users with a stale config entry for an externalized channel (qqbot,
       // imessage, discord, whatsapp, ...) still get auto-install instead
       // of a dead-end "plugin not available" note.
-      const fallbackCatalogEntry = getTrustedChannelPluginCatalogEntry(channel, {
-        cfg: next,
-        workspaceDir: resolveWorkspaceDir(),
-      });
+      //
+      // An empty pair of buckets does NOT by itself mean the plugin is
+      // missing: discovery also excludes channels whose plugin is already
+      // loaded in this process (both buckets filter out `installedPlugins`
+      // ids). Reuse a loaded plugin instead of driving a catalog reinstall,
+      // which would rewrite `plugins.installs.<id>.installPath` and restart
+      // the gateway under the setup flow that asked for the install
+      // (#149672: Control UI SMS setup looped on "install" forever; see
+      // `resolveSetupFallbackCatalogEntry`).
+      const fallbackCatalogEntry = getVisibleChannelPlugin(channel)
+        ? undefined
+        : resolveSetupFallbackCatalogEntry(channel, next, resolveWorkspaceDir());
       if (fallbackCatalogEntry?.install?.npmSpec) {
         // Preserve the same disabled-config guard used by
         // `enableBundledPluginForSetup` so an operator-disabled channel
