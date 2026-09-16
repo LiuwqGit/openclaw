@@ -46,8 +46,6 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
         : await prepareSqliteReadOnlyLocationInProcess(pathname, stagingRoot);
     return { ok: true, location: prepared.location };
   } catch (error) {
-    // Name the failing operation so a denied coordinator open is not mistaken
-    // for an unreadable source database.
     return { ok: false, message: formatSqliteReadOnlyInspectionFailure(error) };
   }
 }

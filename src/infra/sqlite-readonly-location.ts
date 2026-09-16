@@ -10,8 +10,8 @@ import {
 } from "./node-sqlite.js";
 import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import {
+  markSqliteInspectionOperation,
   withSqliteInspectionOperation,
-  withSqliteInspectionOperationAsync,
 } from "./sqlite-error-diagnostics.js";
 import {
   createPrivateSqliteTempDirectory,
@@ -60,6 +60,7 @@ type SourceJournalMode = "empty" | "rollback" | "unknown" | "wal";
 export class SqliteSourceChangedError extends Error {}
 
 function sqliteSnapshotStagingError(tempDir: string, cause: unknown, allocation = false): unknown {
+  markSqliteInspectionOperation(cause, "snapshot");
   for (let depth = 0, error = cause; depth < 8 && error instanceof Error; depth += 1) {
     const { code, errcode, path: errorPath }: NodeJS.ErrnoException & { errcode?: unknown } = error;
     // SQLite FULL and IOERR_WRITE/FSYNC/DIR_FSYNC identify destination writes.
@@ -313,9 +314,7 @@ function recoverPrivateRollbackCopy(snapshotPath: string): void {
       `SQLite hot rollback journal references a super-journal and cannot be recovered privately: ${snapshotPath}`,
     );
   }
-  const snapshot = withSqliteInspectionOperation("snapshot", () =>
-    openNodeSqliteDatabase(snapshotPath),
-  );
+  const snapshot = openNodeSqliteDatabase(snapshotPath);
   try {
     snapshot.exec("PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF;");
     snapshot.prepare("PRAGMA schema_version;").get();
@@ -438,18 +437,14 @@ async function createOnlineReadOnlyBackup(
         `PRAGMA busy_timeout = ${SQLITE_SOURCE_READ_BUSY_TIMEOUT_MS}; PRAGMA trusted_schema = OFF; BEGIN;`,
       );
       source.prepare("PRAGMA schema_version;").get();
-      await withSqliteInspectionOperationAsync("snapshot", () =>
-        sqlite.backup(source, resolveSqliteFilesystemPath(snapshotPath)),
-      );
+      await sqlite.backup(source, resolveSqliteFilesystemPath(snapshotPath));
       source.exec("ROLLBACK;");
     } finally {
       if (source.isOpen) {
         source.close();
       }
     }
-    const snapshot = withSqliteInspectionOperation("snapshot", () =>
-      openNodeSqliteDatabase(snapshotPath),
-    );
+    const snapshot = openNodeSqliteDatabase(snapshotPath);
     try {
       snapshot.exec("PRAGMA journal_mode = DELETE;");
     } finally {

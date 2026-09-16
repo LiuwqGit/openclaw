@@ -526,8 +526,6 @@ export function acquireStateDatabaseHandleLease(params: CoordinatorOptions) {
     sourceScope.assertCurrent();
     return sourceScope.pin();
   }
-  // Readers acquire this coordinator before touching the source, so its failures
-  // must not look like an unreadable source database.
   return withSqliteInspectionOperation("coordinator", () => {
     ensurePrivateSqliteCoordinatorDirectory(path.dirname(pathname), "state-handles coordinator");
     const coordinator = tryAcquireSharedSqliteCoordinator(pathname, {
