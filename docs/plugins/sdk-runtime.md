@@ -152,6 +152,19 @@ remain trusted, in-process code. Plain data and native byte buffers retain their
 normal identities; lifecycle fencing applies to the managed callable surfaces,
 not every object a plugin can retain.
 
+Release the stored handle as well as canceling a timer. On Node, a canceled
+timer object can still retain the async context in which it was created:
+
+```ts
+clearInterval(timer);
+timer = undefined;
+```
+
+This matters for module-level state in native ESM plugins: Node can retain an
+evaluated module after replacement. Removing the captured files and closing its
+managed callbacks does not unload that native module or clear its variables.
+Drop references to stopped resources and other disposable state in cleanup.
+
 Opaque values returned by a plugin can be passed back directly or in data-only
 records and arrays. Caller-owned objects with methods or accessors are passed
 unchanged, including any handles inside them.
@@ -192,13 +205,17 @@ Beyond `api.runtime`, the API object also provides:
   Plugin display name.
 </ParamField>
 <ParamField path="api.config" type="OpenClawConfig">
-  Config snapshot supplied when this instance registers. A retained instance keeps
-  that snapshot across other config changes. In long-lived callbacks, prefer the
-  supplied `cfg`, or use `api.runtime.config.current()` when no config is passed.
-  Explicitly reload the plugin to rerun registration with the latest config.
+  Config snapshot supplied when this instance registers. With the default hybrid
+  reload mode, changes to this plugin's `plugins.entries.<id>` replace its instance
+  by default and rerun registration. A retained instance keeps its snapshot across unrelated
+  config changes. In long-lived callbacks, prefer the supplied `cfg`, or use
+  `api.runtime.config.current()` when no config is passed.
 </ParamField>
 <ParamField path="api.pluginConfig" type="Record<string, unknown>">
-  Plugin-specific config from `plugins.entries.<id>.config`.
+  Plugin-specific config from `plugins.entries.<id>.config`, captured at registration.
+  Ordinary edits to this config automatically replace the instance in hybrid mode,
+  unless a narrower plugin reload policy applies. Source or manifest edits still
+  need [plugin Reload](/cli/plugins#reload).
 </ParamField>
 <ParamField path="api.logger" type="PluginLogger">
   Scoped logger (`debug`, `info`, `warn`, `error`).

@@ -18,7 +18,7 @@ import {
   DEFAULT_SESSION_LIST_QUERY,
   normalizeManagedSessionListQuery,
 } from "./session-requests.ts";
-import { readSessionChangedEvent } from "./session-row-reconcile.ts";
+import { parseSessionChangedEvent } from "./session-row-reconcile.ts";
 
 export function isForegroundReplacement(options: SessionRefreshOptions): boolean {
   return options.append !== true && options.backgroundHydrate !== true;
@@ -32,9 +32,10 @@ export function sessionListAgentMatcher(agentId?: string | null) {
 
 /** Capture membership before event reconciliation can remove or move a known child. */
 export function sessionListEventMatcher(payload: unknown) {
-  const info = readSessionChangedEvent(payload);
-  const event = asOptionalRecord(payload);
-  const source = asOptionalRecord(event?.session) ?? event;
+  const parsed = parseSessionChangedEvent(payload);
+  const info = parsed?.[0];
+  const event = parsed?.[1] ?? asOptionalRecord(payload);
+  const source = parsed?.[2];
   const agentId =
     info?.agentId ??
     parseAgentSessionKey(info?.key)?.agentId ??
@@ -45,7 +46,7 @@ export function sessionListEventMatcher(payload: unknown) {
     source?.spawnedBy,
     source?.parentSessionKey,
     event?.parentSessionKey,
-  ].filter((owner): owner is string => typeof owner === "string" && owner.trim().length > 0);
+  ];
   return (entry: ManagedSessionList): boolean => {
     const parent = entry.scope.spawnedBy;
     if (parent && info && areUiSessionKeysEquivalent(info.key, parent)) {
@@ -61,7 +62,7 @@ export function sessionListEventMatcher(payload: unknown) {
       entry.snapshot.result?.sessions.some((row) =>
         areUiSessionKeysEquivalent(row.key, info.key),
       ) ||
-      owners.some((owner) => areUiSessionKeysEquivalent(owner, parent))
+      owners.some((owner) => typeof owner === "string" && areUiSessionKeysEquivalent(owner, parent))
     ) {
       return true;
     }
@@ -76,18 +77,66 @@ export function sessionListEventMatcher(payload: unknown) {
   };
 }
 
+export type SessionRefreshOutcome =
+  | { status: "refreshed" | "stale" }
+  | { status: "failed"; error: string };
+
+export type SessionRefreshAttempt = {
+  result: SessionsListResult | null;
+  outcome: SessionRefreshOutcome;
+};
+
 export type QueuedSessionRefresh = {
   options: SessionRefreshOptions;
+  intent: "explicit" | "automatic" | "reconcile" | (() => string | null);
+  bootstrap?: boolean;
+  errorOwner: { options: SessionRefreshOptions; isCurrent?: () => boolean };
   completions: Array<{
     options: SessionRefreshOptions;
-    complete: (refresh: Promise<SessionsListResult | null> | null) => void;
+    complete: (refresh: Promise<SessionRefreshAttempt | null> | null) => void;
   }>;
 };
+
+export function coalesceSessionRefresh(
+  current: QueuedSessionRefresh | null,
+  next: QueuedSessionRefresh,
+  snapshot: SessionGateway["snapshot"],
+): QueuedSessionRefresh {
+  if (!current) {
+    return next;
+  }
+  // Explicit intent remains authoritative over automatic hydration and weaker queries.
+  if (
+    (next.intent !== "automatic" || current.intent === "automatic") &&
+    (next.intent !== "reconcile" ||
+      current.intent === "automatic" ||
+      current.intent === "reconcile") &&
+    (isForegroundReplacement(next.options) || !isForegroundReplacement(current.options))
+  ) {
+    current.options = next.options;
+    current.intent = next.intent;
+    current.bootstrap = next.bootstrap;
+    current.errorOwner = next.errorOwner;
+  } else if (
+    next.intent === "reconcile" &&
+    isSameSessionListQuery(
+      prepareSessionRefreshOptions(current.options, snapshot),
+      prepareSessionRefreshOptions(next.options, snapshot),
+      false,
+    )
+  ) {
+    // Reconciliation may own a matching query's error without replacing selection.
+    current.errorOwner = next.errorOwner;
+  }
+  current.completions.push(...next.completions);
+  return current;
+}
 
 export type ManagedSessionListRefresh = {
   append: boolean;
   offset?: number;
   invalidated?: true;
+  background?: true;
 };
 
 export type ObservedSessionList = {
@@ -166,7 +215,7 @@ export function prepareSessionRefreshOptions(
 export function completeSessionRefreshWaiters(
   queued: QueuedSessionRefresh,
   nextOptions: SessionRefreshOptions,
-  next: Promise<SessionsListResult | null> | null,
+  next: Promise<SessionRefreshAttempt | null> | null,
   snapshot: SessionGateway["snapshot"],
 ): void {
   // Coalescing shares completion timing, but only equivalent queries share the result.

@@ -1,6 +1,6 @@
 import { isPromise } from "node:util/types";
 import { deserialize, serialize } from "node:v8";
-import { parentPort } from "node:worker_threads";
+import { parentPort, type MessagePort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { encodeOpenClawStateWorkerError } from "../state/openclaw-state-worker-error.js";
 import {
@@ -12,6 +12,7 @@ import {
   type SqliteWorkerRequest,
 } from "./sqlite-worker-contract.js";
 import { assertExistingDatabaseIdentity } from "./sqlite-worker-identity.js";
+import { withSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 import {
   runWithSqliteWorkerStateContext,
   type SqliteWorkerStateContext,
@@ -23,6 +24,7 @@ import {
 } from "./sqlite-worker-transfer.js";
 import {
   attachGatewaySchemaFenceDelegate,
+  attachStateLifecycleDelegate,
   withStateDatabaseCoordinatorRuntimeDirectory,
 } from "./state-database-coordinator.js";
 
@@ -47,16 +49,36 @@ const gatewayFences = new Map<
   Awaited<ReturnType<typeof attachGatewaySchemaFenceDelegate>>
 >();
 let sourceLoaderRegistered = false;
+let operationAdmission: { actor: number; port: MessagePort } | undefined;
+// Input and result continuations retain the original job's delegation.
+let lifecycle:
+  | {
+      actor: number;
+      delegate: Awaited<ReturnType<typeof attachStateLifecycleDelegate>>;
+    }
+  | undefined;
+let maintenanceFence:
+  | {
+      actor: number;
+      delegate: Awaited<ReturnType<typeof attachGatewaySchemaFenceDelegate>>;
+    }
+  | undefined;
 
 function runInActorContext<T>(actor: number, operation: () => T): T {
+  const runAdmitted = () =>
+    operationAdmission?.actor === actor
+      ? withSqliteWorkerOperationAdmission(operationAdmission.port, operation)
+      : operation();
   const context = stateContexts.get(actor);
   if (!context) {
-    return operation();
+    return runAdmitted();
   }
   return withStateDatabaseCoordinatorRuntimeDirectory(context.coordinatorRuntime, () =>
     runWithSqliteWorkerStateContext(context, () => {
-      const delegate = gatewayFences.get(actor);
-      return delegate ? delegate.run(operation) : operation();
+      const delegate =
+        maintenanceFence?.actor === actor ? maintenanceFence.delegate : gatewayFences.get(actor);
+      const run = () => (delegate ? delegate.run(runAdmitted) : runAdmitted());
+      return lifecycle?.actor === actor ? lifecycle.delegate.run(run) : run();
     }),
   );
 }
@@ -70,8 +92,32 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
   try {
     let value: unknown;
     if (request.type !== "result-next" && request.type !== "execute-frame") {
+      if (request.operationAdmission) {
+        if (operationAdmission) {
+          throw new Error("SQLite operation admission still belongs to the preceding operation");
+        }
+        operationAdmission = { actor: request.actor, port: request.operationAdmission };
+      }
       if (request.stateContext) {
         stateContexts.set(request.actor, request.stateContext);
+      }
+      if (request.stateLifecycle) {
+        retire = true;
+        const context = stateContexts.get(request.actor);
+        const databasePath =
+          request.type === "open" ? request.databasePath : actorPaths.get(request.actor);
+        if (lifecycle || !context || !databasePath) {
+          throw new Error("State lifecycle delegate requires its admitting operation");
+        }
+        lifecycle = {
+          actor: request.actor,
+          delegate: await attachStateLifecycleDelegate(request.stateLifecycle, {
+            databasePath,
+            runtimeDirectory: context.coordinatorRuntime.directory,
+            actorId: `${request.actor}:${request.id}`,
+          }),
+        };
+        retire = false;
       }
       if (request.gatewaySchemaFence) {
         retire = true;
@@ -91,6 +137,24 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
             actorId: String(request.actor),
           }),
         );
+        retire = false;
+      }
+      if (request.maintenanceSchemaFence) {
+        retire = true;
+        const context = stateContexts.get(request.actor);
+        const databasePath =
+          request.type === "open" ? request.databasePath : actorPaths.get(request.actor);
+        if (maintenanceFence || !context || !databasePath) {
+          throw new Error("Maintenance schema delegate requires its admitting operation");
+        }
+        maintenanceFence = {
+          actor: request.actor,
+          delegate: await attachGatewaySchemaFenceDelegate(request.maintenanceSchemaFence, {
+            databasePath,
+            runtimeDirectory: context.coordinatorRuntime.directory,
+            actorId: `${request.actor}:${request.id}`,
+          }),
+        };
         retire = false;
       }
     }
@@ -272,6 +336,14 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
         ...(sharedState ? { sharedState } : {}),
       },
     };
+  }
+  if (!reply.ok || (!pendingInput && !pendingResult)) {
+    maintenanceFence?.delegate.close();
+    maintenanceFence = undefined;
+    lifecycle?.delegate.close();
+    lifecycle = undefined;
+    operationAdmission?.port.close();
+    operationAdmission = undefined;
   }
   port!.postMessage(reply, []);
 }

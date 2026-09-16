@@ -81,6 +81,14 @@ export type NativePluginLoadBindings = Pick<PluginRuntime, "modelAuth" | "modelC
   capabilityCatalogContext: NonNullable<PluginLoadOptions["capabilityCatalogContext"]>;
 };
 
+function createCapabilityCatalogContextResolver(
+  context: NativePluginLoadBindings["capabilityCatalogContext"],
+) {
+  // Registrars retain this callback. Keep it outside the loader's lexical scope so
+  // a live replacement cannot retain options.previousRegistry and all older generations.
+  return () => context;
+}
+
 export function loadOpenClawPluginsCore(
   options: PluginLoadOptions,
   nativeBindings: NativePluginLoadBindings,
@@ -180,7 +188,8 @@ export function loadOpenClawPluginsCore(
     registryBuilder = createPluginRegistry({
       logger,
       runtime,
-      resolveCapabilityCatalogContext: () => capabilityCatalogContext,
+      resolveCapabilityCatalogContext:
+        createCapabilityCatalogContextResolver(capabilityCatalogContext),
       allowProcessHomeSessionCatalogs: options.allowProcessHomeSessionCatalogs ?? true,
       coreGatewayHandlers: options.coreGatewayHandlers,
       ...(options.coreGatewayMethodNames !== undefined && {
@@ -202,6 +211,10 @@ export function loadOpenClawPluginsCore(
         emitWarning: context.shouldActivate,
         warningCacheKey: context.cacheKey,
       });
+    const loaderCacheIdentity = Object.freeze({
+      requestKey: context.cacheKey,
+      resolvedKey: context.resolveManifestCacheKey(manifestRegistry),
+    });
     // Raw and prepared loads share one owner; absent workspace means shared-root scope.
     setPluginRuntimeLoadContext(
       registry,
@@ -218,10 +231,7 @@ export function loadOpenClawPluginsCore(
         preferBuiltPluginArtifacts: options.preferBuiltPluginArtifacts,
       },
       context.registrationConfigKey,
-      Object.freeze({
-        requestKey: context.cacheKey,
-        resolvedKey: context.resolveManifestCacheKey(manifestRegistry),
-      }),
+      loaderCacheIdentity,
     );
     const replacedIds = new Set(options.replacePluginIds ?? []);
     const memorySlot = context.normalized.slots.memory;
@@ -457,6 +467,9 @@ export function loadOpenClawPluginsCore(
     // then the catch below can discard this builder without poisoning a reusable cache value.
     if (cacheEnabled) {
       context.cacheState.set(context.cacheKey, registry);
+      if (loaderCacheIdentity.resolvedKey !== context.cacheKey) {
+        context.cacheState.set(loaderCacheIdentity.resolvedKey, registry);
+      }
     }
     registryInputs.set(registry, inputs);
     return registry;

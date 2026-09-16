@@ -60,6 +60,7 @@ export function renderObject(
     onPatch,
     searchCriteria,
     rawAvailable,
+    maskSensitive,
     revealSensitive,
     isSensitivePathRevealed,
     onToggleSensitivePath,
@@ -145,6 +146,7 @@ export function renderObject(
         path: [...path, propertyKey],
         hints,
         rawAvailable,
+        maskSensitive,
         unsupported,
         disabled,
         isRequired: requiredKeys.has(propertyKey),
@@ -192,7 +194,7 @@ export function renderObject(
           ${renderTags(tags)}
         </div>
         <div class="settings-row__control">
-          <span class="settings-row__chevron cfg-object__chevron">${icons.chevronDown}</span>
+          <span class="settings-row__chevron cfg-object__chevron">${icons.chevronRight}</span>
         </div>
       </summary>
       <div class="settings-subrows">${fields}</div>
@@ -237,6 +239,7 @@ function renderArrayContent(
     onPatch,
     searchCriteria,
     rawAvailable,
+    maskSensitive,
     revealSensitive,
     isSensitivePathRevealed,
     onToggleSensitivePath,
@@ -476,6 +479,7 @@ function renderArrayContent(
                         path: [...path, index],
                         hints,
                         rawAvailable,
+                        maskSensitive,
                         unsupported,
                         disabled,
                         isRequired: true,
