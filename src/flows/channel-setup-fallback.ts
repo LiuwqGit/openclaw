@@ -1,8 +1,22 @@
-// Channel setup fallback consults the trusted catalog when discovery buckets are empty.
+// Channel setup fallback helpers for the empty-discovery-buckets recovery path.
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import { getTrustedChannelPluginCatalogEntry } from "../commands/channel-setup/trusted-catalog.js";
 import type { ChannelChoice } from "../commands/onboard-types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { t } from "../wizard/i18n/index.js";
+import type { WizardPrompter } from "../wizard/prompts.js";
+
+/** Shows the standard "enable it before setup" note for disabled-policy guards. */
+export async function noteDisabledBeforeSetup(
+  prompter: Pick<WizardPrompter, "note">,
+  channel: ChannelChoice,
+  hint: string,
+): Promise<void> {
+  await prompter.note(
+    t("wizard.channels.disabledBeforeSetup", { channel, hint }),
+    t("wizard.channels.setupTitle"),
+  );
+}
 
 /**
  * Resolves the trusted catalog entry for the setup fallback path.

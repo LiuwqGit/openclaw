@@ -39,7 +39,10 @@ import type { RuntimeEnv } from "../runtime.js";
 import { t } from "../wizard/i18n/index.js";
 import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capability-consent.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { resolveSetupFallbackCatalogEntry } from "./channel-setup-fallback.js";
+import {
+  noteDisabledBeforeSetup,
+  resolveSetupFallbackCatalogEntry,
+} from "./channel-setup-fallback.js";
 import {
   ensureChannelSetupPluginInstalledWithNavigation as runPluginInstallWithNavigation,
   runScopedChannelStep as runNavigationScope,
@@ -803,24 +806,12 @@ export async function setupChannels(
         }
         resumingDisabledChannel = true;
       } else {
-        await prompter.note(
-          t("wizard.channels.disabledBeforeSetup", {
-            channel,
-            hint: deferredDisabledHint,
-          }),
-          t("wizard.channels.setupTitle"),
-        );
+        await noteDisabledBeforeSetup(prompter, channel, deferredDisabledHint);
         return "done";
       }
       deferredDisabledHint = resolveConfigDisabledHint(channel);
       if (deferredDisabledHint) {
-        await prompter.note(
-          t("wizard.channels.disabledBeforeSetup", {
-            channel,
-            hint: deferredDisabledHint,
-          }),
-          t("wizard.channels.setupTitle"),
-        );
+        await noteDisabledBeforeSetup(prompter, channel, deferredDisabledHint);
         return "done";
       }
     }
@@ -864,10 +855,7 @@ export async function setupChannels(
         // cannot be silently reinstalled/re-enabled through this path.
         const disabledHint = resolveConfigDisabledHint(channel);
         if (disabledHint) {
-          await prompter.note(
-            t("wizard.channels.disabledBeforeSetup", { channel, hint: disabledHint }),
-            t("wizard.channels.setupTitle"),
-          );
+          await noteDisabledBeforeSetup(prompter, channel, disabledHint);
           return "done";
         }
         const workspaceDir = resolveWorkspaceDir();
@@ -914,12 +902,16 @@ export async function setupChannels(
       // An empty pair of buckets does NOT by itself mean the plugin is
       // missing: discovery also excludes channels whose plugin is already
       // loaded in this process (both buckets filter out `installedPlugins`
-      // ids). Reuse a loaded plugin instead of driving a catalog reinstall,
-      // which would rewrite `plugins.installs.<id>.installPath` and restart
-      // the gateway under the setup flow that asked for the install
-      // (#149672: Control UI SMS setup looped on "install" forever; see
-      // `resolveSetupFallbackCatalogEntry`).
-      const fallbackCatalogEntry = getVisibleChannelPlugin(channel)
+      // ids). For a loaded plugin, skip the catalog reinstall — it would
+      // rewrite `plugins.installs.<id>.installPath` and restart the gateway
+      // under the setup flow that asked for the install (#149672: Control UI
+      // SMS setup looped on "install" forever) — and never dead-end on a
+      // failed enablement write: enableBundledPluginForSetup enables by
+      // CHANNEL id, which can differ from the owning plugin id (channel
+      // `custom-chat` contributed by plugin `workspace-chat`) and trip
+      // `plugins.allow`/`plugins.deny` even though the plugin is live.
+      const loadedPlugin = getVisibleChannelPlugin(channel);
+      const fallbackCatalogEntry = loadedPlugin
         ? undefined
         : resolveSetupFallbackCatalogEntry(channel, next, resolveWorkspaceDir());
       if (fallbackCatalogEntry?.install?.npmSpec) {
@@ -930,10 +922,7 @@ export async function setupChannels(
         // bundled-enable fallback.
         const disabledHint = resolveConfigDisabledHint(channel);
         if (disabledHint) {
-          await prompter.note(
-            t("wizard.channels.disabledBeforeSetup", { channel, hint: disabledHint }),
-            t("wizard.channels.setupTitle"),
-          );
+          await noteDisabledBeforeSetup(prompter, channel, disabledHint);
           return "done";
         }
         const workspaceDir = resolveWorkspaceDir();
@@ -957,8 +946,17 @@ export async function setupChannels(
         }
         await refreshStatus(channel);
       } else {
+        // Preserve the disabled-policy guard for a loaded plugin BEFORE the
+        // bundled-enable attempt: a failed enablement write is tolerated for
+        // loaded plugins below, so the operator-disabled stop must fire here
+        // (same note the catalog-fallback guards use).
+        const disabledHint = loadedPlugin ? resolveConfigDisabledHint(channel) : undefined;
+        if (disabledHint) {
+          await noteDisabledBeforeSetup(prompter, channel, disabledHint);
+          return "done";
+        }
         const enabled = await enableBundledPluginForSetup(channel);
-        if (!enabled) {
+        if (!enabled && !loadedPlugin) {
           return "done";
         }
       }

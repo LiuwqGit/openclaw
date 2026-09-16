@@ -1,5 +1,6 @@
 // Channel setup fallback tests cover catalog fallback reuse of loaded plugins.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelSetupPlugin } from "../channels/plugins/setup-wizard-types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSetupFallbackCatalogEntry } from "./channel-setup-fallback.js";
 import { setupChannels } from "./channel-setup.js";
@@ -8,7 +9,9 @@ import {
   makeCatalogEntry,
   makeChannelSetupEntries,
   makeExternalChatSetupPlugin,
+  makeMeta,
   makePluginRegistry,
+  makeSetupPlugin,
 } from "./channel-setup.test-helpers.js";
 
 type ResolveChannelSetupEntries =
@@ -276,4 +279,105 @@ describe("setupChannels catalog fallback plugin reuse", () => {
       expect(configure).toHaveBeenCalledTimes(1);
     },
   );
+
+  it(
+    "reuses a loaded plugin whose owning plugin id differs from the channel id " +
+      "without tripping the plugin allowlist",
+    async () => {
+      // Review regression (P1): the reuse path must not dead-end when config
+      // enablement by CHANNEL id cannot apply. A catalog plugin
+      // "workspace-chat" contributing channel "custom-chat" with
+      // `plugins.allow: ["workspace-chat"]` was rejected as "blocked by
+      // allowlist" before configuration, because enablePluginInConfig checks
+      // the supplied id directly against the allowlist. The loaded plugin is
+      // live, so a failed enablement write is tolerated and setup proceeds.
+      const configure = vi.fn(async ({ cfg }: { cfg: Record<string, unknown> }) => ({
+        cfg: { ...cfg, channels: { "custom-chat": { token: "secret" } } },
+      }));
+      const setupWizard = {
+        channel: "custom-chat",
+        getStatus: vi.fn(async () => ({
+          channel: "custom-chat",
+          configured: false,
+          statusLines: [],
+        })),
+        configure,
+      } as ChannelSetupPlugin["setupWizard"];
+      const loadedPlugin = makeSetupPlugin({
+        id: "custom-chat",
+        label: "Custom Chat",
+        setupWizard,
+      });
+      listActiveChannelSetupPlugins.mockReturnValue([loadedPlugin]);
+      resolveChannelSetupEntries.mockReturnValue(
+        makeChannelSetupEntries({
+          entries: [{ id: "custom-chat", meta: makeMeta("custom-chat", "Custom Chat") }],
+          installedCatalogEntries: [],
+          installableCatalogEntries: [],
+          installedCatalogById: new Map(),
+          installableCatalogById: new Map(),
+        }),
+      );
+      // The trusted catalog knows the channel is owned by a DIFFERENT plugin
+      // id; the reuse path must never consult it.
+      getTrustedChannelPluginCatalogEntry.mockReturnValue(
+        makeCatalogEntry("custom-chat", "Custom Chat", {
+          pluginId: "workspace-chat",
+          install: { npmSpec: "workspace-chat" },
+        }),
+      );
+      isChannelConfigured.mockReturnValue(false);
+      const note = vi.fn(async () => undefined);
+      const select = vi.fn().mockResolvedValueOnce("custom-chat").mockResolvedValueOnce("__done__");
+
+      await runChannelSetup(
+        { plugins: { allow: ["workspace-chat"] } },
+        { note, select },
+        { ...TARGETED_CHANNEL_SETUP_OPTIONS, initialSelection: ["custom-chat"] },
+      );
+
+      // Direct reuse: no catalog lookup, no install, and the blocked
+      // channel-id enablement no longer stops the flow before configuration.
+      expect(getTrustedChannelPluginCatalogEntry).not.toHaveBeenCalled();
+      expect(ensureChannelSetupPluginInstalled).not.toHaveBeenCalled();
+      expect(note).not.toHaveBeenCalledWith("custom-chat plugin not available.", "Channel setup");
+      expect(configure).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("keeps the disabled-policy guard when reusing a loaded plugin", async () => {
+    // The reuse path preserves the same operator-disabled guard the catalog
+    // fallback and bundled-enable paths enforce: an explicitly disabled
+    // channel must stop with the "Enable it before setup." note even though
+    // its plugin is loaded.
+    const configure = vi.fn(async ({ cfg }: { cfg: Record<string, unknown> }) => ({ cfg }));
+    const loadedPlugin = makeExternalChatSetupPlugin({ configure });
+    listActiveChannelSetupPlugins.mockReturnValue([loadedPlugin]);
+    resolveChannelSetupEntries.mockReturnValue(
+      externalChatSetupEntries({
+        installedCatalogEntries: [],
+        installableCatalogEntries: [],
+        installedCatalogById: new Map(),
+        installableCatalogById: new Map(),
+      }),
+    );
+    isChannelConfigured.mockReturnValue(false);
+    const note = vi.fn(async () => undefined);
+    const select = vi.fn().mockResolvedValueOnce("external-chat").mockResolvedValueOnce("__done__");
+
+    await runChannelSetup(
+      { channels: { "external-chat": { enabled: false } } } as never,
+      { note, select },
+      // No deferStatusUntilSelection: bypass the top-level deferred guard so
+      // the empty-buckets branch guard is what fires.
+      { skipConfirm: true, skipDmPolicyPrompt: true },
+    );
+
+    expect(ensureChannelSetupPluginInstalled).not.toHaveBeenCalled();
+    expect(configure).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledWith(
+      "external-chat cannot be configured while disabled. Enable it before setup.",
+      "Channel setup",
+    );
+  });
 });
