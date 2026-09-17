@@ -6,9 +6,12 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as sqlite from "../infra/node-sqlite.js";
 import { tryInspectSqliteReadOnlyInProcess } from "../infra/sqlite-readonly-inspection.js";
 import { resolveLifecycleCoordinatorPath } from "../infra/state-database-coordinator-paths.js";
-import { resolveStateLifecycleRuntimeDirectory } from "../infra/state-database-coordinator.js";
+import {
+  acquireStateDatabaseHandleExclusion,
+  resolveStateLifecycleRuntimeDirectory,
+} from "../infra/state-database-coordinator.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
-import { inspectAgentDatabaseSchemaInWorker } from "./openclaw-agent-schema-inspection-worker.js";
+import { createAgentSchemaInspectionWorker } from "./openclaw-agent-schema-inspection-worker.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -30,7 +33,13 @@ it("agentSchemaInspection child names coordinator refusal and recovers without c
   expect(fs.existsSync(coordinator)).toBe(false);
   fs.mkdirSync(coordinator, { recursive: true });
   try {
-    const inspection = inspectAgentDatabaseSchemaInWorker({ pathname, supportedVersion: 21 });
+    await using reader = createAgentSchemaInspectionWorker();
+    const inspection = reader.inspect({ pathname, supportedVersion: 21 });
+    const refusedChild = vi.mocked(fork).mock.results.at(-1)?.value;
+    let refusedChildClosed = false;
+    refusedChild.once("close", () => {
+      refusedChildClosed = true;
+    });
     await expect(inspection).rejects.toMatchObject({
       name: "Error",
       code: "ERR_SQLITE_ERROR",
@@ -38,11 +47,19 @@ it("agentSchemaInspection child names coordinator refusal and recovers without c
       message:
         "failed while acquiring its state-handles coordinator: unable to open database file (code=ERR_SQLITE_ERROR, errcode=14)",
     });
+    expect(refusedChildClosed).toBe(true);
     expect(fs.readFileSync(pathname)).toEqual(before);
     fs.rmdirSync(coordinator);
-    await expect(
-      inspectAgentDatabaseSchemaInWorker({ pathname, supportedVersion: 21 }),
-    ).resolves.toMatchObject({ version: 0 });
+    for (let request = 0; request < 2; request += 1) {
+      await expect(reader.inspect({ pathname, supportedVersion: 21 })).resolves.toMatchObject({
+        version: 0,
+        failure: undefined,
+      });
+      acquireStateDatabaseHandleExclusion({ databasePath: pathname, busyTimeoutMs: 0 }).release();
+    }
+    expect(reader.processCount).toBe(2);
+    expect(reader.inspectionCount).toBe(2);
+    expect(reader.snapshotCount).toBe(0);
     const source = sqlite.openNodeSqliteDatabase(pathname, { readOnly: true });
     try {
       expect(source.prepare("SELECT value FROM probe").get()).toEqual({ value: "unchanged" });
@@ -74,7 +91,8 @@ it("agentSchemaInspection child retains returned migration failures and their hy
   });
   expect(fs.existsSync(coordinator)).toBe(false);
   try {
-    const inspection = await inspectAgentDatabaseSchemaInWorker({
+    await using reader = createAgentSchemaInspectionWorker();
+    const inspection = await reader.inspect({
       pathname,
       supportedVersion: 21,
       requireStartupMigrationReadiness: true,
@@ -100,10 +118,8 @@ it("joins the schema reader before returning canceled ownership", async () => {
   fs.writeFileSync(pathname, "");
   const controller = new AbortController();
   const reason = new Error("preflight ownership stopped");
-  const operation = inspectAgentDatabaseSchemaInWorker(
-    { pathname, supportedVersion: 1 },
-    controller.signal,
-  );
+  await using reader = createAgentSchemaInspectionWorker();
+  const operation = reader.inspect({ pathname, supportedVersion: 1 }, controller.signal);
   const child = vi.mocked(fork).mock.results.at(-1)?.value;
   expect(child?.pid).toBeGreaterThan(0);
   let closed = false;
@@ -114,6 +130,22 @@ it("joins the schema reader before returning canceled ownership", async () => {
   controller.abort(reason);
   await rejected;
   expect(closed).toBe(true);
+});
+
+it("reuses a process while rereading changed data and releasing each source lease", async () => {
+  const pathname = path.join(tempDirs.make("agent-schema-reuse-"), "source.sqlite");
+  vi.mocked(fork).mockClear();
+  await using reader = createAgentSchemaInspectionWorker();
+  for (const version of [1, 2]) {
+    const writer = sqlite.openNodeSqliteDatabase(pathname);
+    writer.exec(`PRAGMA user_version=${version};`);
+    writer.close();
+    await expect(reader.inspect({ pathname, supportedVersion: 2 })).resolves.toMatchObject({
+      version,
+    });
+    acquireStateDatabaseHandleExclusion({ databasePath: pathname, busyTimeoutMs: 0 }).release();
+  }
+  expect(fork).toHaveBeenCalledOnce();
 });
 
 it("preserves a busy source failure without requesting another snapshot attempt", () => {
