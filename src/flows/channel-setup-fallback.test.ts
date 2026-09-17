@@ -2,7 +2,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelSetupPlugin } from "../channels/plugins/setup-wizard-types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveSetupFallbackCatalogEntry } from "./channel-setup-fallback.js";
 import { setupChannels } from "./channel-setup.js";
 import {
   externalChatSetupEntries,
@@ -171,28 +170,6 @@ function runChannelSetup(
   );
 }
 
-describe("resolveSetupFallbackCatalogEntry", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    getTrustedChannelPluginCatalogEntry.mockReturnValue(undefined);
-  });
-
-  it("forwards the trusted catalog lookup with cfg and workspaceDir", () => {
-    const entry = makeCatalogEntry("external-chat", "External Chat", {
-      pluginId: "@vendor/external-chat-plugin",
-      install: { npmSpec: "@vendor/external-chat-plugin" },
-    });
-    getTrustedChannelPluginCatalogEntry.mockReturnValue(entry);
-    const cfg: OpenClawConfig = {};
-
-    expect(resolveSetupFallbackCatalogEntry("external-chat", cfg, "/tmp/ws")).toBe(entry);
-    expect(getTrustedChannelPluginCatalogEntry).toHaveBeenCalledWith("external-chat", {
-      cfg,
-      workspaceDir: "/tmp/ws",
-    });
-  });
-});
-
 describe("setupChannels catalog fallback plugin reuse", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -206,7 +183,12 @@ describe("setupChannels catalog fallback plugin reuse", () => {
         origin: "bundled",
       },
     ]);
-    getTrustedChannelPluginCatalogEntry.mockReturnValue(undefined);
+    getTrustedChannelPluginCatalogEntry.mockReturnValue(
+      makeCatalogEntry("external-chat", "External Chat", {
+        pluginId: "@vendor/external-chat-plugin",
+        install: { npmSpec: "@vendor/external-chat-plugin" },
+      }),
+    );
     getChannelSetupPlugin.mockReturnValue(undefined);
     listActiveChannelSetupPlugins.mockReturnValue([]);
     listChannelSetupPlugins.mockReturnValue([]);
@@ -280,21 +262,17 @@ describe("setupChannels catalog fallback plugin reuse", () => {
     },
   );
 
-  it(
-    "reuses a loaded plugin whose owning plugin id differs from the channel id " +
-      "without tripping the plugin allowlist",
-    async () => {
-      // Review regression (P1): the reuse path must not dead-end when config
-      // enablement by CHANNEL id cannot apply. A catalog plugin
-      // "workspace-chat" contributing channel "custom-chat" with
-      // `plugins.allow: ["workspace-chat"]` was rejected as "blocked by
-      // allowlist" before configuration, because enablePluginInConfig checks
-      // the supplied id directly against the allowlist. The loaded plugin is
-      // live, so a failed enablement write is tolerated and setup proceeds.
-      const configure = vi.fn(async ({ cfg }: { cfg: Record<string, unknown> }) => ({
-        cfg: { ...cfg, channels: { "custom-chat": { token: "secret" } } },
-      }));
-      const setupWizard = {
+  it.each([
+    { label: "unrestricted", allow: undefined },
+    { label: "owner-only allowlist", allow: ["workspace-chat"] },
+  ])("preserves loaded catalog plugin settings with $label", async ({ allow }) => {
+    const configure = vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
+      cfg: { ...cfg, channels: { "custom-chat": { token: "fixture-token" } } },
+    }));
+    const loadedPlugin = makeSetupPlugin({
+      id: "custom-chat",
+      label: "Custom Chat",
+      setupWizard: {
         channel: "custom-chat",
         getStatus: vi.fn(async () => ({
           channel: "custom-chat",
@@ -302,48 +280,42 @@ describe("setupChannels catalog fallback plugin reuse", () => {
           statusLines: [],
         })),
         configure,
-      } as ChannelSetupPlugin["setupWizard"];
-      const loadedPlugin = makeSetupPlugin({
-        id: "custom-chat",
-        label: "Custom Chat",
-        setupWizard,
-      });
-      listActiveChannelSetupPlugins.mockReturnValue([loadedPlugin]);
-      resolveChannelSetupEntries.mockReturnValue(
-        makeChannelSetupEntries({
-          entries: [{ id: "custom-chat", meta: makeMeta("custom-chat", "Custom Chat") }],
-          installedCatalogEntries: [],
-          installableCatalogEntries: [],
-          installedCatalogById: new Map(),
-          installableCatalogById: new Map(),
-        }),
-      );
-      // The trusted catalog knows the channel is owned by a DIFFERENT plugin
-      // id; the reuse path must never consult it.
-      getTrustedChannelPluginCatalogEntry.mockReturnValue(
-        makeCatalogEntry("custom-chat", "Custom Chat", {
-          pluginId: "workspace-chat",
-          install: { npmSpec: "workspace-chat" },
-        }),
-      );
-      isChannelConfigured.mockReturnValue(false);
-      const note = vi.fn(async () => undefined);
-      const select = vi.fn().mockResolvedValueOnce("custom-chat").mockResolvedValueOnce("__done__");
+      } as ChannelSetupPlugin["setupWizard"],
+    });
+    listActiveChannelSetupPlugins.mockReturnValue([loadedPlugin]);
+    resolveChannelSetupEntries.mockReturnValue(
+      makeChannelSetupEntries({
+        entries: [{ id: "custom-chat", meta: makeMeta("custom-chat", "Custom Chat") }],
+      }),
+    );
+    getTrustedChannelPluginCatalogEntry.mockReturnValue(
+      makeCatalogEntry("custom-chat", "Custom Chat", {
+        pluginId: "workspace-chat",
+        install: { npmSpec: "workspace-chat" },
+      }),
+    );
+    isChannelConfigured.mockReturnValue(false);
+    const cfg: OpenClawConfig = {
+      plugins: {
+        ...(allow ? { allow } : {}),
+        entries: { "workspace-chat": { enabled: true, config: { mode: "existing" } } },
+      },
+    };
+    const note = vi.fn(async () => undefined);
+    const next = await runChannelSetup(
+      cfg,
+      { note },
+      { ...TARGETED_CHANNEL_SETUP_OPTIONS, initialSelection: ["custom-chat"] },
+    );
 
-      await runChannelSetup(
-        { plugins: { allow: ["workspace-chat"] } },
-        { note, select },
-        { ...TARGETED_CHANNEL_SETUP_OPTIONS, initialSelection: ["custom-chat"] },
-      );
-
-      // Direct reuse: no catalog lookup, no install, and the blocked
-      // channel-id enablement no longer stops the flow before configuration.
-      expect(getTrustedChannelPluginCatalogEntry).not.toHaveBeenCalled();
-      expect(ensureChannelSetupPluginInstalled).not.toHaveBeenCalled();
-      expect(note).not.toHaveBeenCalledWith("custom-chat plugin not available.", "Channel setup");
-      expect(configure).toHaveBeenCalledTimes(1);
-    },
-  );
+    expect(ensureChannelSetupPluginInstalled).not.toHaveBeenCalled();
+    expect(configure).toHaveBeenCalledTimes(1);
+    expect(next).toEqual({
+      ...cfg,
+      channels: { "custom-chat": { token: "fixture-token" } },
+    });
+    expect(note).not.toHaveBeenCalled();
+  });
 
   it("keeps the disabled-policy guard when reusing a loaded plugin", async () => {
     // The reuse path preserves the same operator-disabled guard the catalog

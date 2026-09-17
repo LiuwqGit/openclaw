@@ -72,6 +72,7 @@ export function makeSetupPlugin(params: {
     meta: makeMeta(params.id, params.label),
     capabilities: { chatTypes: [] },
     config: {
+      listAccountIds: vi.fn(() => ["default"]),
       resolveAccount: vi.fn(() => ({})),
     } as unknown as ChannelSetupPlugin["config"],
     ...(params.setupWizard ? { setupWizard: params.setupWizard } : {}),

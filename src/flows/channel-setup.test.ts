@@ -405,66 +405,77 @@ describe("setupChannels workspace shadow exclusion", () => {
     expect(collectChannelStatus).not.toHaveBeenCalled();
   });
 
-  it("enables an active deferred setup plugin when explicitly selected", async () => {
-    const setupWizard = {
-      channel: "custom-chat",
-      getStatus: vi.fn(async () => ({
+  it.each([false, true])(
+    "enables an active setup plugin when explicitly selected (deferred=%s)",
+    async (deferStatusUntilSelection) => {
+      listTrustedChannelPluginCatalogEntries.mockReturnValue([]);
+      const setupWizard = {
         channel: "custom-chat",
-        configured: false,
-        statusLines: [],
-      })),
-      configure: vi.fn(async ({ cfg }: { cfg: Record<string, unknown> }) => ({
-        cfg: {
-          ...cfg,
-          channels: {
-            "custom-chat": { token: "secret" },
+        getStatus: vi.fn(async () => ({
+          channel: "custom-chat",
+          configured: false,
+          statusLines: [],
+        })),
+        configure: vi.fn(async ({ cfg }: { cfg: Record<string, unknown> }) => ({
+          cfg: {
+            ...cfg,
+            channels: {
+              "custom-chat": { token: "secret" },
+            },
+          },
+        })),
+      };
+      const activePlugin = makeSetupPlugin({
+        id: "custom-chat",
+        label: "Custom Chat",
+        setupWizard,
+      });
+      listActiveChannelSetupPlugins.mockReturnValue([activePlugin]);
+      resolveChannelSetupEntries.mockReturnValue(
+        makeChannelSetupEntries({
+          entries: [
+            {
+              id: "custom-chat",
+              meta: makeMeta("custom-chat", "Custom Chat"),
+            },
+          ],
+          installedCatalogEntries: [],
+          installableCatalogEntries: [],
+          installedCatalogById: new Map(),
+          installableCatalogById: new Map(),
+        }),
+      );
+      const select = vi.fn().mockResolvedValueOnce("custom-chat").mockResolvedValueOnce("__done__");
+
+      const next = await runChannelSetup(
+        {},
+        { select },
+        {
+          ...DEFERRED_CHANNEL_SETUP_OPTIONS,
+          deferStatusUntilSelection,
+        },
+      );
+
+      expect(loadChannelSetupPluginRegistrySnapshotForChannel).not.toHaveBeenCalled();
+      expect(callArg<{ cfg?: unknown }>(setupWizard.configure).cfg).toEqual({
+        plugins: {
+          entries: {
+            "custom-chat": { enabled: true },
           },
         },
-      })),
-    };
-    const activePlugin = makeSetupPlugin({
-      id: "custom-chat",
-      label: "Custom Chat",
-      setupWizard,
-    });
-    listActiveChannelSetupPlugins.mockReturnValue([activePlugin]);
-    resolveChannelSetupEntries.mockReturnValue(
-      makeChannelSetupEntries({
-        entries: [
-          {
-            id: "custom-chat",
-            meta: makeMeta("custom-chat", "Custom Chat"),
+      });
+      expect(next).toEqual({
+        plugins: {
+          entries: {
+            "custom-chat": { enabled: true },
           },
-        ],
-        installedCatalogEntries: [],
-        installableCatalogEntries: [],
-        installedCatalogById: new Map(),
-        installableCatalogById: new Map(),
-      }),
-    );
-    const select = vi.fn().mockResolvedValueOnce("custom-chat").mockResolvedValueOnce("__done__");
-
-    const next = await runChannelSetup({}, { select }, DEFERRED_CHANNEL_SETUP_OPTIONS);
-
-    expect(loadChannelSetupPluginRegistrySnapshotForChannel).not.toHaveBeenCalled();
-    expect(callArg<{ cfg?: unknown }>(setupWizard.configure).cfg).toEqual({
-      plugins: {
-        entries: {
-          "custom-chat": { enabled: true },
         },
-      },
-    });
-    expect(next).toEqual({
-      plugins: {
-        entries: {
-          "custom-chat": { enabled: true },
+        channels: {
+          "custom-chat": { token: "secret" },
         },
-      },
-      channels: {
-        "custom-chat": { token: "secret" },
-      },
-    });
-  });
+      });
+    },
+  );
 
   it("normalizes official external compatibility output from interactive setup", async () => {
     const setupWizard = {

@@ -20,7 +20,10 @@ import {
 } from "../commands/channel-setup/discovery.js";
 import { loadChannelSetupPluginRegistrySnapshotForChannel } from "../commands/channel-setup/plugin-install.js";
 import { resolveChannelSetupWizardAdapterForPlugin } from "../commands/channel-setup/registry.js";
-import { listTrustedChannelPluginCatalogEntries } from "../commands/channel-setup/trusted-catalog.js";
+import {
+  getTrustedChannelPluginCatalogEntry,
+  listTrustedChannelPluginCatalogEntries,
+} from "../commands/channel-setup/trusted-catalog.js";
 import { withCommandPluginMetadata } from "../commands/config-validation.js";
 import { hasConfiguredCommandOwners } from "../commands/doctor-command-owner.js";
 import type { ChannelChoice } from "../commands/onboard-types.js";
@@ -39,10 +42,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { t } from "../wizard/i18n/index.js";
 import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capability-consent.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import {
-  noteDisabledBeforeSetup,
-  resolveSetupFallbackCatalogEntry,
-} from "./channel-setup-fallback.js";
+import { noteDisabledBeforeSetup } from "./channel-setup-fallback.js";
 import {
   ensureChannelSetupPluginInstalledWithNavigation as runPluginInstallWithNavigation,
   runScopedChannelStep as runNavigationScope,
@@ -888,77 +888,43 @@ export async function setupChannels(
       }
       await refreshStatus(channel);
     } else {
-      // Neither discovery bucket yielded an entry for this channel. This can
-      // happen when `channels.<id>` in user config carries stale fields (e.g.
-      // `appId`, tokens) left over from a previous install: `isStatically-
-      // ChannelConfigured` returns true, which removes the channel from the
-      // `installableCatalogEntries` bucket, while a missing/pruned plugin on
-      // disk keeps it out of `installedCatalogEntries`. Before falling back
-      // to the bundled-plugin enable path, consult the catalog directly so
-      // users with a stale config entry for an externalized channel (qqbot,
-      // imessage, discord, whatsapp, ...) still get auto-install instead
-      // of a dead-end "plugin not available" note.
-      //
-      // An empty pair of buckets does NOT by itself mean the plugin is
-      // missing: discovery also excludes channels whose plugin is already
-      // loaded in this process (both buckets filter out `installedPlugins`
-      // ids). For a loaded plugin, skip the catalog reinstall — it would
-      // rewrite `plugins.installs.<id>.installPath` and restart the gateway
-      // under the setup flow that asked for the install (#149672: Control UI
-      // SMS setup looped on "install" forever) — and never dead-end on a
-      // failed enablement write: enableBundledPluginForSetup enables by
-      // CHANNEL id, which can differ from the owning plugin id (channel
-      // `custom-chat` contributed by plugin `workspace-chat`) and trip
-      // `plugins.allow`/`plugins.deny` even though the plugin is live.
-      const loadedPlugin = getVisibleChannelPlugin(channel);
-      const fallbackCatalogEntry = loadedPlugin
-        ? undefined
-        : resolveSetupFallbackCatalogEntry(channel, next, resolveWorkspaceDir());
+      // Discovery omits loaded catalog plugins from both buckets. Reuse them
+      // without reinstalling or enabling by channel ID: the plugin owner may
+      // have a different ID. Non-catalog setup plugins still need activation.
+      const fallbackCatalogEntry = getTrustedChannelPluginCatalogEntry(channel, {
+        cfg: next,
+        workspaceDir: resolveWorkspaceDir(),
+      });
       if (fallbackCatalogEntry?.install?.npmSpec) {
-        // Preserve the same disabled-config guard used by
-        // `enableBundledPluginForSetup` so an operator-disabled channel
-        // cannot be silently reinstalled/re-enabled through this path. This
-        // mirrors the guard that was previously enforced inside the
-        // bundled-enable fallback.
         const disabledHint = resolveConfigDisabledHint(channel);
         if (disabledHint) {
           await noteDisabledBeforeSetup(prompter, channel, disabledHint);
           return "done";
         }
-        const workspaceDir = resolveWorkspaceDir();
-        const installOutcome = await ensureChannelSetupPluginInstalledWithNavigation(channel, {
-          cfg: next,
-          entry: fallbackCatalogEntry,
-          runtime,
-          workspaceDir,
-          autoConfirmSingleSource: true,
-        });
-        if (installOutcome.status === "back") {
-          return returnToSelection();
-        }
-        const result = installOutcome.value;
-        next = result.cfg;
-        if (!result.installed) {
-          return "retry_selection";
-        }
-        if (installOutcome.persistentEffectStarted) {
-          cfgOnBack = next;
+        if (!getVisibleChannelPlugin(channel)) {
+          const workspaceDir = resolveWorkspaceDir();
+          const installOutcome = await ensureChannelSetupPluginInstalledWithNavigation(channel, {
+            cfg: next,
+            entry: fallbackCatalogEntry,
+            runtime,
+            workspaceDir,
+            autoConfirmSingleSource: true,
+          });
+          if (installOutcome.status === "back") {
+            return returnToSelection();
+          }
+          const result = installOutcome.value;
+          next = result.cfg;
+          if (!result.installed) {
+            return "retry_selection";
+          }
+          if (installOutcome.persistentEffectStarted) {
+            cfgOnBack = next;
+          }
         }
         await refreshStatus(channel);
-      } else {
-        // Preserve the disabled-policy guard for a loaded plugin BEFORE the
-        // bundled-enable attempt: a failed enablement write is tolerated for
-        // loaded plugins below, so the operator-disabled stop must fire here
-        // (same note the catalog-fallback guards use).
-        const disabledHint = loadedPlugin ? resolveConfigDisabledHint(channel) : undefined;
-        if (disabledHint) {
-          await noteDisabledBeforeSetup(prompter, channel, disabledHint);
-          return "done";
-        }
-        const enabled = await enableBundledPluginForSetup(channel);
-        if (!enabled && !loadedPlugin) {
-          return "done";
-        }
+      } else if (!(await enableBundledPluginForSetup(channel))) {
+        return "done";
       }
     }
 
