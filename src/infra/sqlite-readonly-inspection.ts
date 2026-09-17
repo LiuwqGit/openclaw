@@ -34,7 +34,7 @@ export function tryInspectSqliteReadOnlyInProcess<T>(
     ) {
       return undefined;
     }
-    return withSqliteSourceReadDatabase(canonicalPath, (database) => {
+    return withSqliteSourceReadDatabase(canonicalPath, "source", (database) => {
       try {
         // sqlite-allow-raw -- SQLite connection policy and deferred read admission, not a row query.
         database.exec("PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF; BEGIN;");

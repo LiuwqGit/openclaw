@@ -609,7 +609,7 @@ export function inspectSqliteSchemaHeaderInProcess(
     if (mode !== "wal" || (sidecars.wal && sidecars.shm)) {
       let readError: unknown;
       try {
-        return withSqliteSourceReadDatabase(canonicalPath, (database) => {
+        return withSqliteSourceReadDatabase(canonicalPath, "source", (database) => {
           try {
             setSqliteBusyTimeout(database, SQLITE_SOURCE_READ_BUSY_TIMEOUT_MS);
             return readSqliteSchemaHeader(database, agentSchemaVersionForOwnership);

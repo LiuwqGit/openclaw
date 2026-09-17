@@ -26,12 +26,13 @@ export function withSqliteSourceHandle<T>(pathname: string, operation: () => T):
  * another connection's process-wide POSIX locks. Failed close retains admission. */
 export function withSqliteSourceReadDatabase<T>(
   pathname: string,
+  inspectionOperation: "source" | "snapshot",
   operation: (database: DatabaseSync) => T,
 ): T {
   const lease = acquireStateDatabaseHandleLease({ databasePath: pathname, busyTimeoutMs: 0 });
   let database: DatabaseSync | undefined;
   try {
-    database = withSqliteInspectionOperation("source", () =>
+    database = withSqliteInspectionOperation(inspectionOperation, () =>
       openNodeSqliteDatabase(pathname, { readOnly: true }),
     );
     return operation(database);
