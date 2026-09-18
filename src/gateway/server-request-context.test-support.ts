@@ -13,7 +13,7 @@ import { createGatewayRequestContext } from "./server-request-context.js";
 
 type GatewayRequestContextParams = Parameters<typeof createGatewayRequestContext>[0];
 type TestCronState = GatewayServerLiveState["cronState"];
-type RequestRuntime = GatewayRequestContextParams["runtime"];
+export type RequestRuntime = GatewayRequestContextParams["runtime"];
 
 export function makeCronState(overrides: Partial<TestCronState> = {}): TestCronState {
   return {
