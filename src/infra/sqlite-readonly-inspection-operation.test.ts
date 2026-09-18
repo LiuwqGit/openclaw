@@ -58,7 +58,9 @@ async function inspectFailure(
     if (
       (operation === "coordinator" && location === coordinatorPath) ||
       ((operation === "source" || operation === "backup-source") && location === sourcePath) ||
-      (operation === "snapshot-open" && path.dirname(location).startsWith(stagingRoot))
+      (operation === "snapshot-open" &&
+        path.dirname(location).startsWith(stagingRoot) &&
+        path.basename(location) === "database.sqlite.partial")
     ) {
       throw failure;
     }
