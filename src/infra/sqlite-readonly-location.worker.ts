@@ -1,5 +1,11 @@
+import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
-import { formatSqliteReadOnlyInspectionFailure } from "./sqlite-error-diagnostics.js";
+import {
+  formatSqliteErrorCodeSuffix,
+  formatSqliteReadOnlyInspectionFailure,
+} from "./sqlite-error-diagnostics.js";
+import { releaseSnapshotTempDirectory } from "./sqlite-readonly-location-cleanup.js";
 import {
   inspectSqliteSchemaHeaderInProcess,
   prepareSqliteReadOnlyLocationInProcess,
@@ -9,6 +15,7 @@ import {
   SQLITE_READONLY_WORKER_MAX_BUFFER,
   type SqliteReadOnlyWorkerResult,
 } from "./sqlite-readonly-worker-protocol.js";
+import { reclaimAbandonedSqliteSnapshots } from "./sqlite-snapshot-staging.js";
 
 // The sync strategy raw-copies without attaching SQLite to the source, so sync
 // callers stay byte-neutral on the live family; the async strategy holds a read
@@ -18,13 +25,48 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
   const pathname = args[1];
   const stagingRoot = args[2];
   const agentSchemaVersionForOwnership = args[3] === undefined ? undefined : Number(args[3]);
-  if ((mode !== "sync" && mode !== "async" && mode !== "schema-header") || !pathname) {
+  if (
+    (mode !== "sync" && mode !== "async" && mode !== "schema-header" && mode !== "reclaim") ||
+    !pathname
+  ) {
     return {
       ok: false,
       message: "SQLite read-only worker requires a mode and a database path",
     };
   }
   try {
+    if (mode === "reclaim") {
+      const warnings: string[] = [];
+      const directories = reclaimAbandonedSqliteSnapshots(pathname, (message, error) => {
+        warnings.push(`${message}${formatSqliteErrorCodeSuffix(error)}`);
+      });
+      let stopped = false;
+      const stop = () => {
+        stopped = true;
+      };
+      // EOF also handles a vanished parent. Never interrupt a directory's delete.
+      process.stdin.once("end", stop);
+      process.stdin.once("error", stop);
+      process.stdin.resume();
+      try {
+        while (true) {
+          await setImmediate();
+          if (stopped) {
+            warnings.push("Stopped SQLite snapshot reclamation at a directory boundary.");
+            break;
+          }
+          if (directories.next().done) {
+            break;
+          }
+        }
+      } finally {
+        directories.return(undefined);
+        process.stdin.off("end", stop);
+        process.stdin.off("error", stop);
+        process.stdin.destroy();
+      }
+      return { ok: true, warnings };
+    }
     if (mode === "schema-header") {
       if (
         agentSchemaVersionForOwnership !== undefined &&
@@ -44,6 +86,7 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
       mode === "sync"
         ? prepareSqliteReadOnlyLocationSyncInProcess(pathname, stagingRoot)
         : await prepareSqliteReadOnlyLocationInProcess(pathname, stagingRoot);
+    releaseSnapshotTempDirectory(prepared.cleanupRoot ?? path.dirname(prepared.location));
     return { ok: true, location: prepared.location };
   } catch (error) {
     return { ok: false, message: formatSqliteReadOnlyInspectionFailure(error) };
