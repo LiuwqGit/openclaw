@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 
@@ -18,17 +18,19 @@ vi.mock("./node-sqlite.js", async (importOriginal) => {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const originalArgv = process.argv;
 const originalExitCode = process.exitCode;
+beforeEach(() => {
+  // Runtime setup can preload coordinator owners before this file's native-open mock.
+  vi.resetModules();
+});
 afterEach(() => {
   process.argv = originalArgv;
   process.exitCode = originalExitCode;
   vi.restoreAllMocks();
-  vi.resetModules();
 });
 
 async function inspectFailure(
   operation:
     | "coordinator"
-    | "source"
     | "backup-source"
     | "snapshot-open"
     | "snapshot-copy"
@@ -57,7 +59,7 @@ async function inspectFailure(
   vi.mocked(sqlite.openNodeSqliteDatabase).mockImplementation((location, options) => {
     if (
       (operation === "coordinator" && location === coordinatorPath) ||
-      ((operation === "source" || operation === "backup-source") && location === sourcePath) ||
+      (operation === "backup-source" && location === sourcePath) ||
       (operation === "snapshot-open" &&
         path.dirname(location).startsWith(stagingRoot) &&
         path.basename(location) === "database.sqlite.partial")
@@ -95,7 +97,7 @@ async function inspectFailure(
     process.execPath,
     "sqlite-readonly-location.worker.ts",
     "--openclaw-sqlite-readonly-child",
-    operation === "snapshot-copy" ? "sync" : operation === "source" ? "schema-header" : "async",
+    operation === "snapshot-copy" ? "sync" : "async",
     sourcePath,
     stagingRoot,
   ];
@@ -133,48 +135,8 @@ describe("registered SQLite read-only worker operation diagnostics", () => {
     expect(causeReads).toBe(1);
   });
 
-  it("inspectSqliteSchemaHeader reports a native coordinator denial through its real child and parent", async () => {
-    const root = tempDirs.make("sqlite-inspection-parent-");
-    const sourcePath = path.join(root, "source.sqlite");
-    const actual = await vi.importActual<typeof import("./node-sqlite.js")>("./node-sqlite.js");
-    const sqlite = await import("./node-sqlite.js");
-    vi.mocked(sqlite.openNodeSqliteDatabase).mockImplementation(actual.openNodeSqliteDatabase);
-    vi.mocked(sqlite.requireNodeSqlite).mockImplementation(actual.requireNodeSqlite);
-    const source = actual.openNodeSqliteDatabase(sourcePath);
-    source.exec("CREATE TABLE present (id INTEGER PRIMARY KEY); INSERT INTO present VALUES (7);");
-    source.close();
-    const before = fs.readFileSync(sourcePath);
-    const { resolveLifecycleCoordinatorPath } =
-      await import("./state-database-coordinator-paths.js");
-    const { resolveStateLifecycleRuntimeDirectory } =
-      await import("./state-database-coordinator.js");
-    const { inspectSqliteSchemaHeader } = await import("./sqlite-snapshot-source.js");
-    const coordinatorPath = resolveLifecycleCoordinatorPath("state-handles", {
-      databasePath: sourcePath,
-      runtimeDirectory: resolveStateLifecycleRuntimeDirectory(),
-      uid: typeof process.getuid === "function" ? process.getuid() : undefined,
-    });
-    fs.mkdirSync(path.dirname(coordinatorPath), { mode: 0o700, recursive: true });
-    fs.mkdirSync(coordinatorPath);
-    try {
-      await expect(inspectSqliteSchemaHeader(sourcePath)).rejects.toThrow(
-        "SQLite read-only worker failed while acquiring its state-handles coordinator: unable to open database file (code=ERR_SQLITE_ERROR, errcode=14)",
-      );
-      expect(fs.readFileSync(sourcePath)).toEqual(before);
-    } finally {
-      fs.rmdirSync(coordinatorPath);
-    }
-    try {
-      await expect(inspectSqliteSchemaHeader(sourcePath)).resolves.toEqual({ userVersion: 0 });
-      expect(fs.readFileSync(sourcePath)).toEqual(before);
-    } finally {
-      fs.rmSync(coordinatorPath, { force: true });
-    }
-  });
-
   it.each([
     ["coordinator", "acquiring its state-handles coordinator"],
-    ["source", "opening the source database"],
     ["backup-source", "opening the source database"],
     ["snapshot-open", "creating its private snapshot"],
     ["snapshot-copy", "creating its private snapshot"],
@@ -227,12 +189,13 @@ describe("registered SQLite read-only worker operation diagnostics", () => {
     const failure = Object.freeze(
       new AggregateError([cause, new Error("hidden cleanup")], "read failed", { cause }),
     );
-    const { write, observedFailure } = await inspectFailure("source", failure);
+    const { write, observedFailure } = await inspectFailure("coordinator", failure);
     expect(observedFailure).toBe(failure);
     expect(write).toHaveBeenCalledExactlyOnceWith(
       JSON.stringify({
         ok: false,
-        message: "failed while opening the source database: read failed (code=EIO, errcode=778)",
+        message:
+          "failed while acquiring its state-handles coordinator: read failed (code=EIO, errcode=778)",
       }),
     );
   });
