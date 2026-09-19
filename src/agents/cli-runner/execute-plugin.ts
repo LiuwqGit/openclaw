@@ -3,6 +3,7 @@ import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { toErrorObject } from "../../infra/errors.js";
 import { resolveExecutablePath } from "../../infra/executable-path.js";
+import { expandHomePrefix } from "../../infra/home-dir.js";
 import { mergePathPrepend } from "../../infra/path-prepend.js";
 import {
   resolveWindowsExecutablePath,
@@ -442,7 +443,14 @@ export async function executePluginOwnedProcess(params: {
   const cwd = params.context.cwd ?? params.context.workspaceDir;
   const executable =
     process.platform === "win32"
-      ? resolveWindowsExecutablePath(params.executionCommand, params.env, cwd)
+      ? resolveWindowsExecutablePath(
+          // Home-relative commands must expand before cwd resolution; otherwise
+          // the Windows lookup turns ~/bin/tool.exe into a workspace-relative
+          // literal tilde path that the generic resolver can no longer expand.
+          expandHomePrefix(params.executionCommand, { env: params.env }),
+          params.env,
+          cwd,
+        )
       : params.executionCommand;
   let command = resolveExecutablePath(executable, { cwd, env: params.env });
   if (!command) {
