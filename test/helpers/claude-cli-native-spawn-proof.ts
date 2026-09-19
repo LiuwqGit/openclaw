@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { hasErrnoCode } from "../../src/infra/errno.js";
 import { runUtf8CommandWithTimeout } from "../../src/process/exec.js";
 import { createOpenClawTestInstance } from "./openclaw-test-instance.js";
 
@@ -256,8 +257,10 @@ export async function runClaudeCliNativeSpawnProof(
       ],
       { timeoutMs: 120_000, execPath: process.execPath },
     );
-    const log = await fs.readFile(logPath, "utf8").catch((error: NodeJS.ErrnoException) => {
-      if (error.code === "ENOENT") return "";
+    const log = await fs.readFile(logPath, "utf8").catch((error: unknown) => {
+      if (hasErrnoCode(error, "ENOENT")) {
+        return "";
+      }
       throw error;
     });
     return {
