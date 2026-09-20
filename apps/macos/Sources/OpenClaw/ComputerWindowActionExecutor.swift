@@ -47,6 +47,53 @@ struct ComputerActionExecutionAuthority {
     }
 }
 
+/// Owns the on-disk artifacts of the window-state observation flow. Directing
+/// Peekaboo's observation output into this dedicated directory (instead of the
+/// general temporary directory) gives the executor a single, bounded cleanup root
+/// for private window captures (#153622 review):
+/// - artifacts registered with the snapshot manager are deleted on explicit
+///   cleanup, validity-window expiry, or LRU eviction (`deleteArtifactsOnCleanup`);
+/// - a *failed* observation can leave an unregistered PNG behind (the provider's
+///   output writer persists the raw screenshot before registering it), so the
+///   executor sweeps what a failed observation wrote before propagating the error;
+/// - teardown removes the whole directory, so captures cannot outlive the executor
+///   even when no further observation runs (manager cleanup is operation-driven).
+enum WindowObservationArtifacts {
+    /// Directory holding every raw window-observation screenshot this executor
+    /// asks Peekaboo to persist.
+    static let outputDirectory: URL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("openclaw-window-state-observations", isDirectory: true)
+
+    /// The request-level output path: a trailing slash makes the provider's
+    /// `ObservationOutputPathResolver` treat it as a directory and place the
+    /// default `peekaboo-observation-<timestamp>.png` file name inside it.
+    static var requestOutputPath: String {
+        outputDirectory.path + "/"
+    }
+
+    /// Removes artifacts written into `directory` since `startedAt` — the sweep for
+    /// a failed observation. Registered artifacts from earlier snapshots have older
+    /// modification dates and stay available for the snapshot manager's own cleanup.
+    static func discardArtifacts(writtenSince startedAt: Date, in directory: URL) {
+        guard let contents = try? FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.contentModificationDateKey])
+        else { return }
+        for url in contents where Self.modificationDate(of: url) >= startedAt {
+            try? FileManager.default.removeItem(at: url)
+        }
+    }
+
+    private static func modificationDate(of url: URL) -> Date {
+        (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+    }
+
+    /// Removes `directory` and everything beneath it.
+    static func removeAllArtifacts(in directory: URL) {
+        try? FileManager.default.removeItem(at: directory)
+    }
+}
+
 /// Executes the window- and element-scoped half of `computer.act`: discovery,
 /// app/window lifecycle, and accessibility-targeted input. Its peer
 /// `ComputerScreenActionExecutor` owns the screen-coordinate half; both are
@@ -91,6 +138,14 @@ final class ComputerWindowActionExecutor {
     /// snapshot eviction with potentially private window contents (#153622).
     static var windowSnapshotManagerOptions: InMemorySnapshotManager.Options {
         InMemorySnapshotManager.Options(deleteArtifactsOnCleanup: true)
+    }
+
+    deinit {
+        // Snapshot-manager cleanup is operation-driven (pruning happens on the next
+        // observation), so persisted window captures would otherwise outlive the
+        // executor at teardown. The executor owns its output directory — remove it
+        // wholesale, together with any artifacts the manager never saw (#153622 review).
+        WindowObservationArtifacts.removeAllArtifacts(in: WindowObservationArtifacts.outputDirectory)
     }
 
     init() {
@@ -280,7 +335,9 @@ final class ComputerWindowActionExecutor {
     /// reserves, stores, and publishes the snapshot itself: a detection-only request
     /// only mints a transient correlation UUID that the snapshot manager rejects
     /// (`Invalid snapshot reference ... expected ps1_ ...`), which used to break the
-    /// window-state flow before the result was handed back (#153622).
+    /// window-state flow before the result was handed back (#153622). Output is
+    /// directed into the executor-owned directory so every persisted capture has a
+    /// bounded cleanup owner (#153622 review).
     static func windowStateObservationRequest(
         windowID: CGWindowID,
         limits: (depth: Int, maxElements: Int)) -> DesktopObservationRequest
@@ -294,7 +351,9 @@ final class ComputerWindowActionExecutor {
                     maxDepth: limits.depth,
                     maxElementCount: limits.maxElements,
                     maxChildrenPerNode: AXTraversalBudget.defaultMaxChildrenPerNode)),
-            output: DesktopObservationOutputOptions(saveSnapshot: true))
+            output: DesktopObservationOutputOptions(
+                path: WindowObservationArtifacts.requestOutputPath,
+                saveSnapshot: true))
     }
 
     private func getWindowState(
@@ -311,8 +370,22 @@ final class ComputerWindowActionExecutor {
             throw ComputerActionService.ComputerActionError.staleObservation
         }
         let request = Self.windowStateObservationRequest(windowID: windowID, limits: limits)
-        let result = try await self.withExecutionAuthority {
-            try await self.observationService.observe(request)
+        let observationStartedAt = Date()
+        let result: DesktopObservationResult
+        do {
+            result = try await self.withExecutionAuthority {
+                try await self.observationService.observe(request)
+            }
+        } catch {
+            // Peekaboo's output writer persists the raw screenshot before registering
+            // it with the snapshot manager, so a failed observation can leave an
+            // unregistered window capture that manager-driven cleanup never sees. The
+            // executor owns its output directory — sweep what this observation wrote
+            // before propagating the failure (#153622 review).
+            WindowObservationArtifacts.discardArtifacts(
+                writtenSince: observationStartedAt,
+                in: WindowObservationArtifacts.outputDirectory)
+            throw error
         }
         let observedWindow = result.capture.metadata.windowInfo ?? target.window
         guard observedWindow.windowID == target.window.windowID else {

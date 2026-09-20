@@ -32,6 +32,7 @@ struct ComputerWindowObservationTests {
 
         #expect(request.output.saveSnapshot)
         #expect(request.output.snapshotID == nil)
+        #expect(request.output.path == WindowObservationArtifacts.requestOutputPath)
         #expect(request.target == .windowID(42))
         #expect(request.capture.focus == .background)
         #expect(request.detection.mode == .accessibility)
@@ -101,5 +102,60 @@ struct ComputerWindowObservationTests {
         #expect(!FileManager.default.fileExists(atPath: artifactPaths[0]))
         // The most recent snapshots survive with their artifacts still readable.
         #expect(FileManager.default.fileExists(atPath: artifactPaths[25]))
+    }
+
+    /// A failed observation can leave an unregistered PNG behind: the provider's
+    /// output writer persists the raw screenshot before registering it with the
+    /// snapshot manager, and manager-driven cleanup never sees files it never
+    /// stored. The executor's failure sweep must remove exactly those captures
+    /// (#153622 review). Drives the real `ObservationOutputWriter` write path.
+    @Test func `failed observation artifacts are swept from the owned output directory`() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-window-state-sweep-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        // An earlier, still-registered artifact must survive the sweep.
+        let registered = directory.appendingPathComponent("earlier-registered.png")
+        try Data([0x89, 0x50]).write(to: registered)
+
+        let observationStartedAt = Date()
+        let writer = ObservationOutputWriter()
+        let write = try await writer.write(
+            capture: CaptureResult(
+                imageData: Data([0x89, 0x50, 0x4E, 0x47]),
+                metadata: CaptureMetadata(size: CGSize(width: 4, height: 4), mode: .window)),
+            elements: nil,
+            options: DesktopObservationOutputOptions(
+                path: directory.path + "/",
+                saveRawScreenshot: true))
+        guard let orphanPath = write.files.rawScreenshotPath else {
+            Issue.record("Expected the output writer to persist a raw screenshot")
+            return
+        }
+        #expect(orphanPath.hasPrefix(directory.path))
+        #expect(FileManager.default.fileExists(atPath: orphanPath))
+
+        WindowObservationArtifacts.discardArtifacts(writtenSince: observationStartedAt, in: directory)
+
+        #expect(!FileManager.default.fileExists(atPath: orphanPath))
+        #expect(FileManager.default.fileExists(atPath: registered.path))
+    }
+
+    /// Teardown removes the executor-owned output directory wholesale, so persisted
+    /// window captures cannot outlive the executor even when no further observation
+    /// runs to drive eviction (#153622 review).
+    @Test func `teardown removes the owned output directory`() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-window-state-teardown-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let capture = directory.appendingPathComponent("peekaboo-observation-leftover.png")
+        try Data([0x89, 0x50]).write(to: capture)
+        #expect(FileManager.default.fileExists(atPath: capture.path))
+
+        WindowObservationArtifacts.removeAllArtifacts(in: directory)
+
+        #expect(!FileManager.default.fileExists(atPath: capture.path))
+        #expect(!FileManager.default.fileExists(atPath: directory.path))
     }
 }
