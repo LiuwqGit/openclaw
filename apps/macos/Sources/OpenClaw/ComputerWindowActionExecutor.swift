@@ -78,7 +78,6 @@ final class ComputerWindowActionExecutor {
     private let windows: WindowManagementService
     private let menu: MenuService
     private let observationService: DesktopObservationService
-    private let snapshotManager: InMemorySnapshotManager
     private var lifecycleGeneration: UInt64?
     private var appRefs: [String: ServiceApplicationInfo] = [:]
     private var windowRefs: [String: WindowTarget] = [:]
@@ -94,7 +93,6 @@ final class ComputerWindowActionExecutor {
         self.applications = applications
         self.windows = WindowManagementService(applicationService: applications)
         self.menu = menu
-        self.snapshotManager = snapshotManager
         self.observationService = DesktopObservationService(
             screenCapture: ScreenCaptureService(loggingService: LoggingService()),
             automation: automation,
@@ -268,6 +266,28 @@ final class ComputerWindowActionExecutor {
         ])
     }
 
+    /// Builds the `get_window_state` observation request. The request opts into the
+    /// provider's owned snapshot lifecycle (`saveSnapshot: true`) so the observation
+    /// reserves, stores, and publishes the snapshot itself: a detection-only request
+    /// only mints a transient correlation UUID that the snapshot manager rejects
+    /// (`Invalid snapshot reference ... expected ps1_ ...`), which used to break the
+    /// window-state flow before the result was handed back (#153622).
+    static func windowStateObservationRequest(
+        windowID: CGWindowID,
+        limits: (depth: Int, maxElements: Int)) -> DesktopObservationRequest
+    {
+        DesktopObservationRequest(
+            target: .windowID(windowID),
+            capture: DesktopCaptureOptions(focus: .background),
+            detection: DesktopDetectionOptions(
+                mode: .accessibility,
+                traversalBudget: AXTraversalBudget(
+                    maxDepth: limits.depth,
+                    maxElementCount: limits.maxElements,
+                    maxChildrenPerNode: AXTraversalBudget.defaultMaxChildrenPerNode)),
+            output: DesktopObservationOutputOptions(saveSnapshot: true))
+    }
+
     private func getWindowState(
         _ params: OpenClawComputerActParams) async throws -> OpenClawComputerActResult
     {
@@ -281,24 +301,9 @@ final class ComputerWindowActionExecutor {
         guard let windowID = CGWindowID(exactly: target.window.windowID) else {
             throw ComputerActionService.ComputerActionError.staleObservation
         }
-        let request = DesktopObservationRequest(
-            target: .windowID(windowID),
-            capture: DesktopCaptureOptions(focus: .background),
-            detection: DesktopDetectionOptions(
-                mode: .accessibility,
-                traversalBudget: AXTraversalBudget(
-                    maxDepth: limits.depth,
-                    maxElementCount: limits.maxElements,
-                    maxChildrenPerNode: AXTraversalBudget.defaultMaxChildrenPerNode)))
+        let request = Self.windowStateObservationRequest(windowID: windowID, limits: limits)
         let result = try await self.withExecutionAuthority {
             try await self.observationService.observe(request)
-        }
-        if let elements = result.elements {
-            try await self.withExecutionAuthority {
-                try await self.snapshotManager.storeDetectionResult(
-                    snapshotId: elements.snapshotId,
-                    result: elements)
-            }
         }
         let observedWindow = result.capture.metadata.windowInfo ?? target.window
         guard observedWindow.windowID == target.window.windowID else {
