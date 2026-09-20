@@ -84,8 +84,17 @@ final class ComputerWindowActionExecutor {
     private var observation: ObservationState?
     private var executionAuthority: ComputerActionExecutionAuthority?
 
+    /// Snapshot options for the window-state flow: reserving owned snapshots makes
+    /// Peekaboo persist raw observation screenshots on disk, so the manager must also
+    /// own deleting those artifacts when their snapshot is evicted or cleaned up —
+    /// otherwise window captures accumulate in the temporary directory and survive
+    /// snapshot eviction with potentially private window contents (#153622).
+    static var windowSnapshotManagerOptions: InMemorySnapshotManager.Options {
+        InMemorySnapshotManager.Options(deleteArtifactsOnCleanup: true)
+    }
+
     init() {
-        let snapshotManager = InMemorySnapshotManager()
+        let snapshotManager = InMemorySnapshotManager(options: Self.windowSnapshotManagerOptions)
         let automation = UIAutomationService(snapshotManager: snapshotManager)
         let applications = ApplicationService()
         let menu = MenuService(applicationService: applications)
