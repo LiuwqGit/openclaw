@@ -334,6 +334,7 @@ struct MacNodeRuntimeTests {
         #expect(response.ok == false)
     }
 
+    @MainActor
     @Test func `shutdown sweeps persisted window observation artifacts through the shared services`() async throws {
         let services = await MainActor.run { MainActorServicesProbe() }
         let runtime = await MacNodeRuntime(
