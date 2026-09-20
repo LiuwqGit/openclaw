@@ -52,7 +52,10 @@ import {
   recordConfigWriteMetadata,
   stampConfigWriteMetadata,
 } from "./io.meta.js";
-import { advanceConfigHealthBaselineForAcceptedWrite } from "./io.observe.js";
+import {
+  advanceConfigHealthBaselineForAcceptedWrite,
+  restoreConfigHealthBaselineForRolledBackWrite,
+} from "./io.observe.js";
 import {
   containsConfigIncludeDirective,
   hashConfigRaw,
@@ -550,7 +553,7 @@ export async function writeConfigFileFromContext(
       undefined,
       await deps.fs.promises.stat(configPath).catch(() => null),
     );
-    advanceConfigHealthBaselineForAcceptedWrite(deps, {
+    const healthBaselineCompensation = advanceConfigHealthBaselineForAcceptedWrite(deps, {
       configPath,
       raw: json,
       parsed: stampedOutputConfig,
@@ -648,6 +651,7 @@ export async function writeConfigFileFromContext(
               previousWarningFingerprint,
             );
           }
+          restoreConfigHealthBaselineForRolledBackWrite(deps, healthBaselineCompensation);
         },
       },
     };
