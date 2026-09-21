@@ -753,7 +753,7 @@ describe("last-known-good promotion after accepted writes", () => {
       observe: false,
       logger: { warn: vi.fn(), error: vi.fn() },
     });
-    return { configPath, io };
+    return { configPath, env, io, root };
   }
 
   function seedConfig(configPath: string, config: Record<string, unknown>): string {
@@ -857,6 +857,72 @@ describe("last-known-good promotion after accepted writes", () => {
       }),
     ).resolves.toBe(true);
     expect(fs.readFileSync(configPath, "utf8")).toBe(canonicalRaw);
+  });
+
+  it("settles last-known-good advancement superseded by an observed read", async () => {
+    const { configPath, env, io, root } = acceptedWriteFixture();
+    const lastGoodPath = `${configPath}.last-good`;
+    const original = {
+      meta: { lastTouchedVersion: "2026.4.24" },
+      gateway: { mode: "local" },
+      channels: {
+        telegram: {
+          enabled: true,
+          allowFrom: Array.from({ length: 80 }, (_, index) => `telegram:${index}`),
+        },
+      },
+    };
+    const verboseRaw = `\uFEFF${JSON.stringify(original, null, 12)}\n`;
+    fs.writeFileSync(configPath, verboseRaw, "utf8");
+    const verboseSnapshot = await io.readConfigFileSnapshot();
+    await expect(io.promoteConfigSnapshotToLastKnownGood(verboseSnapshot)).resolves.toBe(true);
+    expect(fs.readFileSync(lastGoodPath, "utf8")).toBe(verboseRaw);
+
+    const healthDeps = normalizeConfigIoDeps({
+      env,
+      homedir: () => root,
+      logger: { warn: vi.fn(), error: vi.fn() },
+    });
+    const capture = healthOwner.captureConfigHealthStateStore;
+    let superseded = false;
+    const spy = vi
+      .spyOn(healthOwner, "captureConfigHealthStateStore")
+      .mockImplementation((...args) => {
+        const store = capture(...args);
+        return {
+          ...store,
+          async read() {
+            // An ordinary observed read lands while the writer's baseline
+            // advance awaits its worker read: it records the published canonical
+            // candidate as a size-drop anomaly and supersedes the advance's scope.
+            if (
+              !superseded &&
+              args[1] === configPath &&
+              fs.readFileSync(configPath, "utf8") !== verboseRaw
+            ) {
+              superseded = true;
+              observeConfigSnapshotSync(healthDeps, await io.readConfigFileSnapshot());
+            }
+            return store.read();
+          },
+        };
+      });
+    try {
+      await io.writeConfigFile(
+        { ...original, gateway: { mode: "local", port: 18789 } },
+        { baseSnapshot: verboseSnapshot },
+      );
+    } finally {
+      spy.mockRestore();
+    }
+
+    const canonicalRaw = fs.readFileSync(configPath, "utf8");
+    expect(superseded).toBe(true);
+    // The superseded advance settled on a fresh scope, so the next startup
+    // promotes the accepted edit instead of freezing the verbose baseline.
+    const editedSnapshot = await io.readConfigFileSnapshot();
+    await expect(io.promoteConfigSnapshotToLastKnownGood(editedSnapshot)).resolves.toBe(true);
+    expect(fs.readFileSync(lastGoodPath, "utf8")).toBe(canonicalRaw);
   });
 
   it("restores the last-known-good baseline when a committed write rolls back", async () => {

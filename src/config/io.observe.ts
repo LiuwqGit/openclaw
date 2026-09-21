@@ -11,6 +11,7 @@ import {
 import type {
   ConfigHealthEntry,
   ConfigHealthFingerprint,
+  ConfigHealthSnapshot,
   ConfigHealthState,
 } from "./io.health-state.types.js";
 import {
@@ -191,6 +192,46 @@ export type ConfigHealthBaselineCapture = {
 };
 
 /**
+ * Bounded attempts for write-owned health transitions. An ordinary observed read
+ * can supersede the scope a transition captured while it awaits the worker, and
+ * a competing observation can win the conditional write the transition then
+ * issues; the accepted write this bookkeeping belongs to has already succeeded,
+ * so the transition re-captures a fresh scope and re-reads the persisted
+ * snapshot instead of being discarded. The bound keeps a stream of competing
+ * observations from spinning forever.
+ */
+const CONFIG_HEALTH_TRANSITION_ATTEMPTS = 4;
+
+/**
+ * Run a write-owned config-health transition until it settles. The callback
+ * re-evaluates its guard against the freshly read snapshot and returns
+ * `"retry"` whenever a supersession or a lost compare-and-set means the state
+ * it observed is no longer authoritative.
+ */
+async function settleConfigHealthTransition(
+  deps: NormalizedConfigIoDeps,
+  configPath: string,
+  transition: (
+    store: ReturnType<typeof captureConfigHealthStateStore>,
+    snapshot: ConfigHealthSnapshot,
+  ) => Promise<"settled" | "retry">,
+): Promise<boolean> {
+  for (let attempt = 0; attempt < CONFIG_HEALTH_TRANSITION_ATTEMPTS; attempt += 1) {
+    using store = captureConfigHealthStateStore(deps, configPath);
+    const healthSnapshot = await store.read();
+    if (!healthSnapshot) {
+      // Superseded by a competing observation while awaiting the worker: the
+      // write still stands, so capture a fresh scope and re-evaluate.
+      continue;
+    }
+    if ((await transition(store, healthSnapshot)) === "settled") {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Capture the pre-publication last-known-good baseline on the worker-backed
  * health owner. The writer calls this before publishing the candidate file;
  * {@link advanceConfigHealthBaselineForAcceptedWrite} settles the capture once
@@ -205,20 +246,23 @@ export async function captureConfigHealthBaselineForWrite(
   configPath: string,
 ): Promise<ConfigHealthBaselineCapture | null> {
   try {
-    using store = captureConfigHealthStateStore(deps, configPath);
-    const healthSnapshot = await store.read();
-    if (!healthSnapshot || !store.isCurrent()) {
-      return null;
-    }
-    const entry = readConfigHealthEntry(healthSnapshot.state, configPath);
-    if (!entry.lastKnownGood) {
-      return null;
-    }
-    return {
+    let capture: ConfigHealthBaselineCapture | null = null;
+    const settled = await settleConfigHealthTransition(
+      deps,
       configPath,
-      previousLastKnownGood: entry.lastKnownGood,
-      previousSuspiciousSignature: entry.lastObservedSuspiciousSignature ?? null,
-    };
+      async (_store, healthSnapshot) => {
+        const entry = readConfigHealthEntry(healthSnapshot.state, configPath);
+        capture = entry.lastKnownGood
+          ? {
+              configPath,
+              previousLastKnownGood: entry.lastKnownGood,
+              previousSuspiciousSignature: entry.lastObservedSuspiciousSignature ?? null,
+            }
+          : null;
+        return "settled";
+      },
+    );
+    return settled ? capture : null;
   } catch (error) {
     deps.logger.warn(
       `Config last-known-good baseline capture failed: ${formatErrorMessage(error)}`,
@@ -242,7 +286,10 @@ export async function captureConfigHealthBaselineForWrite(
  * still published when the update cannot land because the conditional restore
  * skips it unless the persisted baseline matches the candidate. Returns the
  * compensation record the writer uses to restore the baseline if the committed
- * write later rolls back.
+ * write later rolls back. Absorbs ordinary observation supersession by
+ * re-reading and re-applying its guard, so the accepted write's baseline is
+ * never silently dropped, while a baseline that is neither the pre-write value
+ * nor this candidate (a newer decision) stays preserved.
  */
 export async function advanceConfigHealthBaselineForAcceptedWrite(
   deps: NormalizedConfigIoDeps,
@@ -256,9 +303,10 @@ export async function advanceConfigHealthBaselineForAcceptedWrite(
   if (!capture) {
     return null;
   }
+  const baseline = capture;
   let compensation: ConfigHealthBaselineCompensation | null = null;
   try {
-    const stat = await deps.fs.promises.stat(capture.configPath).catch(() => null);
+    const stat = await deps.fs.promises.stat(baseline.configPath).catch(() => null);
     const current = createConfigHealthFingerprint({
       raw: params.raw,
       parsed: params.parsed,
@@ -270,23 +318,56 @@ export async function advanceConfigHealthBaselineForAcceptedWrite(
       hasMeta: current.hasMeta,
       gatewayMode: current.gatewayMode,
       parsed: params.parsed,
-      lastKnownGood: capture.previousLastKnownGood,
+      lastKnownGood: baseline.previousLastKnownGood,
     });
     if (suspicious.some((reason) => !reason.startsWith("size-drop-vs-last-good:"))) {
       return null;
     }
     compensation = {
-      configPath: capture.configPath,
+      configPath: baseline.configPath,
       candidate: current,
-      previousLastKnownGood: capture.previousLastKnownGood,
-      previousSuspiciousSignature: capture.previousSuspiciousSignature,
+      previousLastKnownGood: baseline.previousLastKnownGood,
+      previousSuspiciousSignature: baseline.previousSuspiciousSignature,
     };
-    using store = captureConfigHealthStateStore(deps, capture.configPath);
-    const healthSnapshot = await store.read();
-    if (healthSnapshot) {
-      await store.updateAfterFileCommit(
-        { lastKnownGood: current, lastObservedSuspiciousSignature: null },
-        healthSnapshot,
+    const settled = await settleConfigHealthTransition(
+      deps,
+      baseline.configPath,
+      async (store, healthSnapshot) => {
+        const entry = readConfigHealthEntry(healthSnapshot.state, baseline.configPath);
+        const persisted = entry.lastKnownGood;
+        // A baseline that is neither the pre-write baseline nor this write's
+        // candidate is a newer, valid decision: preserve it untouched.
+        if (
+          persisted &&
+          persisted.hash !== baseline.previousLastKnownGood.hash &&
+          persisted.hash !== current.hash
+        ) {
+          return "settled";
+        }
+        if (persisted?.hash === current.hash && entry.lastObservedSuspiciousSignature == null) {
+          return "settled";
+        }
+        await store.updateAfterFileCommit(
+          { lastKnownGood: current, lastObservedSuspiciousSignature: null },
+          healthSnapshot,
+        );
+        // A competing observation can still supersede the scope at the worker
+        // or win the conditional write; re-read and re-evaluate rather than
+        // dropping the accepted write's baseline.
+        const after = await store.read();
+        if (!after) {
+          return "retry";
+        }
+        const afterEntry = readConfigHealthEntry(after.state, baseline.configPath);
+        return afterEntry.lastKnownGood?.hash === current.hash &&
+          afterEntry.lastObservedSuspiciousSignature == null
+          ? "settled"
+          : "retry";
+      },
+    );
+    if (!settled) {
+      deps.logger.warn(
+        `Config last-known-good baseline advance did not settle: ${baseline.configPath}`,
       );
     }
     return compensation;
@@ -307,6 +388,9 @@ export async function advanceConfigHealthBaselineForAcceptedWrite(
  * baseline no longer matches the candidate this writer published (a candidate
  * recorded by an intervening observed read matches by raw hash and is still
  * restored). Best-effort: health metadata failures never fail the rollback.
+ * Absorbs ordinary observation supersession the same way as the accepted-write
+ * advance, so a superseded rollback compensation still lands while newer
+ * baselines stay preserved.
  */
 export async function restoreConfigHealthBaselineForRolledBackWrite(
   deps: NormalizedConfigIoDeps,
@@ -315,26 +399,43 @@ export async function restoreConfigHealthBaselineForRolledBackWrite(
   if (!compensation) {
     return;
   }
+  const record = compensation;
   try {
-    using store = captureConfigHealthStateStore(deps, compensation.configPath);
-    const healthSnapshot = await store.read();
-    if (!healthSnapshot) {
-      return;
-    }
-    const entry = readConfigHealthEntry(healthSnapshot.state, compensation.configPath);
-    if (entry.lastKnownGood?.hash !== compensation.candidate.hash) {
-      return;
-    }
-    await store.updateAfterFileCommit(
-      {
-        lastKnownGood: compensation.previousLastKnownGood,
-        // Only rewind the anomaly marker when nothing newer recorded one.
-        ...(entry.lastObservedSuspiciousSignature == null
-          ? { lastObservedSuspiciousSignature: compensation.previousSuspiciousSignature }
-          : {}),
+    const settled = await settleConfigHealthTransition(
+      deps,
+      record.configPath,
+      async (store, healthSnapshot) => {
+        const entry = readConfigHealthEntry(healthSnapshot.state, record.configPath);
+        // Newer observations win, and this also covers an already-restored
+        // baseline: only the candidate this writer published is compensable.
+        if (entry.lastKnownGood?.hash !== record.candidate.hash) {
+          return "settled";
+        }
+        await store.updateAfterFileCommit(
+          {
+            lastKnownGood: record.previousLastKnownGood,
+            // Only rewind the anomaly marker when nothing newer recorded one.
+            ...(entry.lastObservedSuspiciousSignature == null
+              ? { lastObservedSuspiciousSignature: record.previousSuspiciousSignature }
+              : {}),
+          },
+          healthSnapshot,
+        );
+        const after = await store.read();
+        if (!after) {
+          return "retry";
+        }
+        return readConfigHealthEntry(after.state, record.configPath).lastKnownGood?.hash ===
+          record.previousLastKnownGood.hash
+          ? "settled"
+          : "retry";
       },
-      healthSnapshot,
     );
+    if (!settled) {
+      deps.logger.warn(
+        `Config last-known-good baseline restore did not settle: ${record.configPath}`,
+      );
+    }
   } catch (error) {
     deps.logger.warn(
       `Config last-known-good baseline restore failed: ${formatErrorMessage(error)}`,
