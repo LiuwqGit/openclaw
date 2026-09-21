@@ -34,6 +34,7 @@ import {
 import { createConfigHealthFingerprint } from "./io.observe-state.js";
 import {
   advanceConfigHealthBaselineForAcceptedWrite,
+  captureConfigHealthBaselineForWrite,
   observeConfigSnapshot,
   observeConfigSnapshotSync,
   restoreConfigHealthBaselineForRolledBackWrite,
@@ -555,8 +556,8 @@ describe("config observe recovery promotion", () => {
         trustedProxies: Array.from({ length: 400 }, (_, index) => `192.0.2.${index}`),
       },
     });
-    const compensation = advanceConfigHealthBaselineForAcceptedWrite(deps, {
-      configPath,
+    const capture = await captureConfigHealthBaselineForWrite(deps, configPath);
+    const compensation = await advanceConfigHealthBaselineForAcceptedWrite(deps, capture, {
       raw: grown.raw,
       parsed: grown.parsed,
       resolved: grown.resolved,
@@ -580,7 +581,7 @@ describe("config observe recovery promotion", () => {
     const newerBaseline = readConfigHealthStateFromStore(deps).entries?.[configPath]?.lastKnownGood;
     expect(newerBaseline?.hash).not.toBe(compensation.candidate.hash);
 
-    restoreConfigHealthBaselineForRolledBackWrite(deps, compensation);
+    await restoreConfigHealthBaselineForRolledBackWrite(deps, compensation);
 
     const restoredEntry = readConfigHealthStateFromStore(deps).entries?.[configPath];
     expect(restoredEntry?.lastKnownGood?.hash).toBe(newerBaseline?.hash);
@@ -701,8 +702,8 @@ describe("config observe recovery promotion", () => {
         trustedProxies: Array.from({ length: 400 }, (_, index) => `192.0.2.${index}`),
       },
     });
-    const compensation = advanceConfigHealthBaselineForAcceptedWrite(deps, {
-      configPath,
+    const capture = await captureConfigHealthBaselineForWrite(deps, configPath);
+    const compensation = await advanceConfigHealthBaselineForAcceptedWrite(deps, capture, {
       raw: grown.raw,
       parsed: grown.parsed,
       resolved: grown.resolved,
@@ -710,7 +711,7 @@ describe("config observe recovery promotion", () => {
     expect(compensation?.previousLastKnownGood.hash).toBe(legacyFingerprint.hash);
 
     // The rolled-back-write restore rewinds to the pre-upgrade baseline.
-    restoreConfigHealthBaselineForRolledBackWrite(deps, compensation);
+    await restoreConfigHealthBaselineForRolledBackWrite(deps, compensation);
     expect(readConfigHealthStateFromStore(deps).entries?.[configPath]?.lastKnownGood?.hash).toBe(
       legacyFingerprint.hash,
     );
@@ -923,6 +924,120 @@ describe("last-known-good promotion after accepted writes", () => {
       expect(baselineAfter?.hash).toBe(baselineBefore?.hash);
       expect(baselineAfter?.bytes).toBe(Buffer.byteLength(originalRaw, "utf-8"));
 
+      const restoredSnapshot = await io.readConfigFileSnapshot();
+      await expect(io.promoteConfigSnapshotToLastKnownGood(restoredSnapshot)).resolves.toBe(true);
+      expect(fs.readFileSync(lastGoodPath, "utf8")).toBe(originalRaw);
+    });
+  });
+
+  it("restores the pre-write baseline when an intervening read records the published candidate", async () => {
+    const initialConfig = {
+      meta: { lastTouchedVersion: "2026.4.22" },
+      gateway: {
+        mode: "local" as const,
+        trustedProxies: Array.from({ length: 40 }, (_, index) => `192.0.2.${index}`),
+      },
+    };
+    await withTempHomeConfig(initialConfig, async ({ home, configPath }) => {
+      const lastGoodPath = `${configPath}.last-good`;
+      const originalRaw = await fsp.readFile(configPath, "utf-8");
+      const io = createConfigIO({ observe: false });
+      const healthDeps = normalizeConfigIoDeps({
+        env: io.env,
+        homedir: () => home,
+        logger: { warn: vi.fn(), error: vi.fn() },
+      });
+      const readLastKnownGood = () =>
+        readConfigHealthStateFromStore(healthDeps).entries?.[configPath]?.lastKnownGood;
+
+      const healthySnapshot = await io.readConfigFileSnapshot();
+      await expect(io.promoteConfigSnapshotToLastKnownGood(healthySnapshot)).resolves.toBe(true);
+      expect(fs.readFileSync(lastGoodPath, "utf8")).toBe(originalRaw);
+      const baselineBefore = readLastKnownGood();
+      expect(baselineBefore?.bytes).toBe(Buffer.byteLength(originalRaw, "utf-8"));
+
+      // Grow the config beyond twice its size, then fail runtime activation after
+      // the commit so the write rolls back to the original bytes.
+      const failure = new Error("synthetic overlay failure");
+      const grownConfig = {
+        ...initialConfig,
+        gateway: {
+          mode: "local" as const,
+          trustedProxies: Array.from({ length: 400 }, (_, index) => `192.0.2.${index}`),
+        },
+      };
+      expect(
+        Buffer.byteLength(`${JSON.stringify(grownConfig, null, 2)}\n`, "utf-8"),
+      ).toBeGreaterThan(Buffer.byteLength(originalRaw, "utf-8") * 2);
+
+      // An observed read lands between the file publication and the writer's
+      // baseline advance (the writer asserts path ownership right after the
+      // publication, before the awaited audit stat): the observer records the
+      // published candidate as healthy before the advance settles its capture.
+      let observedPublishedCandidate = false;
+      const observePublishedConfig = () => {
+        observedPublishedCandidate = true;
+        const raw = fs.readFileSync(configPath, "utf-8");
+        const parsed = JSON.parse(raw) as Record<string, unknown>;
+        observeConfigSnapshotSync(healthDeps, {
+          path: configPath,
+          exists: true,
+          raw,
+          parsed,
+          sourceConfig: parsed,
+          resolved: parsed,
+          runtimeConfig: parsed,
+          config: parsed,
+          valid: true,
+          issues: [],
+          warnings: [],
+          legacyIssues: [],
+        } satisfies ConfigFileSnapshot);
+      };
+      const unsubscribe = registerConfigWriteListener(vi.fn(), {
+        ownsRuntimeActivationFor: configPath,
+        preCommitRuntimePreflight: async (sourceConfig) => ({
+          runtimeConfig: sourceConfig,
+          compareConfig: sourceConfig,
+          reapplyRuntimeOverlays() {
+            throw failure;
+          },
+          reapplyCompareOverlays: (config) => config,
+        }),
+      });
+      try {
+        setRuntimeConfigSnapshot(initialConfig, initialConfig);
+        await expect(
+          writeConfigFile(grownConfig, {
+            assertConfigPathForWrite: () => {
+              if (
+                !observedPublishedCandidate &&
+                fs.readFileSync(configPath, "utf-8") !== originalRaw
+              ) {
+                observePublishedConfig();
+              }
+            },
+          }),
+        ).rejects.toMatchObject({
+          name: "ConfigWritePostCommitError",
+          rollbackStatus: "restored",
+          cause: failure,
+        });
+      } finally {
+        unsubscribe();
+        resetConfigRuntimeState();
+      }
+
+      // The intervening observation ran inside the post-publication window, but
+      // the compensation retained the pre-write baseline, so the rollback
+      // restores it instead of the candidate the observer recorded.
+      expect(observedPublishedCandidate).toBe(true);
+      await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(originalRaw);
+      const baselineAfter = readLastKnownGood();
+      expect(baselineAfter?.hash).toBe(baselineBefore?.hash);
+      expect(baselineAfter?.bytes).toBe(Buffer.byteLength(originalRaw, "utf-8"));
+
+      // The restored config is not a size drop against the restored baseline.
       const restoredSnapshot = await io.readConfigFileSnapshot();
       await expect(io.promoteConfigSnapshotToLastKnownGood(restoredSnapshot)).resolves.toBe(true);
       expect(fs.readFileSync(lastGoodPath, "utf8")).toBe(originalRaw);

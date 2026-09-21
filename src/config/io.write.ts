@@ -48,6 +48,7 @@ import { prepareCronOwnerWriteRefusal } from "./io.cron-owner-refusal.js";
 import { recordConfigWriteMetadata } from "./io.meta.js";
 import {
   advanceConfigHealthBaselineForAcceptedWrite,
+  captureConfigHealthBaselineForWrite,
   restoreConfigHealthBaselineForRolledBackWrite,
 } from "./io.observe.js";
 import {
@@ -59,7 +60,10 @@ import {
   restoreAuthoredTildePathsForWrite,
 } from "./io.read-helpers.js";
 import { hashConfigRevision } from "./io.snapshot.js";
-import { loggedConfigWarningFingerprints, setBoundedConfigIoWarningEntry } from "./io.state.js";
+import {
+  restoreLoggedConfigWarningFingerprint,
+  loggedConfigWarningFingerprints,
+} from "./io.state.js";
 import type {
   ConfigWriteInputBasis,
   ConfigWriteOptions,
@@ -499,6 +503,11 @@ export async function writeConfigFileFromContext(
       assertCurrent: guardedFs.assertCurrent,
     });
     await options.beforeCommit?.();
+    // Capture the pre-publication last-known-good baseline: an observed read
+    // between the publication and the baseline advance can record the published
+    // candidate as healthy, so the compensation must retain the pre-write
+    // baseline captured here instead of reading it after publication.
+    const healthBaselineCapture = await captureConfigHealthBaselineForWrite(deps, configPath);
     const result = withDeferredPluginMigrationsCurrent(
       { env: deps.env, expectedPending: deferredPluginMigrations },
       () => {
@@ -522,12 +531,15 @@ export async function writeConfigFileFromContext(
       undefined,
       await deps.fs.promises.stat(configPath).catch(() => null),
     );
-    const healthBaselineCompensation = advanceConfigHealthBaselineForAcceptedWrite(deps, {
-      configPath,
-      raw: json,
-      parsed: stampedOutputConfig,
-      resolved: sourceConfigForPreflight,
-    });
+    const healthBaselineCompensation = await advanceConfigHealthBaselineForAcceptedWrite(
+      deps,
+      healthBaselineCapture,
+      {
+        raw: json,
+        parsed: stampedOutputConfig,
+        resolved: sourceConfigForPreflight,
+      },
+    );
     options.assertConfigPathForWrite?.();
     if (
       configSnapshotAuditRecordMatchesPath(priorSnapshotAuditRecord, configPath) &&
@@ -603,16 +615,8 @@ export async function writeConfigFileFromContext(
             snapshot: priorSnapshotAuditRecord,
             expectedSnapshot: writtenSnapshotAuditRecord,
           });
-          if (previousWarningFingerprint === undefined) {
-            loggedConfigWarningFingerprints.delete(configPath);
-          } else {
-            setBoundedConfigIoWarningEntry(
-              loggedConfigWarningFingerprints,
-              configPath,
-              previousWarningFingerprint,
-            );
-          }
-          restoreConfigHealthBaselineForRolledBackWrite(deps, healthBaselineCompensation);
+          restoreLoggedConfigWarningFingerprint(configPath, previousWarningFingerprint);
+          return restoreConfigHealthBaselineForRolledBackWrite(deps, healthBaselineCompensation);
         },
       },
     };
