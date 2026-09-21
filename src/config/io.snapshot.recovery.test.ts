@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import JSON5 from "json5";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -30,6 +31,7 @@ import {
   promoteConfigSnapshotToLastKnownGoodCore,
   recoverConfigFromLastKnownGoodCore,
 } from "./io.observe-recovery.js";
+import { createConfigHealthFingerprint } from "./io.observe-state.js";
 import {
   advanceConfigHealthBaselineForAcceptedWrite,
   observeConfigSnapshot,
@@ -529,7 +531,8 @@ describe("config observe recovery promotion", () => {
   it("keeps a newer last-known-good observation when a rolled-back write restores its baseline", async () => {
     const home = tempDirs.make("openclaw-config-lgg-rollback-newer-");
     const warn = vi.fn();
-    const deps = normalizeConfigIoDeps({ env: {}, homedir: () => home, logger: { warn } });
+    const error = vi.fn();
+    const deps = normalizeConfigIoDeps({ env: {}, homedir: () => home, logger: { warn, error } });
     const configPath = path.join(home, ".openclaw", "openclaw.json");
     const healthyConfig = {
       meta: { lastTouchedVersion: "2026.4.22" },
@@ -615,6 +618,117 @@ describe("config observe recovery promotion", () => {
     await expect(fsp.readFile(resolveLastKnownGoodConfigPath(configPath), "utf-8")).resolves.toBe(
       edited.raw,
     );
+  });
+
+  it("keeps pre-upgrade health-state rows working without schema or shape drift", async () => {
+    const home = tempDirs.make("openclaw-config-lgg-compat-");
+    const configPath = path.join(home, ".openclaw", "openclaw.json");
+    const deps = normalizeConfigIoDeps({
+      env: {},
+      homedir: () => home,
+      logger: { warn: vi.fn(), error: vi.fn() },
+    });
+    const healthyConfig = {
+      meta: { lastTouchedVersion: "2026.4.22" },
+      update: { channel: "beta" },
+      gateway: {
+        mode: "local" as const,
+        trustedProxies: Array.from({ length: 60 }, (_, index) => `192.0.2.${index}`),
+      },
+    };
+    const healthy = await makeSnapshot(configPath, healthyConfig);
+
+    // Seed the row exactly as the pre-change build persisted it: the same
+    // columns (verified below) and the fingerprint shape the unchanged
+    // promotion path writes. This change adds no schema or fingerprint
+    // fields, so rows written by the previous version upgrade in place
+    // without a migration.
+    const legacyFingerprint = createConfigHealthFingerprint({
+      raw: healthy.raw,
+      parsed: healthy.parsed,
+      resolved: healthy.resolved,
+      stat: fs.statSync(configPath),
+    });
+    const legacyRow = JSON.stringify(legacyFingerprint);
+    const databasePath = openOpenClawStateDatabase({ env: { HOME: home, USERPROFILE: home } }).path;
+    closeOpenClawStateDatabaseForTest();
+    const seeder = new DatabaseSync(databasePath);
+    try {
+      seeder
+        .prepare(
+          `INSERT INTO config_health_entries
+             (config_path, last_known_good_json, last_promoted_good_json,
+              last_observed_suspicious_signature, updated_at_ms)
+           VALUES (?, ?, ?, NULL, ?)`,
+        )
+        .run(configPath, legacyRow, legacyRow, Date.now());
+      expect(
+        seeder
+          .prepare("PRAGMA table_info(config_health_entries)")
+          .all()
+          .map((row) => row.name),
+      ).toEqual([
+        "config_path",
+        "last_known_good_json",
+        "last_promoted_good_json",
+        "last_observed_suspicious_signature",
+        "updated_at_ms",
+      ]);
+    } finally {
+      seeder.close();
+    }
+
+    // The pre-upgrade baseline drives the new promotion guard: the matching
+    // healthy config still promotes, the truncation stub is still refused.
+    await expect(
+      promoteConfigSnapshotToLastKnownGoodCore({ deps, snapshot: healthy, logger: deps.logger }),
+    ).resolves.toBe(true);
+    const truncated = await makeSnapshot(configPath, { gateway: { mode: "local", port: 19187 } });
+    await expect(
+      promoteConfigSnapshotToLastKnownGoodCore({
+        deps,
+        snapshot: truncated,
+        logger: deps.logger,
+      }),
+    ).resolves.toBe(false);
+
+    // The accepted-write baseline advance reads the legacy row and overwrites
+    // it in place, publishing the legacy fingerprint as the compensation.
+    const grown = await makeSnapshot(configPath, {
+      ...healthyConfig,
+      gateway: {
+        mode: "local" as const,
+        trustedProxies: Array.from({ length: 400 }, (_, index) => `192.0.2.${index}`),
+      },
+    });
+    const compensation = advanceConfigHealthBaselineForAcceptedWrite(deps, {
+      configPath,
+      raw: grown.raw,
+      parsed: grown.parsed,
+      resolved: grown.resolved,
+    });
+    expect(compensation?.previousLastKnownGood.hash).toBe(legacyFingerprint.hash);
+
+    // The rolled-back-write restore rewinds to the pre-upgrade baseline.
+    restoreConfigHealthBaselineForRolledBackWrite(deps, compensation);
+    expect(readConfigHealthStateFromStore(deps).entries?.[configPath]?.lastKnownGood?.hash).toBe(
+      legacyFingerprint.hash,
+    );
+
+    // The persisted shape stays legacy-compatible: the fingerprint JSON keys
+    // match what the previous build wrote, so a downgraded build decodes the
+    // row unchanged (the read contract is permissive and shared).
+    const persistedRow = new DatabaseSync(databasePath);
+    try {
+      const row = persistedRow
+        .prepare("SELECT last_known_good_json FROM config_health_entries WHERE config_path = ?")
+        .get(configPath) as { last_known_good_json: string };
+      expect(Object.keys(JSON.parse(row.last_known_good_json)).toSorted()).toEqual(
+        Object.keys(legacyFingerprint).toSorted(),
+      );
+    } finally {
+      persistedRow.close();
+    }
   });
 });
 
