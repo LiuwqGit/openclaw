@@ -83,6 +83,40 @@ describe("resolveSessionNavigation", () => {
     ]);
   });
 
+  it("hides isolated heartbeat lanes unless showSystem opts in", () => {
+    // The Gateway records the persisted heartbeat marker as a classification;
+    // unnamed heartbeat lanes must not masquerade as ordinary conversations.
+    const heartbeatLane: GatewaySessionRow = {
+      key: "agent:main:main:heartbeat",
+      kind: "direct",
+      updatedAt: 200,
+      classification: "heartbeat",
+      createdVia: "cron",
+    };
+    const rows: GatewaySessionRow[] = [
+      { key: "agent:main:chat", kind: "direct", updatedAt: 300 },
+      heartbeatLane,
+    ];
+
+    const hidden = resolveSessionNavigation({
+      result: sessionsResult(rows),
+      resultAgentId: "main",
+      sessionKey: "agent:main:chat",
+    });
+    expect(hidden.visibleSessions.map((row) => row.key)).toEqual(["agent:main:chat"]);
+
+    const shown = resolveSessionNavigation({
+      result: sessionsResult(rows),
+      resultAgentId: "main",
+      sessionKey: "agent:main:chat",
+      showSystem: true,
+    });
+    expect(shown.visibleSessions.map((row) => row.key)).toEqual([
+      "agent:main:chat",
+      "agent:main:main:heartbeat",
+    ]);
+  });
+
   it("hides system-created probe sessions unless showSystem opts in", () => {
     const rows: GatewaySessionRow[] = [
       { key: "agent:main:chat", kind: "direct", updatedAt: 300 },
@@ -421,6 +455,16 @@ describe("isSystemCreatedSessionRow", () => {
     ["run + no actor + unnamed is system", { createdVia: "run" }, true],
     ["internal + no actor + unnamed is system", { createdVia: "internal" }, true],
     ["system actor is system regardless of via", { createdActor: { type: "system" } }, true],
+    [
+      "heartbeat classification without a user name is system",
+      { classification: "heartbeat" },
+      true,
+    ],
+    [
+      "heartbeat classification with a user label stays visible",
+      { classification: "heartbeat", label: "Background watch" },
+      false,
+    ],
     [
       "run + human actor stays visible",
       { createdVia: "run", createdActor: { type: "human" } },
