@@ -421,9 +421,9 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
         // upload proof below can show which upload route Playwright took.
         const relaySentCommands: string[] = [];
         const relayBridge = relay.bridge;
-        const originalAttachCdpClientSocket = relayBridge.attachCdpClientSocket;
+        const originalAttachCdpClientSocket = relayBridge.attachCdpClientSocket.bind(relayBridge);
         relayBridge.attachCdpClientSocket = (socket) => {
-          const handlers = originalAttachCdpClientSocket.call(relayBridge, socket);
+          const handlers = originalAttachCdpClientSocket(socket);
           return {
             onMessage: (raw) => {
               relaySentCommands.push(raw);
@@ -505,6 +505,7 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
         await fs.mkdir(DEFAULT_UPLOAD_DIR, { recursive: true });
         const uploadProofContents = `extension payload proof ${Date.now()}`;
         await fs.writeFile(uploadProofFile, uploadProofContents);
+        cleanups.push(async () => await fs.rm(uploadProofFile, { force: true }));
         const uploadProofPage = await context.newPage();
         await uploadProofPage.goto(`http://127.0.0.1:${gatewayPort}/browser-owner-proof`);
         await uploadProofPage.evaluate(() => {
@@ -576,6 +577,7 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
             `extension-large-upload-proof-${Date.now()}.bin`,
           );
           await fs.writeFile(largeUploadFile, Buffer.alloc(largeUploadSize, 7));
+          cleanups.push(async () => await fs.rm(largeUploadFile, { force: true }));
           const relayCommandsBeforeLargeUpload = relaySentCommands.length;
           const largeUploadResponse = await dispatcher.dispatch({
             method: "POST",
