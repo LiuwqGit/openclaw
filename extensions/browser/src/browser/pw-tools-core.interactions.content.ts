@@ -9,6 +9,7 @@ import { ACT_MAX_WAIT_TIME_MS, resolveActWaitTimeoutMs } from "./act-policy.js";
 import {
   DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS,
   DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS,
+  EXTENSION_RELAY_MAX_PAYLOAD_BYTES,
 } from "./constants.js";
 import { normalizeBrowserEvaluateFunctionSource } from "./evaluate-source.js";
 import { resolveStrictExistingUploadPaths } from "./paths.js";
@@ -46,6 +47,17 @@ import {
 
 const DEFAULT_UPLOAD_MIME_TYPE = "application/octet-stream";
 const PLAYWRIGHT_FILE_PAYLOAD_SIZE_LIMIT_BYTES = 50 * 1024 * 1024;
+/**
+ * Aggregate upload size below which the byte-payload branch is known to fit a
+ * single extension-relay WebSocket message. Playwright delivers file payloads to
+ * CDP-attached browsers as base64 inside an evaluate command, so the relay-safe
+ * bound is three quarters of the relay's message cap, minus headroom for JSON
+ * framing. Extension uploads at or above this bound take the local path handoff
+ * so a file that the relay could not carry as bytes still uploads for extensions
+ * with local file access.
+ */
+export const PLAYWRIGHT_RELAY_SAFE_PAYLOAD_SIZE_BYTES =
+  Math.floor((EXTENSION_RELAY_MAX_PAYLOAD_BYTES * 3) / 4) - 1024 * 1024;
 
 type PlaywrightFilePayload = {
   name: string;
@@ -95,12 +107,13 @@ async function resolvePlaywrightUploadFiles(opts: GuardedInteractionOptions & { 
         if (
           opts.uploadPathsFallbackOnPayloadLimit === true &&
           (await measureExistingUploadPathsSize(resolved.paths)) >=
-            PLAYWRIGHT_FILE_PAYLOAD_SIZE_LIMIT_BYTES
+            PLAYWRIGHT_RELAY_SAFE_PAYLOAD_SIZE_BYTES
         ) {
-          // Extension-backed browsers run on this machine, so a file that reaches the
-          // byte-payload cap keeps the pre-extension-payload path handoff. Extensions
-          // with local file access still accept it; Store installs fail exactly as they
-          // did before extension profiles moved to payloads.
+          // Extension-backed browsers run on this machine, so a file that cannot
+          // safely cross the relay as base64 bytes keeps the pre-extension-payload
+          // path handoff. Extensions with local file access still accept it; Store
+          // installs fail exactly as they did before extension profiles moved to
+          // payloads.
           return resolved.paths;
         }
         return await toPlaywrightFilePayloads(resolved.paths);

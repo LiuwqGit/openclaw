@@ -11,6 +11,7 @@ export {
   typeViaPlaywright,
 } from "./pw-tools-core.interactions.actions.js";
 export {
+  PLAYWRIGHT_RELAY_SAFE_PAYLOAD_SIZE_BYTES,
   screenshotWithLabelsViaPlaywright,
   setFileChooserFilesViaPlaywright,
   setInputFilesViaPlaywright,

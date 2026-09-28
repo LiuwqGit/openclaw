@@ -25,8 +25,9 @@ export type InteractionTargetOptions = {
   /**
    * Extension-backed uploads take the byte-payload branch because Store-installed
    * extensions cannot read gateway-local paths, but the user's browser still runs
-   * on this machine. At or above the payload size cap, keep the local path handoff
-   * that file-access extensions accept instead of rejecting the upload.
+   * on this machine. At or above the relay-safe payload bound (files whose base64
+   * form would not fit a single extension-relay WebSocket message), keep the local
+   * path handoff that file-access extensions accept instead of rejecting the upload.
    */
   uploadPathsFallbackOnPayloadLimit?: boolean;
   targetId?: string;
