@@ -11,9 +11,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright-core";
 import { expect } from "vitest";
+import { EXTENSION_RELAY_MAX_PAYLOAD_BYTES } from "../src/browser/constants.js";
 import type { ExtensionRelayBridge } from "../src/browser/extension-relay/relay-bridge.js";
 import { DEFAULT_UPLOAD_DIR } from "../src/browser/paths.js";
-import { PLAYWRIGHT_RELAY_SAFE_PAYLOAD_SIZE_BYTES } from "../src/browser/pw-tools-core.interactions.js";
 import type { createBrowserRouteDispatcher } from "../src/browser/routes/dispatcher.js";
 
 type ProofParams = {
@@ -136,7 +136,10 @@ export async function proveExtensionUploadRoutes(params: ProofParams): Promise<v
     // A file near 48 MiB becomes ~64 MiB once base64 encoded, which the relay's
     // 64 MiB WebSocket message cap rejects, so byte payloads stop being
     // relay-safe before Playwright's own 50 MiB payload cap. Exercise both sides.
-    const relaySafeBound = PLAYWRIGHT_RELAY_SAFE_PAYLOAD_SIZE_BYTES;
+    // Must stay in sync with the module-private bound in
+    // pw-tools-core.interactions.content.ts: three quarters of the relay
+    // message cap, minus JSON-framing headroom.
+    const relaySafeBound = Math.floor((EXTENSION_RELAY_MAX_PAYLOAD_BYTES * 3) / 4) - 1024 * 1024;
     // Below the bound: bytes cross the relay (no DOM.setFileInputFiles) and land.
     const payloadSideSize = relaySafeBound - 1024 * 1024;
     const payloadSideFile = path.join(

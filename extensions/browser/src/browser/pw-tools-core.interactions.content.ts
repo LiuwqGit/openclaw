@@ -56,7 +56,7 @@ const PLAYWRIGHT_FILE_PAYLOAD_SIZE_LIMIT_BYTES = 50 * 1024 * 1024;
  * so a file that the relay could not carry as bytes still uploads for extensions
  * with local file access.
  */
-export const PLAYWRIGHT_RELAY_SAFE_PAYLOAD_SIZE_BYTES =
+const PLAYWRIGHT_RELAY_SAFE_PAYLOAD_SIZE_BYTES =
   Math.floor((EXTENSION_RELAY_MAX_PAYLOAD_BYTES * 3) / 4) - 1024 * 1024;
 
 type PlaywrightFilePayload = {

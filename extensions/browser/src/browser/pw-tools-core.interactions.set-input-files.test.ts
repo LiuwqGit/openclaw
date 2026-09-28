@@ -81,11 +81,13 @@ vi.mock("openclaw/plugin-sdk/media-mime", () => ({
   detectMime,
 }));
 
-const {
-  PLAYWRIGHT_RELAY_SAFE_PAYLOAD_SIZE_BYTES,
-  setFileChooserFilesViaPlaywright,
-  setInputFilesViaPlaywright,
-} = await import("./pw-tools-core.interactions.js");
+const { setFileChooserFilesViaPlaywright, setInputFilesViaPlaywright } =
+  await import("./pw-tools-core.interactions.js");
+// Must stay in sync with the module-private bound in
+// pw-tools-core.interactions.content.ts: three quarters of the relay
+// message cap, minus JSON-framing headroom.
+const PLAYWRIGHT_RELAY_SAFE_PAYLOAD_SIZE_BYTES =
+  Math.floor((64 * 1024 * 1024 * 3) / 4) - 1024 * 1024;
 
 function seedSingleLocatorPage(): {
   setInputFiles: ReturnType<typeof vi.fn>;
