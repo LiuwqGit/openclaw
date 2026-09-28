@@ -210,11 +210,14 @@ describe("agent act hook current URL guard", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    const target = pwMocks.uploadViaPlaywright.mock.calls[0]?.[0] as
-      | { browserFilesystemLocal?: boolean; uploadPathsFallbackOnPayloadLimit?: boolean }
-      | undefined;
-    expect(target?.browserFilesystemLocal).toBe(false);
-    expect(target?.uploadPathsFallbackOnPayloadLimit).toBe(false);
+    expect(pwMocks.uploadViaPlaywright).toHaveBeenCalledWith(
+      expect.objectContaining({
+        browserFilesystemLocal: false,
+        uploadPathsFallbackOnPayloadLimit: false,
+        ref: "upload-button",
+        paths: ["/tmp/upload.txt"],
+      }),
+    );
   });
 
   it.each([
