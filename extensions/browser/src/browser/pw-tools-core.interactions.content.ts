@@ -75,6 +75,11 @@ async function toPlaywrightFilePayloads(paths: string[]): Promise<PlaywrightFile
   );
 }
 
+async function measureExistingUploadPathsSize(paths: string[]): Promise<number> {
+  const stats = await Promise.all(paths.map(async (filePath) => await fs.stat(filePath)));
+  return stats.reduce((size, stat) => size + stat.size, 0);
+}
+
 async function resolvePlaywrightUploadFiles(opts: GuardedInteractionOptions & { paths: string[] }) {
   const { abortPromise, cleanup } = createAbortPromiseWithListener(opts.signal);
   try {
@@ -84,9 +89,21 @@ async function resolvePlaywrightUploadFiles(opts: GuardedInteractionOptions & { 
         if (!resolved.ok) {
           throw new Error(resolved.error);
         }
-        return opts.ssrfPolicy && opts.browserFilesystemLocal !== true
-          ? await toPlaywrightFilePayloads(resolved.paths)
-          : resolved.paths;
+        if (!(opts.ssrfPolicy && opts.browserFilesystemLocal !== true)) {
+          return resolved.paths;
+        }
+        if (
+          opts.uploadPathsFallbackOnPayloadLimit === true &&
+          (await measureExistingUploadPathsSize(resolved.paths)) >=
+            PLAYWRIGHT_FILE_PAYLOAD_SIZE_LIMIT_BYTES
+        ) {
+          // Extension-backed browsers run on this machine, so a file that reaches the
+          // byte-payload cap keeps the pre-extension-payload path handoff. Extensions
+          // with local file access still accept it; Store installs fail exactly as they
+          // did before extension profiles moved to payloads.
+          return resolved.paths;
+        }
+        return await toPlaywrightFilePayloads(resolved.paths);
       })(),
       abortPromise,
     );

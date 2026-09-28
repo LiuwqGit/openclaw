@@ -22,6 +22,13 @@ import { toAIFriendlyError } from "./pw-tools-core.shared.js";
 export type InteractionTargetOptions = {
   cdpUrl: string;
   browserFilesystemLocal?: boolean;
+  /**
+   * Extension-backed uploads take the byte-payload branch because Store-installed
+   * extensions cannot read gateway-local paths, but the user's browser still runs
+   * on this machine. At or above the payload size cap, keep the local path handoff
+   * that file-access extensions accept instead of rejecting the upload.
+   */
+  uploadPathsFallbackOnPayloadLimit?: boolean;
   targetId?: string;
   assertCurrent?: () => void | Promise<void>;
 };

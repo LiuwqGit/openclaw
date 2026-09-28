@@ -312,6 +312,70 @@ describe("setInputFilesViaPlaywright", () => {
     expect(assertPageNavigationCompletedSafely).toHaveBeenCalledTimes(1);
   });
 
+  it("falls back to a path handoff for extension uploads at the payload cap", async () => {
+    stat.mockResolvedValueOnce({ size: 50 * 1024 * 1024, mtimeMs: 1700000000000 });
+    resolveStrictExistingUploadPaths.mockResolvedValueOnce({
+      ok: true,
+      paths: ["/private/tmp/openclaw/uploads/large.bin"],
+    });
+    const { setInputFiles } = seedSingleLocatorPage();
+
+    await setInputFilesViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      browserFilesystemLocal: false,
+      uploadPathsFallbackOnPayloadLimit: true,
+      targetId: "T1",
+      inputRef: "e7",
+      paths: ["/tmp/openclaw/uploads/large.bin"],
+      ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
+    });
+
+    expect(readFile).not.toHaveBeenCalled();
+    expect(setInputFiles).toHaveBeenCalledWith(["/private/tmp/openclaw/uploads/large.bin"], {
+      timeout: DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS,
+      signal: expect.any(AbortSignal),
+    });
+  });
+
+  it("rejects extension uploads below the cap even with the fallback enabled", async () => {
+    const { setInputFiles } = seedSingleLocatorPage();
+
+    await setInputFilesViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      browserFilesystemLocal: false,
+      uploadPathsFallbackOnPayloadLimit: true,
+      targetId: "T1",
+      inputRef: "e7",
+      paths: ["/tmp/openclaw/uploads/ok.txt"],
+      ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
+    });
+
+    expect(stat).toHaveBeenCalledWith("/private/tmp/openclaw/uploads/ok.txt");
+    expect(setInputFiles).toHaveBeenCalledWith([uploadPayload], {
+      timeout: DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS,
+      signal: expect.any(AbortSignal),
+    });
+  });
+
+  it("keeps rejecting capped uploads without the extension fallback", async () => {
+    stat.mockResolvedValueOnce({ size: 50 * 1024 * 1024, mtimeMs: 1700000000000 });
+    const { setInputFiles } = seedSingleLocatorPage();
+
+    await expect(
+      setInputFilesViaPlaywright({
+        cdpUrl: "https://browser.example/cdp",
+        browserFilesystemLocal: false,
+        targetId: "T1",
+        inputRef: "e7",
+        paths: ["/tmp/openclaw/uploads/too-large.bin"],
+        ssrfPolicy: {},
+      }),
+    ).rejects.toThrow("Cannot set buffer larger than 50Mb");
+
+    expect(readFile).not.toHaveBeenCalled();
+    expect(setInputFiles).not.toHaveBeenCalled();
+  });
+
   it("converts guarded loopback uploads to payloads when the browser filesystem is remote", async () => {
     const { setInputFiles, elementHandle } = seedSingleLocatorPage();
 

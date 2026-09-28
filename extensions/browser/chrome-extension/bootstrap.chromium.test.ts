@@ -17,6 +17,7 @@ import {
 import { installChromeExtensionBootstrap } from "../src/browser/extension-install.js";
 import { useNativeHostLaunchFixture } from "../src/browser/extension-install.test-support.js";
 import { handleGatewayExtensionUpgrade } from "../src/browser/extension-relay/gateway-relay-route.js";
+import { DEFAULT_UPLOAD_DIR } from "../src/browser/paths.js";
 import { getPageForTargetId } from "../src/browser/pw-session.js";
 import { createBrowserRouteDispatcher } from "../src/browser/routes/dispatcher.js";
 import { createBrowserRouteContext } from "../src/browser/server-context.js";
@@ -416,6 +417,21 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
           throw new Error("Gateway wakeup did not start the configured extension relay");
         }
         diagnostic.watchRelay(relay.bridge);
+        // Record every CDP command clients send across the relay, so the extension
+        // upload proof below can show which upload route Playwright took.
+        const relaySentCommands: string[] = [];
+        const relayBridge = relay.bridge;
+        const originalAttachCdpClientSocket = relayBridge.attachCdpClientSocket;
+        relayBridge.attachCdpClientSocket = (socket) => {
+          const handlers = originalAttachCdpClientSocket.call(relayBridge, socket);
+          return {
+            onMessage: (raw) => {
+              relaySentCommands.push(raw);
+              handlers.onMessage(raw);
+            },
+            onClose: handlers.onClose,
+          };
+        };
         const browserState = getBrowserControlState();
         const extensionProfile = browserState?.resolved.profiles.e2e;
         if (!browserState || !extensionProfile) {
@@ -478,6 +494,117 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
         process.stderr.write(
           `[browser-extension-e2e] doctor version match ${chromeExtensionManifest.version}\n`,
         );
+        // Real extension-profile upload proof: the extension profile hands uploads to
+        // Playwright as byte payloads (Chrome Web Store installs cannot read
+        // gateway-local paths), so the file reaches the input without any
+        // DOM.setFileInputFiles path handoff crossing the relay.
+        const uploadProofFile = path.join(
+          DEFAULT_UPLOAD_DIR,
+          `extension-upload-proof-${Date.now()}.txt`,
+        );
+        await fs.mkdir(DEFAULT_UPLOAD_DIR, { recursive: true });
+        const uploadProofContents = `extension payload proof ${Date.now()}`;
+        await fs.writeFile(uploadProofFile, uploadProofContents);
+        const uploadProofPage = await context.newPage();
+        await uploadProofPage.goto(`http://127.0.0.1:${gatewayPort}/browser-owner-proof`);
+        await uploadProofPage.evaluate(() => {
+          const input = document.createElement("input");
+          input.type = "file";
+          input.id = "upload";
+          document.body.append(input);
+        });
+        const uploadProofSsrfPolicy = browserState.resolved.ssrfPolicy;
+        browserState.resolved.ssrfPolicy = { dangerouslyAllowPrivateNetwork: true };
+        try {
+          // Playwright reports the page before the extension's tab index lists it
+          // (the same race assertRelayTabCreation accommodates), so poll for the tab.
+          let uploadTargetId: string | undefined;
+          await expect
+            .poll(
+              async () => {
+                const uploadTabsResponse = await dispatcher.dispatch({
+                  method: "GET",
+                  path: "/tabs",
+                  query: { profile: "e2e" },
+                });
+                if (uploadTabsResponse.status !== 200) {
+                  return false;
+                }
+                uploadTargetId = (
+                  uploadTabsResponse.body as {
+                    tabs?: Array<{ targetId?: string; url?: string }>;
+                  }
+                ).tabs?.find((tab) => tab.url === uploadProofPage.url())?.targetId;
+                return uploadTargetId !== undefined;
+              },
+              { timeout: 15_000 },
+            )
+            .toBe(true);
+          if (!uploadTargetId) {
+            throw new Error("Extension upload proof tab never appeared in /tabs");
+          }
+          const uploadResponse = await dispatcher.dispatch({
+            method: "POST",
+            path: "/hooks/file-chooser",
+            query: { profile: "e2e" },
+            body: { targetId: uploadTargetId, element: "#upload", paths: [uploadProofFile] },
+          });
+          expect(uploadResponse.status, JSON.stringify(uploadResponse.body)).toBe(200);
+          const uploadedFile = await uploadProofPage
+            .locator("#upload")
+            .evaluate((input: HTMLInputElement) =>
+              input.files?.[0] ? { name: input.files[0].name, size: input.files[0].size } : null,
+            );
+          expect(uploadedFile).toEqual({
+            name: path.basename(uploadProofFile),
+            size: Buffer.byteLength(uploadProofContents),
+          });
+          expect(
+            relaySentCommands.some((command) => command.includes("DOM.setFileInputFiles")),
+            "extension upload must not relay a local path to DOM.setFileInputFiles",
+          ).toBe(false);
+          process.stderr.write(
+            "[browser-extension-e2e] extension upload proof passed: payload branch, no DOM.setFileInputFiles relayed\n",
+          );
+          // Oversized extension uploads keep the path handoff (the byte-payload
+          // branch rejects aggregate sizes at its cap), so file-access extensions
+          // retain the large uploads they had before extension profiles moved to
+          // payloads — observable here as the path command crossing the relay.
+          const largeUploadSize = 50 * 1024 * 1024 + 64 * 1024;
+          const largeUploadFile = path.join(
+            DEFAULT_UPLOAD_DIR,
+            `extension-large-upload-proof-${Date.now()}.bin`,
+          );
+          await fs.writeFile(largeUploadFile, Buffer.alloc(largeUploadSize, 7));
+          const relayCommandsBeforeLargeUpload = relaySentCommands.length;
+          const largeUploadResponse = await dispatcher.dispatch({
+            method: "POST",
+            path: "/hooks/file-chooser",
+            query: { profile: "e2e" },
+            body: { targetId: uploadTargetId, element: "#upload", paths: [largeUploadFile] },
+          });
+          expect(largeUploadResponse.status, JSON.stringify(largeUploadResponse.body)).toBe(200);
+          const largeUploadedFile = await uploadProofPage
+            .locator("#upload")
+            .evaluate((input: HTMLInputElement) =>
+              input.files?.[0] ? { name: input.files[0].name, size: input.files[0].size } : null,
+            );
+          expect(largeUploadedFile).toEqual({
+            name: path.basename(largeUploadFile),
+            size: largeUploadSize,
+          });
+          expect(
+            relaySentCommands
+              .slice(relayCommandsBeforeLargeUpload)
+              .some((command) => command.includes("DOM.setFileInputFiles")),
+            "oversized extension upload should fall back to the local path handoff",
+          ).toBe(true);
+          process.stderr.write(
+            "[browser-extension-e2e] oversized extension upload proof passed: path handoff preserved\n",
+          );
+        } finally {
+          browserState.resolved.ssrfPolicy = uploadProofSsrfPolicy;
+        }
         const tabsResponse = await dispatcher.dispatch({
           method: "GET",
           path: "/tabs",
