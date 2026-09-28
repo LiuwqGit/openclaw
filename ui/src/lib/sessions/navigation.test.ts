@@ -84,8 +84,7 @@ describe("resolveSessionNavigation", () => {
   });
 
   it("hides isolated heartbeat lanes unless showSystem opts in", () => {
-    // The Gateway records the persisted heartbeat marker as a classification;
-    // unnamed heartbeat lanes must not masquerade as ordinary conversations.
+    // Classification comes from persisted provenance, not a matching key suffix.
     const heartbeatLane: GatewaySessionRow = {
       key: "agent:main:main:heartbeat",
       kind: "direct",
@@ -95,6 +94,12 @@ describe("resolveSessionNavigation", () => {
     };
     const rows: GatewaySessionRow[] = [
       { key: "agent:main:chat", kind: "direct", updatedAt: 300 },
+      {
+        key: "agent:main:alerts:heartbeat",
+        kind: "direct",
+        label: "My heartbeat monitor",
+        updatedAt: 250,
+      },
       heartbeatLane,
     ];
 
@@ -103,7 +108,10 @@ describe("resolveSessionNavigation", () => {
       resultAgentId: "main",
       sessionKey: "agent:main:chat",
     });
-    expect(hidden.visibleSessions.map((row) => row.key)).toEqual(["agent:main:chat"]);
+    expect(hidden.visibleSessions.map((row) => row.key)).toEqual([
+      "agent:main:chat",
+      "agent:main:alerts:heartbeat",
+    ]);
 
     const shown = resolveSessionNavigation({
       result: sessionsResult(rows),
@@ -113,8 +121,17 @@ describe("resolveSessionNavigation", () => {
     });
     expect(shown.visibleSessions.map((row) => row.key)).toEqual([
       "agent:main:chat",
+      "agent:main:alerts:heartbeat",
       "agent:main:main:heartbeat",
     ]);
+
+    const direct = resolveSessionNavigation({
+      result: sessionsResult(rows),
+      resultAgentId: "main",
+      sessionKey: heartbeatLane.key,
+    });
+    expect(direct.currentSessionKey).toBe(heartbeatLane.key);
+    expect(direct.visibleSessions.map((row) => row.key)).toContain(heartbeatLane.key);
   });
 
   it("hides system-created probe sessions unless showSystem opts in", () => {
