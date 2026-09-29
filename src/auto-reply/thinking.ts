@@ -150,6 +150,7 @@ function resolveThinkingPolicyContext(params: ThinkingProfileParams) {
     baseUrl: candidate?.baseUrl,
     reasoning: params.configuredReasoning ?? candidate?.configuredReasoning ?? candidate?.reasoning,
     thinkingLevelMap: candidate?.thinkingLevelMap,
+    ...(candidate?.catalogReasoningEfforts ? { catalogReasoningEfforts: true } : {}),
     ...(candidate?.params ? { params: candidate.params } : {}),
     compat: candidate?.compat,
   };
@@ -263,6 +264,7 @@ function resolveModelThinkingProfile(params: ThinkingProfileParams): ResolvedThi
     baseUrl: context.baseUrl,
     reasoning: context.reasoning,
     thinkingLevelMap: context.thinkingLevelMap,
+    ...(context.catalogReasoningEfforts ? { catalogReasoningEfforts: true } : {}),
     ...(context.params ? { params: context.params } : {}),
     compat: context.compat,
   };
