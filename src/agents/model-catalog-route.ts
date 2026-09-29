@@ -134,7 +134,16 @@ function applyLogicalOverrides(
   entry: ModelCatalogEntry,
   overrides: ModelCatalogLogicalOverrides | undefined,
 ): ModelCatalogEntry {
-  return overrides ? { ...entry, ...overrides } : entry;
+  if (!overrides) {
+    return entry;
+  }
+  // An authored thinking map owns the row's effort metadata: drop catalog
+  // provenance so a runtime capability refresh cannot replace it (#160758).
+  if (overrides.thinkingLevelMap !== undefined) {
+    const { catalogReasoningEfforts: _catalogReasoningEfforts, ...authored } = entry;
+    return { ...authored, ...overrides };
+  }
+  return { ...entry, ...overrides };
 }
 
 /** Finds the exact physical row that supplied a selected provider route. */
