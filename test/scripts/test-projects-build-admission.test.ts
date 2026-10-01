@@ -918,6 +918,160 @@ describe("automatic exact-target admission", () => {
   );
 });
 
+describe("automatic changed-selection admission", () => {
+  const outputArgs = ["--reporter=dot", "--coverage.enabled=false"];
+  const changedArgs = ["--changed", "origin/main"];
+  // A docs-only change keeps the fixed PR smoke scope without owner-area fan-out.
+  const docsChangedPaths = ["docs/help/testing.md"];
+  const typeOnlyImportChangedPaths = ["src/plugins/runtime/types.ts"];
+
+  beforeEach(async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    vi.stubEnv("CI", "1");
+    vi.stubEnv("GITHUB_ACTIONS", "");
+    vi.stubEnv("OPENCLAW_TEST_CHANGED_BROAD", "");
+    vi.stubEnv("OPENCLAW_TEST_PROJECTS_PARALLEL", "");
+    vi.stubEnv("OPENCLAW_TEST_PROJECTS_SERIAL", "");
+    vi.stubEnv("OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT", "");
+    vi.stubEnv("OPENCLAW_VITEST_FS_MODULE_CACHE_PATH", "");
+    vi.stubEnv("OPENCLAW_VITEST_MAX_WORKERS", "2");
+    vi.spyOn(os, "availableParallelism").mockReturnValue(8);
+    vi.spyOn(os, "totalmem").mockReturnValue(24 * 1024 ** 3);
+    commands.prepare.mockResolvedValue(0);
+  });
+
+  it("keeps established semantics outside the native non-watch changed route", async () => {
+    const { resolveNativeChangedTestSelection } =
+      await import("../../scripts/test-projects-run.mts");
+    const ciPlan = await import("../../scripts/lib/ci-changed-node-test-plan.mts");
+    const listChangedPaths = vi.fn(() => [...typeOnlyImportChangedPaths]);
+    const native = { targetArgs: [], watchMode: false };
+    // Watch mode, explicit selectors, broad requests, and runs without --changed keep the
+    // planner route.
+    expect(
+      resolveNativeChangedTestSelection(
+        changedArgs,
+        { ...native, watchMode: true },
+        {},
+        undefined,
+        listChangedPaths,
+      ),
+    ).toBeNull();
+    expect(
+      resolveNativeChangedTestSelection(
+        [...changedArgs, "src/utils.test.ts"],
+        { ...native, targetArgs: ["src/utils.test.ts"] },
+        {},
+        undefined,
+        listChangedPaths,
+      ),
+    ).toBeNull();
+    expect(
+      resolveNativeChangedTestSelection(
+        changedArgs,
+        native,
+        { OPENCLAW_TEST_CHANGED_BROAD: "1" },
+        undefined,
+        listChangedPaths,
+      ),
+    ).toBeNull();
+    expect(
+      resolveNativeChangedTestSelection([], native, {}, undefined, listChangedPaths),
+    ).toBeNull();
+    expect(listChangedPaths).not.toHaveBeenCalled();
+    // A native non-watch changed run reuses the maintained CI affected-test owner.
+    expect(
+      resolveNativeChangedTestSelection(changedArgs, native, {}, process.cwd(), listChangedPaths),
+    ).toEqual(
+      ciPlan.resolveChangedNodeTestTargets(typeOnlyImportChangedPaths, { cwd: process.cwd() }),
+    );
+    expect(listChangedPaths).toHaveBeenCalledWith("origin/main", process.cwd());
+  });
+
+  it("runs native changed selections through the CI owner with automatic overlap", async () => {
+    const planner = await import("../../scripts/test-projects.test-support.mts");
+    const runtimeSelection = await import("../../scripts/lib/vitest-runtime-selection.mts");
+    // Worker artifact compilation has dedicated suites; scheduling admission needs the plans only.
+    vi.spyOn(runtimeSelection, "shouldPrepareVitestCoreWorkers").mockReturnValue(false);
+    const ciPlan = await import("../../scripts/lib/ci-changed-node-test-plan.mts");
+    const expectedSelection = ciPlan.resolveChangedNodeTestTargets(docsChangedPaths, {
+      cwd: process.cwd(),
+    });
+    expect(expectedSelection.length).toBeGreaterThan(1);
+    vi.spyOn(planner, "listChangedPathsFromGit").mockReturnValue([...docsChangedPaths]);
+    const produced = vi.spyOn(planner, "createVitestRunSpecs");
+    const { runTestProjects } = await import("../../scripts/test-projects-run.mts");
+    let active = 0;
+    let peak = 0;
+    commands.reader.mockImplementation(({ env, pnpmArgs }) => {
+      expect(env.OPENCLAW_VITEST_INCLUDE_FILE ?? null).not.toBe(null);
+      void pnpmArgs;
+      active += 1;
+      peak = Math.max(peak, active);
+      return {
+        completion: nextTurn().then(() => {
+          active -= 1;
+          return { code: 0, signal: null, groupJoined: true };
+        }),
+        getForwardedSignal: () => undefined,
+      };
+    });
+    await runTestProjects(async () => {}, [...changedArgs, ...outputArgs]);
+    // The concrete CI-owner selection becomes the run's exact-target arguments.
+    expect(produced.mock.calls[0]![0]).toEqual([...expectedSelection, ...outputArgs]);
+    const specs = produced.mock.results[0]!.value as ReturnType<
+      typeof planner.createVitestRunSpecs
+    >;
+    expect(specs.length).toBeGreaterThan(1);
+    expect(specs.every((spec) => spec.includePatterns !== null)).toBe(true);
+    expect(peak).toBe(2);
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringMatching(/^\[test\] running \d+ exact-target plans with parallelism 2/u),
+    );
+    expect(process.exitCode).toBe(0);
+  });
+
+  it("keeps the explicit serial policy for native changed selections", async () => {
+    const planner = await import("../../scripts/test-projects.test-support.mts");
+    const runtimeSelection = await import("../../scripts/lib/vitest-runtime-selection.mts");
+    vi.spyOn(runtimeSelection, "shouldPrepareVitestCoreWorkers").mockReturnValue(false);
+    vi.stubEnv("OPENCLAW_TEST_PROJECTS_SERIAL", "1");
+    vi.spyOn(planner, "listChangedPathsFromGit").mockReturnValue([...docsChangedPaths]);
+    const { runTestProjects } = await import("../../scripts/test-projects-run.mts");
+    let active = 0;
+    let peak = 0;
+    commands.reader.mockImplementation(() => {
+      active += 1;
+      peak = Math.max(peak, active);
+      return {
+        completion: nextTurn().then(() => {
+          active -= 1;
+          return { code: 0, signal: null, groupJoined: true };
+        }),
+        getForwardedSignal: () => undefined,
+      };
+    });
+    await runTestProjects(async () => {}, [...changedArgs, ...outputArgs]);
+    expect(peak).toBe(1);
+    expect(process.exitCode).toBe(0);
+  });
+
+  it("keeps the broad changed request on the planner route", async () => {
+    const planner = await import("../../scripts/test-projects.test-support.mts");
+    vi.stubEnv("OPENCLAW_TEST_CHANGED_BROAD", "1");
+    vi.spyOn(planner, "listChangedPathsFromGit").mockReturnValue([...docsChangedPaths]);
+    const produced = vi.spyOn(planner, "createVitestRunSpecs");
+    const { runTestProjects } = await import("../../scripts/test-projects-run.mts");
+    await runTestProjects(async () => {}, [...changedArgs, ...outputArgs]);
+    // The broad escape hatch never rewrites the runner's target arguments.
+    expect(produced.mock.calls[0]![0]).toEqual([...changedArgs, ...outputArgs]);
+    expect(console.error).not.toHaveBeenCalledWith(
+      expect.stringMatching(/^\[test\] running \d+ exact-target plans/u),
+    );
+    expect(process.exitCode).toBe(0);
+  });
+});
+
 describe("cache lease completion", () => {
   beforeEach(() => {
     // The enclosing CI test worker owns its PATH; these fixtures exercise a new scheduler.

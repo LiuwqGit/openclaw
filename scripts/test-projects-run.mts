@@ -7,6 +7,7 @@ import { performance } from "node:perf_hooks";
 import { assertTestHomeSelection, combineTestHomeSelections } from "../test/test-home-policy.mts";
 import { loadPatternListFromEnv } from "../test/vitest/vitest.pattern-file.ts";
 import { formatMs } from "./lib/check-timing-summary.mts";
+import { resolveChangedNodeTestTargets } from "./lib/ci-changed-node-test-plan.mts";
 import { isExclusiveCiTestConfig } from "./lib/local-check-runtime.mts";
 import { signalExitCode } from "./lib/managed-child-process.mts";
 import {
@@ -50,13 +51,17 @@ import {
   findUnmatchedExplicitTestTargets,
   formatFailedShardDigest,
   formatNoChangedTestTargetLines,
+  extractChangedBaseRef,
   isTestFileTarget,
+  listChangedPathsFromGit,
   listFullExtensionVitestProjectConfigs,
   orderFullSuiteSpecsForParallelRun,
   parseTestProjectsArgs,
   resolveParallelFullSuiteConcurrency,
   resolveChangedTestTargetPlanForArgs,
   resolveChangedTargetArgs,
+  shouldUseBroadChangedTargets,
+  stripChangedArgs,
   type FailedVitestShard,
   type VitestRunSpec as BaseVitestRunSpec,
   type VitestCacheAssignment,
@@ -245,6 +250,35 @@ function printNoChangedTestTargets(args: string[], cwd: string, baseEnv: NodeJS.
   }
 }
 
+/**
+ * Resolves the concrete test selection for a native non-watch `--changed` run through the
+ * maintained CI affected-test owner (runtime readers, source owners, protected coverage, and
+ * fixed smoke tests) instead of the local planner's unrestricted import graph.
+ *
+ * Returns null whenever the invocation keeps its established semantics: explicit selectors,
+ * watch mode, and the `OPENCLAW_TEST_CHANGED_BROAD` escape hatch all keep the local planner
+ * route.
+ */
+export function resolveNativeChangedTestSelection(
+  args: string[],
+  parsed: Pick<ReturnType<typeof parseTestProjectsArgs>, "targetArgs" | "watchMode">,
+  env: NodeJS.ProcessEnv,
+  cwd = process.cwd(),
+  listChangedPaths: (baseRef: string, cwd: string) => string[] = listChangedPathsFromGit,
+): string[] | null {
+  if (parsed.targetArgs.length > 0 || parsed.watchMode) {
+    return null;
+  }
+  if (shouldUseBroadChangedTargets(env)) {
+    return null;
+  }
+  const baseRef = extractChangedBaseRef(args);
+  if (!baseRef) {
+    return null;
+  }
+  return resolveChangedNodeTestTargets(listChangedPaths(baseRef, cwd), { cwd });
+}
+
 async function runVitestSpecs(
   specs: VitestRunSpec[],
   concurrency: number,
@@ -322,8 +356,22 @@ export async function runTestProjects(
     return;
   }
   const baseEnv = resolveVitestProcessEnv(env);
-  const { targetArgs, forwardedArgs } = parseTestProjectsArgs(args, process.cwd());
-  const unmatchedExplicitTargets = findUnmatchedExplicitTestTargets(args, process.cwd());
+  const requestedArgs = parseTestProjectsArgs(args, process.cwd());
+  const nativeChangedSelection = resolveNativeChangedTestSelection(args, requestedArgs, baseEnv);
+  if (nativeChangedSelection !== null && nativeChangedSelection.length === 0) {
+    printNoChangedTestTargets(args, process.cwd(), baseEnv);
+    printTestSummary("skipped", 0, performance.now() - suiteStartedAt);
+    return;
+  }
+  // A concrete CI-owner selection becomes the run's effective exact-target arguments, so the
+  // downstream admission treats it identically to an explicit selector invocation.
+  const effectiveArgs = nativeChangedSelection
+    ? [...nativeChangedSelection, ...stripChangedArgs(requestedArgs.forwardedArgs)]
+    : args;
+  const { targetArgs, forwardedArgs } = nativeChangedSelection
+    ? parseTestProjectsArgs(effectiveArgs, process.cwd())
+    : requestedArgs;
+  const unmatchedExplicitTargets = findUnmatchedExplicitTestTargets(effectiveArgs, process.cwd());
   if (unmatchedExplicitTargets.length > 0) {
     for (const unmatched of unmatchedExplicitTargets) {
       const suffix = unmatched.includePattern ? ` (tried: ${unmatched.includePattern})` : "";
@@ -336,9 +384,11 @@ export async function runTestProjects(
     return;
   }
   const changedTargetArgs =
-    targetArgs.length === 0
-      ? resolveChangedTargetArgs(args, process.cwd(), undefined, { env: baseEnv })
-      : null;
+    nativeChangedSelection !== null
+      ? nativeChangedSelection
+      : targetArgs.length === 0
+        ? resolveChangedTargetArgs(args, process.cwd(), undefined, { env: baseEnv })
+        : null;
   const rawRunSpecs: VitestRunSpec[] =
     targetArgs.length === 0 && changedTargetArgs === null
       ? buildFullSuiteVitestRunPlans(args, process.cwd()).map((plan) => ({
@@ -361,7 +411,7 @@ export async function runTestProjects(
           preflightPnpmArgs: createVitestPreflightPnpmArgs(plan.config),
           watchMode: plan.watchMode,
         }))
-      : createVitestRunSpecs(args, {
+      : createVitestRunSpecs(effectiveArgs, {
           baseEnv,
           cwd: process.cwd(),
         });

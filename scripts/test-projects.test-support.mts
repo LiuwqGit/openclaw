@@ -2692,11 +2692,11 @@ function resolveChannelContractTargetKind(relative: string) {
   return "contractsChannelSession";
 }
 
-function listChangedPathsFromGit(baseRef: string, cwd: string) {
+export function listChangedPathsFromGit(baseRef: string, cwd: string) {
   return listChangedPathsFromGitSource({ base: baseRef, cwd });
 }
 
-function extractChangedBaseRef(args: string[]) {
+export function extractChangedBaseRef(args: string[]) {
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === undefined) {
@@ -2715,7 +2715,7 @@ function extractChangedBaseRef(args: string[]) {
   return null;
 }
 
-function stripChangedArgs(args: string[]) {
+export function stripChangedArgs(args: string[]) {
   const strippedArgs = [];
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -4118,7 +4118,7 @@ function resolveToolingTestTargets(
     : null;
 }
 
-function shouldUseBroadChangedTargets(env = process.env) {
+export function shouldUseBroadChangedTargets(env = process.env) {
   return parsePermissiveBooleanToken(env[BROAD_CHANGED_ENV_KEY]) === true;
 }
 
