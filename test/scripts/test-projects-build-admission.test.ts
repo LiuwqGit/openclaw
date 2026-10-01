@@ -920,7 +920,7 @@ describe("automatic exact-target admission", () => {
 
 describe("automatic changed-selection admission", () => {
   const outputArgs = ["--reporter=dot", "--coverage.enabled=false"];
-  const changedArgs = ["--changed", "origin/main"];
+  const changedArgs = ["--changed", "HEAD"];
   // A docs-only change keeps the fixed PR smoke scope without owner-area fan-out.
   const docsChangedPaths = ["docs/help/testing.md"];
   const typeOnlyImportChangedPaths = ["src/plugins/runtime/types.ts"];
@@ -985,7 +985,7 @@ describe("automatic changed-selection admission", () => {
     ).toEqual(
       ciPlan.resolveChangedNodeTestTargets(typeOnlyImportChangedPaths, { cwd: process.cwd() }),
     );
-    expect(listChangedPaths).toHaveBeenCalledWith("origin/main", process.cwd());
+    expect(listChangedPaths).toHaveBeenCalledWith("HEAD", process.cwd());
   });
 
   it("runs native changed selections through the CI owner with automatic overlap", async () => {
@@ -1059,16 +1059,17 @@ describe("automatic changed-selection admission", () => {
   it("keeps the broad changed request on the planner route", async () => {
     const planner = await import("../../scripts/test-projects.test-support.mts");
     vi.stubEnv("OPENCLAW_TEST_CHANGED_BROAD", "1");
-    vi.spyOn(planner, "listChangedPathsFromGit").mockReturnValue([...docsChangedPaths]);
+    // The broad escape hatch keeps the planner route; with an empty diff the planner reports
+    // no changed targets and the runner skips Vitest without rewriting target arguments.
+    const plannerRoute = vi.spyOn(planner, "resolveChangedTargetArgs");
     const produced = vi.spyOn(planner, "createVitestRunSpecs");
     const { runTestProjects } = await import("../../scripts/test-projects-run.mts");
     await runTestProjects(async () => {}, [...changedArgs, ...outputArgs]);
-    // The broad escape hatch never rewrites the runner's target arguments.
+    expect(plannerRoute).toHaveBeenCalled();
     expect(produced.mock.calls[0]![0]).toEqual([...changedArgs, ...outputArgs]);
-    expect(console.error).not.toHaveBeenCalledWith(
-      expect.stringMatching(/^\[test\] running \d+ exact-target plans/u),
-    );
+    expect(commands.reader).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(0);
+    expect(console.error).toHaveBeenCalledWith("[test] no changed test targets; skipping Vitest.");
   });
 });
 
