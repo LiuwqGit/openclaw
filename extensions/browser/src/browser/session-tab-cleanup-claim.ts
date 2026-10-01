@@ -3,13 +3,13 @@
  * A concurrent touch or competing sweep cannot delete another generation's row.
  */
 import { randomUUID } from "node:crypto";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import type { SessionEntryCurrentPreparation } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   getBrowserStateRuntime,
   type BrowserSessionTabAuthority,
 } from "../browser-runtime-state.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { CloseTrackedCdpTargetResult } from "./cdp.helpers.js";
 import type { ResolvedBrowserConfig } from "./config.js";
 import { BROWSER_TAB_UNREACHABLE_RETIRE_MS } from "./constants.js";
