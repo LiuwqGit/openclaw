@@ -40,6 +40,7 @@ import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-cl
 import { resolveRunVitestSpawnEnv } from "../../scripts/lib/vitest-process-env.mts";
 import { resolvePnpmRunner } from "../../scripts/pnpm-runner.mts";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import { awaitGateBeforeSettlement, withinTest } from "../helpers/promise.js";
 import { createTempDirTracker, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createPrebuiltUiE2eVitestConfig } from "../vitest/vitest.ui-e2e-prebuilt.config.ts";
 import { uiE2eRealGatewayTestFiles } from "../vitest/vitest.ui-paths.mjs";
@@ -872,9 +873,26 @@ AFTER_CD
       ]);
       expect(workflow.on.pull_request.paths).toContain(workflowPath);
       expect(workflow.on.pull_request.paths).not.toContain(".github/workflows/**");
-      expect(workflow.jobs[jobName].if).toBe(
-        "${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}",
-      );
+      for (const [eventName, draft, result, cancelled, admitted] of [
+        ["pull_request", false, "skipped", false, true],
+        ["pull_request", true, "skipped", false, false],
+        ["pull_request", false, "skipped", true, false],
+        ["workflow_dispatch", false, "success", false, true],
+        ["workflow_dispatch", false, "failure", false, false],
+        ["workflow_dispatch", false, "success", true, false],
+      ] as const) {
+        expect(
+          evaluateWorkflowExpression(workflow.jobs[jobName].if, {
+            eventName,
+            draft,
+            cancelled,
+            additionalNeeds: { admission: { outputs: {}, result } },
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+          }),
+          `${workflowPath}: ${eventName}, admission=${result}, cancelled=${cancelled}`,
+        ).toBe(admitted);
+      }
     }
   });
 
@@ -2919,11 +2937,9 @@ process.exit(JSON.parse(process.env.RECIPE_EXITS)[count] ?? 99);
       const fixtureDirs = createTempDirTracker();
       // oxlint-disable-next-line prefer-const -- Failure cleanup can run before the registry is started.
       let stopRegistry: (() => Promise<void>) | undefined;
-      let readyTimeout: NodeJS.Timeout | undefined;
       // Timeout does not join the test body. Keep close and deletion in one hook,
       // outside afterEach, so a failed join cannot release the registry's files.
       onTestFinished(async () => {
-        clearTimeout(readyTimeout);
         await stopRegistry?.();
         fixtureDirs.cleanup();
       });
@@ -3073,8 +3089,7 @@ server.listen(0, "127.0.0.1", () => {
         await registryClosed;
       };
       try {
-        const port = await new Promise<number>((resolve, reject) => {
-          readyTimeout = setTimeout(() => reject(new Error("fixture registry not ready")), 2_000);
+        const ready = new Promise<number>((resolve, reject) => {
           registryServer.once("message", (message) => {
             if (typeof message !== "number") {
               reject(new Error("fixture registry sent an invalid port"));
@@ -3083,9 +3098,11 @@ server.listen(0, "127.0.0.1", () => {
             resolve(message);
           });
           registryServer.once("error", reject);
-          void registryClosed.then(() => reject(new Error("fixture registry closed before ready")));
         });
-        clearTimeout(readyTimeout);
+        const port = await withinTest(
+          awaitGateBeforeSettlement(ready, registryClosed, "fixture registry closed before ready"),
+          signal,
+        );
         signal.throwIfAborted();
         const registryUrl = `http://127.0.0.1:${port}`;
         writeFileSync(
@@ -3234,7 +3251,6 @@ server.listen(0, "127.0.0.1", () => {
           failures.unshift(error);
         }
       } finally {
-        clearTimeout(readyTimeout);
         try {
           await stopRegistry();
         } catch (error) {
