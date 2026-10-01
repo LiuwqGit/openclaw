@@ -55,12 +55,17 @@ export class ManagerRuntimeHandleCache {
 
   /** Closes and removes one cached runtime handle when present. */
   async close(
-    params: AcpSessionTarget & { reason: string; expectedHandle?: AcpRuntimeHandle },
+    params: AcpSessionTarget & {
+      assertActive?: () => void;
+      reason: string;
+      expectedHandle?: AcpRuntimeHandle;
+    },
   ): Promise<void> {
     const cached = this.get(params);
     if (!cached || (params.expectedHandle && cached.handle !== params.expectedHandle)) {
       return;
     }
+    params.assertActive?.();
     try {
       await cached.runtime.close({
         handle: cached.handle,
@@ -128,7 +133,6 @@ export class ManagerRuntimeHandleCache {
     sessionKey: string;
     runtime: AcpRuntime;
     handle: AcpRuntimeHandle;
-    isCurrentActor?: () => boolean;
   }): Promise<boolean> {
     if (!params.runtime.getStatus) {
       return true;
@@ -166,8 +170,7 @@ export class ManagerRuntimeHandleCache {
     }
 
     const expectedAcpxRecordId = identity?.acpxRecordId ?? "";
-    const actualAcpxRecordId =
-      normalizeText((params.handle as { acpxRecordId?: unknown }).acpxRecordId) ?? "";
+    const actualAcpxRecordId = normalizeText(params.handle.acpxRecordId) ?? "";
     return actualAcpxRecordId === expectedAcpxRecordId;
   }
 

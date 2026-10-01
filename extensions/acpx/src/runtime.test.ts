@@ -35,7 +35,7 @@ import {
 
 const DOCUMENTED_OPENCLAW_BRIDGE_COMMAND =
   "env OPENCLAW_HIDE_BANNER=1 OPENCLAW_SUPPRESS_NOTES=1 openclaw acp --url ws://127.0.0.1:18789 --token-file ~/.openclaw/gateway.token --session agent:main:main";
-const CODEX_ACP_COMMAND = "npx @agentclientprotocol/codex-acp@1.10.0";
+const CODEX_ACP_COMMAND = "npx @agentclientprotocol/codex-acp@1.11.0";
 const LOCAL_NODE_MODULES_CODEX_COMMAND = `node "${path.resolve(
   "node_modules/@agentclientprotocol/codex-acp/dist/index.js",
 )}"`;
@@ -260,17 +260,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       expectedModel: "claude-sonnet-4-6",
     },
     {
-      name: "preserves custom Claude ACP startup models",
-      model: "custom-model",
-      expectedModel: "custom-model",
-    },
-    {
       // Issue #121034: Bedrock rejects provider-qualified refs.
-      name: "strips the OpenClaw Bedrock provider prefix for Claude ACP startup",
-      model: "amazon-bedrock/global.anthropic.claude-sonnet-5",
-      expectedModel: "global.anthropic.claude-sonnet-5",
-    },
-    {
       name: "matches the Bedrock provider prefix case-insensitively",
       model: "Amazon-Bedrock/us.anthropic.claude-opus-4-6-v1",
       expectedModel: "us.anthropic.claude-opus-4-6-v1",

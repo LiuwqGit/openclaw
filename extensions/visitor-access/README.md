@@ -38,7 +38,8 @@ account. Enable the plugin in the source-built Gateway configuration:
 }
 ```
 
-Restart the Gateway after enabling the plugin or changing its configuration.
+Enabling the plugin or changing its configuration applies through plugin hot reload;
+no Gateway restart is required.
 Do not retarget `accountId`, `appId`, or `policyName` while grants exist: the
 durable records belong to that policy, and changing targets could leave the old
 policy granting access without expiry sweeps. Revoke grants before retargeting.
@@ -76,6 +77,13 @@ invitation policy. Set `accessPolicyPlugin: "visitor-access"` on that same role.
 This requirement remains in force if the plugin or its manifest is missing,
 disabled, broken, or still starting. Staff roles without this binding and the
 Gateway owner retain their independent access to repair the configuration.
+
+The role must also declare `modelPolicy`: `{}` follows the
+configured source agent's primary and fallback models. Set `sourceAgent` to name
+that agent explicitly, `allow` to replace the permitted set, and `deny` for
+resolved model or family exclusions such as `provider/restricted-*`. Apply those
+exclusions before enabling guest access; an omitted model policy is unrestricted
+and does not qualify as a visitor role. Staff roles may omit it.
 A missing or unsuitable default refuses the invitation before
 writing the grant or adding the email to Cloudflare. Keep existing staff roles
 and their assignments when configuring the guest default.
@@ -94,11 +102,41 @@ Guest admission or restore authority for unfinished work.
 
 ## Invite, inspect, and revoke visitors
 
-| Tool             | Input                                                 | Result                                                                                     |
-| ---------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `visitor_invite` | `github` and/or `email`; optional `days` or `forever` | Adds a grant or refreshes an existing email's expiry.                                      |
-| `visitor_list`   | `{}`                                                  | Shows grant emails, GitHub labels, dates, current Gateway access, and policy/record drift. |
-| `visitor_revoke` | `github` and/or `email`                               | Removes the matching visitor; an unknown email is a clean no-op.                           |
+| Tool             | Input                                                 | Result                                                                               |
+| ---------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `visitor_invite` | `github` and/or `email`; optional `days` or `forever` | Adds a grant or refreshes an existing email's expiry.                                |
+| `visitor_list`   | `{}`                                                  | Shows grants, selection IDs, dates, current Gateway access, and policy/record drift. |
+| `visitor_revoke` | `profileId`, `grantId`, or `github`/`email`           | Removes a person's recorded grants or cancels a selected invitation.                 |
+
+Each tool also returns structured `details`, visible to Code Mode, with the same
+information as its text: invite returns `outcome`, `email`, `grantId`, optional `githubLogin`,
+`expiresAt`, `gatewayAccess`, and `signInUrl`; revoke returns `outcome`, `emails`,
+and optional `githubLogin`; list returns `counts`, `grants`, `unmanaged`, and `omitted`.
+Recorded list rows include `grantId` when the invitation has a qualified lifetime,
+and `profileId` when its email belongs to a current canonical profile.
+
+Use `visitor_revoke` with `profileId` to select the recorded Visitor grants
+associated with that person's verified email aliases in an initial profile snapshot. Use `grantId` to
+cancel only that invitation, including when first sign-in is still pending and
+no profile exists. Copy the IDs from `visitor_list` or the invite result; do not
+combine either ID with another selector. An absent grant ID is a no-op and never
+falls back to another invitation. An unavailable or merged profile ID requires
+listing again and selecting the current canonical profile. Independent staff
+roles, saved work, and existing PRs remain intact. Unmanaged policy entries still
+require explicit email removal; person-wide revocation does not infer ownership
+for them.
+
+Person-wide revocation retains the selected aliases' original profile-binding
+lifetimes. The profile owner revalidates them at local grant commit and immediately
+before each policy request. Reassignment, including a move away and back, stops
+remaining mutations. Already committed expirations remain ended if later cleanup
+fails. An in-flight request may already have been accepted by Cloudflare; the
+existing cleanup path reconciles ended invitations without restoring them.
+This operation requires a Gateway with profile identity preparation support.
+
+An active renewal retains its grant ID. Expiry or revocation ends that lifetime;
+a new invitation gets a different ID, so canceling an old invitation cannot
+remove a later replacement or revive previously accepted queued work.
 
 For example, invite a visitor for seven days:
 
@@ -110,6 +148,11 @@ Invite results identify the visitor, email, grant expiry, Gateway access, and lo
 URL. A repeat invite for the same email refreshes its expiry rather than creating
 a second grant, and checks the current role again even when the email is already
 in the Access policy.
+Renewal before expiry preserves the grant attached to accepted shared GitHub
+publication requests. After expiry or revocation, a new invitation cannot revive
+those old requests, even if the person later receives a staff role. Request
+publication again with current access after checking any recorded or unconfirmed
+GitHub result; saved work and existing pull requests are retained.
 Permanent access requires `forever: true`. Invites beyond `maxVisitors` are
 refused; revoke an existing visitor or deliberately raise the configured cap.
 
@@ -141,6 +184,10 @@ using the person's canonical email aliases. Known non-default staff roles and
 the Gateway owner remain independent of visitor grants. The store has a fixed
 cap of 500 records and does not automatically expire them: a record must remain
 until policy cleanup succeeds.
+Each uninterrupted grant has an internal UUID. Startup assigns one to active
+legacy grants before admitting visitors; expired grants do not acquire new
+authority. The UUID remains with continuously renewed access and changes after
+expiry or revocation. It is not a login credential.
 
 Records from older versions need confirmed Cloudflare policy membership before
 they can admit a guest. Startup and the existing hourly sweep perform that check;

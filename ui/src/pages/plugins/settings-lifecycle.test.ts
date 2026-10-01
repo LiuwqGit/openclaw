@@ -91,7 +91,7 @@ it.each([
       mutationBlockedReason: "Plugin changes require operator.admin access.",
     },
   },
-  { name: "busy plugin", props: { busy: { "plugin:workboard": true } } },
+  { name: "busy plugin", props: { busy: { "plugin:workboard": "enable" as const } } },
   {
     name: "missing setup",
     props: { result: createResult(createPlugin({ state: "needs-setup" })) },
@@ -176,10 +176,8 @@ it("gives host permissions the setting menu and preserves configured, inherited,
   timeout.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "reset" } } }));
   expect(onRemove).toHaveBeenCalledWith(["plugins", "entries", "workboard", "hooks", "timeoutMs"]);
   expect(container.querySelector('[data-setting="llm.allowedModels"] wa-dropdown')).not.toBeNull();
-  const summaries = container.querySelector(".plugin-editor__permission-details")!;
-  expect(summaries.querySelectorAll(".settings-section")).toHaveLength(2);
-  expect(summaries.querySelectorAll(".settings-row").length).toBeGreaterThan(0);
-  expect(summaries.querySelector("wa-dropdown")).toBeNull();
+  expect(container.textContent).not.toContain("Declared capabilities");
+  expect(container.textContent).not.toContain("Your grants");
   onPatch.mockClear();
   const readOnly = mount({ ...props, canEditConfig: false });
   await (readOnly.querySelector("openclaw-plugin-settings-editor") as typeof editor).updateComplete;
@@ -190,3 +188,35 @@ it("gives host permissions the setting menu and preserves configured, inherited,
   readOnlyInput.click();
   expect(onPatch).not.toHaveBeenCalled();
 });
+
+it.each([false, true])(
+  "shows selected capabilities without a catalog while enabled=%s",
+  (enabled) => {
+    const inspection = createInspectResult();
+    inspection.declared = {
+      ...inspection.declared,
+      tools: ["speech_status"],
+      providers: ["local-model", "sibling-model"],
+      channels: ["local-channel", "sibling-channel"],
+      contracts: ["speechProviders: local-speech", "videoGenerationProviders: sibling-video"],
+    };
+    inspection.overview = {
+      capabilities: {
+        providers: ["local-model"],
+        channels: ["local-channel"],
+        contracts: { speechProviders: ["local-speech", "local-speech-alias"] },
+        ui: ["page"],
+      },
+    };
+    const container = mount({ inspection, result: createResult(createPlugin({ enabled })) });
+    const titles = [...container.querySelectorAll(".plugin-capabilities h2")].map(
+      (heading) => heading.textContent,
+    );
+    expect(titles).toEqual(["Capabilities2", "Tools1"]);
+    expect(container.textContent).toContain("Text to speech");
+    expect(container.textContent).toContain("Pages");
+    expect(container.textContent).not.toContain("speechProviders:");
+    expect(container.textContent).not.toContain("sibling-");
+    expect(container.textContent).not.toContain("Video generation");
+  },
+);

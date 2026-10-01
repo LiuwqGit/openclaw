@@ -18,6 +18,62 @@ const enPluginManagement = {
     pluginHelpValue: "Current value: {value}",
   },
   pluginsPage: {
+    installProgress: {
+      title: "Installation progress",
+      stopped: "Installation stopped",
+      rejected: {
+        title: "Plugin not installed",
+        recovery:
+          "This attempt did not install the plugin. Resolve the reported issue, then select Retry install.",
+      },
+      saved: {
+        title: "Installation saved",
+        recovery:
+          "The installation was saved. Resolve the reported issue before reloading the plugin; do not install it again.",
+      },
+      unknown: {
+        title: "Installation status unknown",
+        recovery:
+          "The Gateway did not confirm the installation outcome. Reconnect and check installed plugins before trying again.",
+      },
+      retry: {
+        title: "Installation failed",
+        recovery: "Resolve the reported issue, then select Retry install to try again.",
+      },
+      details: "Failure details",
+      viewStatus: "View status",
+      failure: "Installation failed",
+      resolve: {
+        started: "Resolving package",
+        completed: "Package resolved",
+        failed: "Package resolution failed",
+      },
+      download: {
+        started: "Downloading plugin",
+        completed: "Plugin downloaded",
+        failed: "Plugin download failed",
+      },
+      extract: {
+        started: "Extracting archive",
+        completed: "Archive extracted",
+        failed: "Archive extraction failed",
+      },
+      files: {
+        started: "Preparing plugin files",
+        completed: "Plugin files prepared",
+        failed: "Plugin file preparation failed",
+      },
+      dependencies: {
+        started: "Installing plugin dependencies",
+        completed: "Plugin dependencies installed",
+        failed: "Dependency installation failed",
+      },
+      runtime: {
+        started: "Applying plugin to Gateway",
+        completed: "Plugin applied to Gateway",
+        failed: "Plugin could not be applied to Gateway",
+      },
+    },
     editor: {
       title: "{name} settings",
       search: "Search settings",
@@ -71,6 +127,72 @@ const enPluginManagement = {
       saveFailed:
         "The credential could not be saved. Your draft is still available; try saving again.",
     },
+    detailCapabilities: "Capabilities",
+    uiCapabilities: {
+      page: { name: "Pages", description: "Adds pages to OpenClaw." },
+      navigation: { name: "Navigation", description: "Adds links to OpenClaw navigation." },
+      panel: { name: "Panels", description: "Adds interface panels." },
+      action: { name: "Actions", description: "Adds buttons or menu actions." },
+      accessory: {
+        name: "Session accessories",
+        description: "Adds information or controls alongside sessions.",
+      },
+      widget: { name: "Dashboard widgets", description: "Adds widgets to the dashboard." },
+      replacement: {
+        name: "Interface replacements",
+        description: "Replaces supported parts of the interface.",
+      },
+      "link-reader": {
+        name: "Link previews",
+        description: "Shows previews and details for supported links.",
+      },
+    },
+    capabilityFamilies: {
+      speechProviders: { name: "Text to speech", description: "Turn text into spoken audio." },
+      realtimeTranscriptionProviders: {
+        name: "Live transcription",
+        description: "Transcribe audio as it arrives.",
+      },
+      realtimeVoiceProviders: {
+        name: "Realtime voice",
+        description: "Support live voice conversations.",
+      },
+      mediaUnderstandingProviders: {
+        name: "Media understanding",
+        description: "Analyze supported media inputs.",
+      },
+      imageGenerationProviders: {
+        name: "Image generation",
+        description: "Create images from prompts and supported references.",
+      },
+      videoGenerationProviders: {
+        name: "Video generation",
+        description: "Create video with supported generation models.",
+      },
+      musicGenerationProviders: {
+        name: "Music generation",
+        description: "Create music with supported generation models.",
+      },
+      embeddingProviders: {
+        name: "Embeddings",
+        description: "Represent content for semantic search and retrieval.",
+      },
+      webSearchProviders: { name: "Web search", description: "Find information on the web." },
+      webFetchProviders: { name: "Web fetching", description: "Read content from web pages." },
+      webContentExtractors: {
+        name: "Web content extraction",
+        description: "Extract readable content from web pages.",
+      },
+      documentExtractors: {
+        name: "Document extraction",
+        description: "Extract content from supported documents.",
+      },
+      transcriptSourceProviders: {
+        name: "Transcripts",
+        description: "Capture or import transcripts from supported sources.",
+      },
+      migrationProviders: { name: "Migration", description: "Bring supported data into OpenClaw." },
+    },
     breadcrumb: "Breadcrumb",
     settingsDescription: "Configure installed plugins, access, and lifecycle.",
     settingsTabs: "Plugin settings sections",
@@ -83,6 +205,21 @@ const enPluginManagement = {
     noSettingsMatches: "No installed plugins match this search.",
     noInstalled: "No plugins are installed.",
     connectToManage: "Connect to the gateway to inspect plugins.",
+    auth: {
+      accounts: "Accounts",
+      credentials: "Credentials",
+      edit: "Edit",
+      connected: "Connected",
+      configured: "Configured",
+      editAccount: "Edit {name} connection",
+      editCredential: "Edit {name}",
+      connectAccount: "Connect {name}",
+      configure: "Configure",
+      configureCredential: "Configure {name}",
+      connect: "Connect",
+      requestFailed: "Sign-in did not finish. Try connecting again.",
+      sessionExpired: "This sign-in session expired. Try connecting again.",
+    },
     toggleNamed: "Enable or disable {name}",
     schemaUnavailable: "Plugin settings schema is unavailable.",
     pluginNotFound: "This installed plugin could not be found.",
@@ -133,6 +270,7 @@ const enPluginManagement = {
     intentTrending: "Trending",
     intentOfficial: "Official",
     intentBundled: "Bundled",
+    loadingCategories: "Loading plugin categories…",
     categoriesLabel: "Plugin categories",
     categoriesTitle: "Categories",
     allCategories: "All categories",
@@ -159,6 +297,7 @@ const enPluginManagement = {
     detailEnable: "Enable",
     detailDisable: "Disable",
     detailTools: "Tools",
+    detailToolInputs: "Inputs",
     detailType: "Type",
     detailSecurity: "Security audit",
     detailSecurityAudit: "View security audit",
@@ -224,7 +363,6 @@ const enPluginManagement = {
     removeConfirmMessage:
       "This removes the plugin package and all of its entries. Active work using this plugin finishes before removal.",
     cancel: "Cancel",
-    removedSuccess: "Removed {name}.",
     reload: "Reload",
     installSaved: "Installation of {name} was saved. {error}",
     installSavedNotApplied:
@@ -252,14 +390,15 @@ const enPluginManagement = {
     bundlePlugin: "Bundle plugin",
     unavailable: "Unavailable",
     install: "Install",
-    installing: "Installing…",
+    retryInstall: "Retry install",
+    retryInstallNamed: "Retry install of {name}",
+    viewInstallStatusNamed: "View status of {name} installation",
+    installing: "Installing",
     installNamed: "Install {name}",
     connectToChange: "Connect to the gateway to change plugins.",
     adminRequired: "Plugin changes require operator.admin access.",
     changesDisabled: "This gateway does not allow plugin changes.",
     configRefreshFailed: "Could not refresh Control UI configuration: {error}",
-    enabledSuccess: "Enabled {name}.",
-    disabledSuccess: "Disabled {name}.",
     continueInstall: "Continue installation",
     installAvailabilityChanged:
       "Plugin availability changed. Refresh the catalog to see its current state.",

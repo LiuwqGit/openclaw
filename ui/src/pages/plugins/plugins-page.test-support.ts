@@ -22,6 +22,7 @@ import {
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import type { PluginRowMessage } from "./plugin-row-message.ts";
 import type { PluginsConsentController } from "./plugins-consent-controller.ts";
+import type { PluginMutationAction } from "./plugins-page-model.ts";
 import type { PluginsRouteData } from "./route-data.ts";
 import "./plugins-page.ts";
 
@@ -52,7 +53,7 @@ type TestPluginsPage = HTMLElement & {
   updateComplete: Promise<boolean>;
   result: PluginListResult | null;
   loading: boolean;
-  busy: Record<string, boolean>;
+  busy: Record<string, PluginMutationAction>;
   messages: Record<string, PluginRowMessage>;
   detail: {
     pluginId: string;
@@ -61,7 +62,10 @@ type TestPluginsPage = HTMLElement & {
   } | null;
   pluginConfigEditPending: boolean;
   applyMutationResult: (result: PluginMutationResult) => void;
-  consentController: Pick<PluginsConsentController, "install" | "mutateInstalledPlugin">;
+  consentController: Pick<
+    PluginsConsentController,
+    "install" | "mutateInstalledPlugin" | "installProgress"
+  >;
   refreshCatalog: () => Promise<void>;
   uninstall: (pluginId: string, rowKey: string) => Promise<void>;
 };
@@ -194,7 +198,7 @@ export function createPluginsRouteData(
 export function createClient(handler: RequestHandler) {
   const request = vi.fn(handler);
   return {
-    client: { request } as unknown as GatewayBrowserClient,
+    client: { request, addEventListener: () => () => {} } as unknown as GatewayBrowserClient,
     request,
   };
 }
@@ -227,6 +231,7 @@ export function createGateway(client: GatewayBrowserClient, connected = true): G
     connectionRevision: 0,
     eventLog: [],
     eventLogRevision: 0,
+    loadSelfProfile: async () => null,
     connect: () => undefined,
     setSessionKey: () => undefined,
     start: () => undefined,

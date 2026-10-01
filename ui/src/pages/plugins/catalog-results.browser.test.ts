@@ -5,6 +5,7 @@ import type { PluginDiscoveryEntry } from "../../lib/plugins/index.ts";
 import { renderPluginCatalogResults, type PluginCatalogResultsProps } from "./catalog-results.ts";
 import { renderArtTile } from "./consent-dialog.ts";
 import { renderPluginDetailShell } from "./detail-shell.ts";
+import type { PluginInstallProgress } from "./install-progress.ts";
 import baseStyles from "../../styles/base.css?inline";
 import componentStyles from "../../styles/components.css?inline";
 import pluginStyles from "../../styles/plugins.css?inline";
@@ -53,6 +54,9 @@ it.each([263, 362])(
       error: null,
       remoteError: null,
       categories: [],
+      categoriesLoading: false,
+      categoriesError: null,
+      onRetryCategories: vi.fn(),
       featured: [],
       featuredLoading: false,
       trending: [],
@@ -74,9 +78,17 @@ it.each([263, 362])(
       onLoadMore: vi.fn(),
       onRetry: vi.fn(),
     };
+    const progress = {
+      startedAt: Date.now(),
+      activities: [{ activityId: "dependencies", stage: "dependencies", status: "started" }],
+    } satisfies PluginInstallProgress;
     for (const busy of [false, true]) {
       render(
-        renderPluginCatalogResults({ ...props, busy: { "install:long-title": busy } }),
+        renderPluginCatalogResults({
+          ...props,
+          busy: busy ? { "install:long-title": "install" } : {},
+          installProgress: busy ? new Map([["install:long-title", progress]]) : undefined,
+        }),
         container,
       );
       const grid = container.querySelector<HTMLElement>(".plugin-catalog-grid")!;
@@ -95,7 +107,7 @@ it.each([263, 362])(
         );
       }
       expect(card.scrollWidth).toBeLessThanOrEqual(card.clientWidth);
-      expect(action.disabled).toBe(busy);
+      expect(action.disabled).toBe(false);
       if (busy) {
         const spinner = action.querySelector<HTMLElement>(".btn__spinner");
         expect(spinner).not.toBeNull();
@@ -103,6 +115,12 @@ it.each([263, 362])(
         expect(action.getAttribute("aria-busy")).toBe("true");
       }
       action.click();
+      if (busy) {
+        await expect.poll(() => action.getAttribute("aria-expanded")).toBe("true");
+        expect(card.querySelector('[role="status"]')?.textContent).toContain(
+          "Installing plugin dependencies",
+        );
+      }
     }
     expect(onInstall).toHaveBeenCalledOnce();
   },
@@ -112,7 +130,9 @@ it.each([40, 80])("fills icon tiles without cropping a %ipx-wide source", async 
   const icon = `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="40"><rect width="100%" height="100%" fill="red"/></svg>`)}`;
   render(
     html`
-      <span class="installed-plugins-card__art">${renderArtTile("demo", "Demo", icon)}</span>
+      <span class="installed-plugins-card__art"
+        >${renderArtTile("demo", "Demo", { iconUrl: icon })}</span
+      >
       ${renderPluginDetailShell({
         id: "demo",
         name: "Demo",
@@ -121,15 +141,23 @@ it.each([40, 80])("fills icon tiles without cropping a %ipx-wide source", async 
         onBack: vi.fn(),
         identity: html``,
         panel: html``,
-        icon: renderArtTile("demo", "Demo", icon),
+        icon: renderArtTile("demo", "Demo", { iconUrl: icon }),
       })}
     `,
     container,
   );
+  await Promise.all(
+    [...container.querySelectorAll<HTMLImageElement>(".plugins-icon")].map(
+      (image) =>
+        new Promise<void>((resolve, reject) => {
+          image.addEventListener("load", () => resolve(), { once: true });
+          image.addEventListener("error", reject, { once: true });
+        }),
+    ),
+  );
   for (const selector of [".installed-plugins-card__art", ".plugin-catalog-detail__icon"]) {
     const frame = container.querySelector<HTMLElement>(selector)!;
     const image = frame.querySelector<HTMLImageElement>("img")!;
-    await image.decode();
     expect(image.naturalWidth).toBe(width);
     const frameBounds = frame.getBoundingClientRect();
     const imageBounds = image.getBoundingClientRect();
@@ -139,4 +167,22 @@ it.each([40, 80])("fills icon tiles without cropping a %ipx-wide source", async 
     expect(getComputedStyle(image).objectFit).toBe("contain");
     expect(getComputedStyle(image.parentElement!).borderWidth).toBe("0px");
   }
+});
+
+it("renders the official icon background as opaque white", async () => {
+  const icon = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><circle cx="20" cy="20" r="15" fill="blue"/></svg>')}`;
+  render(
+    renderArtTile("official", "Official", { iconUrl: icon, whiteBackground: true }),
+    container,
+  );
+  const image = container.querySelector<HTMLImageElement>(".plugins-icon")!;
+  await new Promise<void>((resolve, reject) => {
+    image.addEventListener("load", () => resolve(), { once: true });
+    image.addEventListener("error", reject, { once: true });
+  });
+
+  const tile = image.parentElement!;
+  expect(tile.classList.contains("plugins-tile--white")).toBe(true);
+  expect(getComputedStyle(tile).backgroundColor).toBe("rgb(255, 255, 255)");
+  expect(getComputedStyle(image).padding).toBe("4px");
 });
