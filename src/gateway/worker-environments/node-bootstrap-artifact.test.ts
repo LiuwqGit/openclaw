@@ -127,6 +127,17 @@ describe("node bootstrap distribution", () => {
       "dist/.setup/chunk-Q1w2E3.mjs",
       'export const answer = "cloud-ready";\n',
     );
+    await write(pluginRoot, "dist/.cache/credentials.json", {
+      token: "do-not-transfer-host-private-metadata",
+    });
+    await write(pluginRoot, "dist/.setup/.cache/credentials.json", {
+      token: "do-not-transfer-nested-host-private-metadata",
+    });
+    await write(
+      pluginRoot,
+      "dist/.setup/node_modules/private-dependency/index.js",
+      "export const unused = true;\n",
+    );
     const artifact = await provider.prepare();
     const installed = path.join(root, "node");
     await fs.mkdir(installed);
@@ -138,9 +149,16 @@ describe("node bootstrap distribution", () => {
         "utf8",
       ),
     ).toBe('export const answer = "cloud-ready";\n');
-    await expect(
-      fs.access(path.join(target, "dist/extensions/remote-runtime/.env")),
-    ).rejects.toHaveProperty("code", "ENOENT");
+    for (const excluded of [
+      ".env",
+      "dist/.cache/credentials.json",
+      "dist/.setup/.cache/credentials.json",
+      "dist/.setup/node_modules/private-dependency/index.js",
+    ]) {
+      await expect(
+        fs.access(path.join(target, "dist/extensions/remote-runtime", excluded)),
+      ).rejects.toHaveProperty("code", "ENOENT");
+    }
     const { stdout } = await promisify(execFile)(process.execPath, [
       path.join(target, "openclaw.mjs"),
     ]);
