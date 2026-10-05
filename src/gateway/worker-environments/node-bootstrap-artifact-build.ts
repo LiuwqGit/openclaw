@@ -364,7 +364,16 @@ export async function prepareNodeBootstrapArtifact(
     const pluginFiles: string[] = [];
     const visit = async (directory: string, relativeRoot = ""): Promise<void> => {
       for (const child of await fs.readdir(directory, { withFileTypes: true })) {
-        if (child.name.startsWith(".") || IGNORED_PLUGIN_DIRECTORIES.has(child.name)) {
+        // Published npm plugins keep shared runtime chunks in hidden dist directories
+        // (for example dist/.setup); only dot entries outside dist stay private to
+        // the host installation (.git, .cache, .env and friends).
+        const hiddenRuntimeChunk =
+          child.name.startsWith(".") &&
+          (relativeRoot === "dist" || relativeRoot.startsWith("dist/"));
+        if (
+          !hiddenRuntimeChunk &&
+          (child.name.startsWith(".") || IGNORED_PLUGIN_DIRECTORIES.has(child.name))
+        ) {
           continue;
         }
         const relative = relativeRoot ? `${relativeRoot}/${child.name}` : child.name;

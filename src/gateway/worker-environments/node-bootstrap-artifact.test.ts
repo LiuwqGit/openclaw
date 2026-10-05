@@ -115,6 +115,38 @@ describe("node bootstrap distribution", () => {
     }
   });
 
+  it("retains an external plugin's hidden runtime chunks under its dist directory", async () => {
+    const { root, pluginRoot, provider } = await fixture("external-plugin");
+    await write(
+      pluginRoot,
+      "dist/index.js",
+      'export { answer } from "./.setup/chunk-Q1w2E3.mjs";\n',
+    );
+    await write(
+      pluginRoot,
+      "dist/.setup/chunk-Q1w2E3.mjs",
+      'export const answer = "cloud-ready";\n',
+    );
+    const artifact = await provider.prepare();
+    const installed = path.join(root, "node");
+    await fs.mkdir(installed);
+    await tar.extract({ file: artifact.tarballPath, cwd: installed });
+    const target = path.join(installed, "package");
+    expect(
+      await fs.readFile(
+        path.join(target, "dist/extensions/remote-runtime/dist/.setup/chunk-Q1w2E3.mjs"),
+        "utf8",
+      ),
+    ).toBe('export const answer = "cloud-ready";\n');
+    await expect(
+      fs.access(path.join(target, "dist/extensions/remote-runtime/.env")),
+    ).rejects.toHaveProperty("code", "ENOENT");
+    const { stdout } = await promisify(execFile)(process.execPath, [
+      path.join(target, "openclaw.mjs"),
+    ]);
+    expect(stdout.trim()).toBe("local-ai:cloud-ready");
+  });
+
   it.each(["source", "package", "external-plugin", "linked-package"] as const)(
     "runs an unpublished %s snapshot with its plugin and private JavaScript dependency",
     async (mode) => {
