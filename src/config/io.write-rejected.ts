@@ -1,7 +1,7 @@
 import { err, ok } from "@openclaw/normalization-core/result";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { ConfigWriteAuditResult } from "./io.audit.js";
-import type { NormalizedConfigIoDeps } from "./io.types.js";
+import type { NormalizedConfigIoDeps } from "./io.read.types.js";
 import { createConfigWriteSafetyRejectionError } from "./io.write-errors.js";
 import { formatConfigArtifactTimestamp } from "./io.write-safety.js";
 
