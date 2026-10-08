@@ -112,6 +112,57 @@ function readSseEventSource(
   return sdkTransport?._eventSource;
 }
 
+function sseResponse(body: BodyInit): Response {
+  return new Response(body, { headers: { "content-type": "text/event-stream" } });
+}
+
+/**
+ * Wires a legacy SSE transport to a fetch stub whose GET response is rebuilt on
+ * every (re)connect, and records the close signal the bundle runtime recycles a
+ * server on.
+ */
+function createSseReconnectFixture(buildGetResponse: (getCount: number) => Response) {
+  let getCount = 0;
+  const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    if ((init?.method ?? "GET") !== "GET") {
+      return new Response(null, { status: 202 });
+    }
+    getCount += 1;
+    return buildGetResponse(getCount);
+  });
+  const transport = new OpenClawSSEClientTransport(new URL("http://mcp.invalid/sse"), {
+    fetch: fetchMock,
+    eventSourceInit: { fetch: fetchMock },
+  });
+  const onclose = vi.fn();
+  // MCP transports expose callback properties rather than EventTarget listeners.
+  // oxlint-disable-next-line unicorn/prefer-add-event-listener
+  transport.onclose = onclose;
+  return {
+    transport,
+    onclose,
+    getCount: () => getCount,
+    postTargets: () =>
+      fetchMock.mock.calls.filter((call) => call[1]?.method === "POST").map((call) => call[0]),
+  };
+}
+
+type SseReconnectFixture = ReturnType<typeof createSseReconnectFixture>;
+
+/** Asserts the replacement-session lifecycle: closed, expired, and never POSTed to. */
+async function expectSseSessionReplaced(fixture: SseReconnectFixture): Promise<void> {
+  await vi.waitFor(() => expect(fixture.onclose).toHaveBeenCalledOnce());
+  const sendError = await fixture.transport
+    .send({ jsonrpc: "2.0", id: 1, method: "tools/call" })
+    .then(() => undefined)
+    .catch((error: unknown) => error);
+  expect(sendError).toBeInstanceOf(McpSseSessionExpiredError);
+  expect(
+    isMcpHttpSessionExpired({ transport: fixture.transport, transportType: "sse" }, sendError),
+  ).toBe(true);
+  expect(fixture.postTargets()).toHaveLength(0);
+}
+
 describe("OpenClaw MCP HTTP lifecycle adapters", () => {
   it.each([
     "Streamable HTTP error: Error POSTing to endpoint: bearer=body-secret",
@@ -413,66 +464,39 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
 
   it("closes a legacy SSE transport when a reconnect announces a replacement session", async () => {
     let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
-    let getCount = 0;
     const encoder = new TextEncoder();
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const method = init?.method ?? "GET";
-      if (method !== "GET") {
-        return new Response(null, { status: 202 });
-      }
-      getCount += 1;
-      const endpoint = `/messages?session_id=${getCount}`;
-      return new Response(
+    const fixture = createSseReconnectFixture((getCount) =>
+      sseResponse(
         new ReadableStream<Uint8Array>({
           start(controller) {
             streamController = controller;
             controller.enqueue(
-              encoder.encode(`retry: 1\n\nevent: endpoint\ndata: ${endpoint}\n\n`),
+              encoder.encode(
+                `retry: 1\n\nevent: endpoint\ndata: /messages?session_id=${getCount}\n\n`,
+              ),
             );
           },
         }),
-        { headers: { "content-type": "text/event-stream" } },
-      );
-    });
-    const transport = new OpenClawSSEClientTransport(new URL("http://mcp.invalid/sse"), {
-      fetch: fetchMock,
-      eventSourceInit: { fetch: fetchMock },
-    });
-    const onclose = vi.fn();
-    // MCP transports expose callback properties rather than EventTarget listeners.
-    // oxlint-disable-next-line unicorn/prefer-add-event-listener
-    transport.onclose = onclose;
+      ),
+    );
 
     try {
-      await transport.start();
+      await fixture.transport.start();
       // The server restarted: the stream ends and eventsource reconnects onto a
       // fresh legacy session that never saw initialize.
       streamController?.close();
 
-      await vi.waitFor(() => expect(onclose).toHaveBeenCalledOnce());
-      const sendError = await transport
-        .send({ jsonrpc: "2.0", id: 1, method: "tools/call" })
-        .then(() => undefined)
-        .catch((error: unknown) => error);
-      expect(sendError).toBeInstanceOf(McpSseSessionExpiredError);
-      expect(isMcpHttpSessionExpired({ transport, transportType: "sse" }, sendError)).toBe(true);
-      expect(fetchMock.mock.calls.filter((call) => call[1]?.method === "POST")).toHaveLength(0);
+      await expectSseSessionReplaced(fixture);
     } finally {
-      await transport.close();
+      await fixture.transport.close();
     }
   });
 
   it("keeps a legacy SSE transport open when a reconnect re-announces the same session", async () => {
     let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
-    let getCount = 0;
     const encoder = new TextEncoder();
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const method = init?.method ?? "GET";
-      if (method !== "GET") {
-        return new Response(null, { status: 202 });
-      }
-      getCount += 1;
-      return new Response(
+    const fixture = createSseReconnectFixture(() =>
+      sseResponse(
         new ReadableStream<Uint8Array>({
           start(controller) {
             streamController = controller;
@@ -481,104 +505,69 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
             );
           },
         }),
-        { headers: { "content-type": "text/event-stream" } },
-      );
-    });
-    const transport = new OpenClawSSEClientTransport(new URL("http://mcp.invalid/sse"), {
-      fetch: fetchMock,
-      eventSourceInit: { fetch: fetchMock },
-    });
-    const onclose = vi.fn();
-    // MCP transports expose callback properties rather than EventTarget listeners.
-    // oxlint-disable-next-line unicorn/prefer-add-event-listener
-    transport.onclose = onclose;
+      ),
+    );
 
     try {
-      await transport.start();
+      await fixture.transport.start();
       streamController?.close();
 
-      await vi.waitFor(() => expect(getCount).toBe(2));
+      await vi.waitFor(() => expect(fixture.getCount()).toBe(2));
       await expect(
-        transport.send({ jsonrpc: "2.0", method: "notifications/initialized" }),
+        fixture.transport.send({ jsonrpc: "2.0", method: "notifications/initialized" }),
       ).resolves.toBeUndefined();
-      expect(onclose).not.toHaveBeenCalled();
-      const posts = fetchMock.mock.calls.filter((call) => call[1]?.method === "POST");
+      expect(fixture.onclose).not.toHaveBeenCalled();
+      const posts = fixture.postTargets();
       expect(posts).toHaveLength(1);
-      // The legacy transport POSTs to a URL instance built from the re-announced endpoint.
-      const postTarget = posts[0]?.[0];
+      const postTarget = posts[0];
       expect(postTarget).toBeInstanceOf(URL);
       expect(postTarget instanceof URL ? postTarget.searchParams.get("session_id") : null).toBe(
         "1",
       );
     } finally {
-      await transport.close();
+      await fixture.transport.close();
     }
   });
 
   it("closes a legacy SSE transport when a CR-delimited reconnect announces a replacement session", async () => {
     let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
-    let getCount = 0;
     const encoder = new TextEncoder();
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const method = init?.method ?? "GET";
-      if (method !== "GET") {
-        return new Response(null, { status: 202 });
-      }
-      getCount += 1;
-      // eventsource-parser treats a bare CR as a line ending, so a server may
-      // announce sessions without emitting a single LF byte.
-      // The trailing comment completes the CR-terminated blank line inside this
-      // chunk; a lone trailing CR legitimately stays held until more bytes arrive.
-      const payload = `retry: 1\r\revent: endpoint\rdata: /messages?session_id=${getCount}\r\r: ping\r`;
-      return new Response(
+    const fixture = createSseReconnectFixture((getCount) =>
+      sseResponse(
         new ReadableStream<Uint8Array>({
           start(controller) {
             streamController = controller;
-            controller.enqueue(encoder.encode(payload));
+            // eventsource-parser treats a bare CR as a line ending, so a server may
+            // announce sessions without emitting a single LF byte. The trailing
+            // comment completes the CR-terminated blank line inside this chunk; a
+            // lone trailing CR legitimately stays held until more bytes arrive.
+            controller.enqueue(
+              encoder.encode(
+                `retry: 1\r\revent: endpoint\rdata: /messages?session_id=${getCount}\r\r: ping\r`,
+              ),
+            );
           },
         }),
-        { headers: { "content-type": "text/event-stream" } },
-      );
-    });
-    const transport = new OpenClawSSEClientTransport(new URL("http://mcp.invalid/sse"), {
-      fetch: fetchMock,
-      eventSourceInit: { fetch: fetchMock },
-    });
-    const onclose = vi.fn();
-    // MCP transports expose callback properties rather than EventTarget listeners.
-    // oxlint-disable-next-line unicorn/prefer-add-event-listener
-    transport.onclose = onclose;
+      ),
+    );
 
     try {
-      await transport.start();
+      await fixture.transport.start();
       streamController?.close();
 
-      await vi.waitFor(() => expect(onclose).toHaveBeenCalledOnce());
-      const sendError = await transport
-        .send({ jsonrpc: "2.0", id: 1, method: "tools/call" })
-        .then(() => undefined)
-        .catch((error: unknown) => error);
-      expect(sendError).toBeInstanceOf(McpSseSessionExpiredError);
-      expect(isMcpHttpSessionExpired({ transport, transportType: "sse" }, sendError)).toBe(true);
-      expect(fetchMock.mock.calls.filter((call) => call[1]?.method === "POST")).toHaveLength(0);
+      await expectSseSessionReplaced(fixture);
     } finally {
-      await transport.close();
+      await fixture.transport.close();
     }
   });
 
   it("detects a replacement session when CR line endings straddle stream chunks", async () => {
-    let getCount = 0;
     const encoder = new TextEncoder();
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const method = init?.method ?? "GET";
-      if (method !== "GET") {
-        return new Response(null, { status: 202 });
-      }
-      getCount += 1;
+    const fixture = createSseReconnectFixture((getCount) => {
       // The event terminator is split across chunks: a trailing CR arrives first
       // and its CRLF partner only shows up in the following chunk.
       const head = `retry: 1\r\nevent: endpoint\rdata: /messages?session_id=${getCount}\r`;
-      return new Response(
+      return sseResponse(
         new ReadableStream<Uint8Array>({
           async start(controller) {
             controller.enqueue(encoder.encode(head));
@@ -590,43 +579,22 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
             controller.close();
           },
         }),
-        { headers: { "content-type": "text/event-stream" } },
       );
     });
-    const transport = new OpenClawSSEClientTransport(new URL("http://mcp.invalid/sse"), {
-      fetch: fetchMock,
-      eventSourceInit: { fetch: fetchMock },
-    });
-    const onclose = vi.fn();
-    // MCP transports expose callback properties rather than EventTarget listeners.
-    // oxlint-disable-next-line unicorn/prefer-add-event-listener
-    transport.onclose = onclose;
 
     try {
-      await transport.start();
+      await fixture.transport.start();
 
-      await vi.waitFor(() => expect(onclose).toHaveBeenCalledOnce());
-      const sendError = await transport
-        .send({ jsonrpc: "2.0", id: 1, method: "tools/call" })
-        .then(() => undefined)
-        .catch((error: unknown) => error);
-      expect(sendError).toBeInstanceOf(McpSseSessionExpiredError);
-      expect(fetchMock.mock.calls.filter((call) => call[1]?.method === "POST")).toHaveLength(0);
+      await expectSseSessionReplaced(fixture);
     } finally {
-      await transport.close();
+      await fixture.transport.close();
     }
   });
 
   it("detects a replacement session after CR-terminated comment traffic", async () => {
     let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
-    let getCount = 0;
     const encoder = new TextEncoder();
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const method = init?.method ?? "GET";
-      if (method !== "GET") {
-        return new Response(null, { status: 202 });
-      }
-      getCount += 1;
+    const fixture = createSseReconnectFixture((getCount) => {
       // Comment lines are not charged against the per-event size limit, so a
       // server can stream an unbounded number of them. The watcher has to
       // release each completed line instead of retaining the whole flood.
@@ -635,51 +603,32 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
         getCount === 1
           ? `retry: 1\r\r${keepAlives}event: endpoint\rdata: /messages?session_id=1\r\r: ping\r`
           : `retry: 1\r\revent: endpoint\rdata: /messages?session_id=2\r\r: ping\r`;
-      return new Response(
+      return sseResponse(
         new ReadableStream<Uint8Array>({
           start(controller) {
             streamController = controller;
             controller.enqueue(encoder.encode(payload));
           },
         }),
-        { headers: { "content-type": "text/event-stream" } },
       );
     });
-    const transport = new OpenClawSSEClientTransport(new URL("http://mcp.invalid/sse"), {
-      fetch: fetchMock,
-      eventSourceInit: { fetch: fetchMock },
-    });
-    const onclose = vi.fn();
-    // MCP transports expose callback properties rather than EventTarget listeners.
-    // oxlint-disable-next-line unicorn/prefer-add-event-listener
-    transport.onclose = onclose;
 
     try {
-      await transport.start();
+      await fixture.transport.start();
       streamController?.close();
 
-      await vi.waitFor(() => expect(onclose).toHaveBeenCalledOnce());
-      const sendError = await transport
-        .send({ jsonrpc: "2.0", id: 1, method: "tools/call" })
-        .then(() => undefined)
-        .catch((error: unknown) => error);
-      expect(sendError).toBeInstanceOf(McpSseSessionExpiredError);
-      expect(fetchMock.mock.calls.filter((call) => call[1]?.method === "POST")).toHaveLength(0);
+      await expectSseSessionReplaced(fixture);
     } finally {
-      await transport.close();
+      await fixture.transport.close();
     }
   });
 
   it("keeps redirect metadata on the watched SSE response", async () => {
     let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
     const encoder = new TextEncoder();
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const method = init?.method ?? "GET";
-      if (method !== "GET") {
-        return new Response(null, { status: 202 });
-      }
+    const fixture = createSseReconnectFixture(() => {
       // Simulate a followed redirect from /sse to a relocated route.
-      const response = new Response(
+      const response = sseResponse(
         new ReadableStream<Uint8Array>({
           start(controller) {
             streamController = controller;
@@ -688,7 +637,6 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
             );
           },
         }),
-        { headers: { "content-type": "text/event-stream" } },
       );
       Object.defineProperties(response, {
         url: { value: "https://mcp-relocated.invalid/sse-v2" },
@@ -696,14 +644,10 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
       });
       return response;
     });
-    const transport = new OpenClawSSEClientTransport(new URL("http://mcp.invalid/sse"), {
-      fetch: fetchMock,
-      eventSourceInit: { fetch: fetchMock },
-    });
 
     try {
-      await transport.start();
-      const eventSource = readSseEventSource(transport);
+      await fixture.transport.start();
+      const eventSource = readSseEventSource(fixture.transport);
       expect(eventSource).toBeDefined();
       const origins: string[] = [];
       eventSource?.addEventListener("endpoint", (event) => {
@@ -718,9 +662,38 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
       await vi.waitFor(() => expect(origins).toHaveLength(1));
       expect(origins[0]).toBe("https://mcp-relocated.invalid");
     } finally {
-      await transport.close();
+      await fixture.transport.close();
     }
   });
+
+  it("keeps short-line scanning linear across a large SSE chunk", async () => {
+    const encoder = new TextEncoder();
+    // Comment lines are not charged against the per-event size limit, so one chunk
+    // can carry a very large number of short lines. Searching every line for a
+    // delimiter the chunk does not contain must not rescan the remaining suffix.
+    // LF-only traffic isolates the watcher: eventsource-parser has a linear LF
+    // path, while its CR loop is quadratic on its own (upstream, out of scope).
+    const timeFlood = async (lines: number): Promise<number> => {
+      const payload = `${": ping\n".repeat(lines)}event: endpoint\ndata: /messages?session_id=1\n\n: tail\n`;
+      const fixture = createSseReconnectFixture(() => sseResponse(encoder.encode(payload)));
+      try {
+        const started = performance.now();
+        await fixture.transport.start();
+        const elapsed = performance.now() - started;
+        expect(fixture.onclose).not.toHaveBeenCalled();
+        return elapsed;
+      } finally {
+        await fixture.transport.close();
+      }
+    };
+
+    const smaller = await timeFlood(100_000);
+    const larger = await timeFlood(400_000);
+    expect(larger, "a 400k short-line SSE chunk must not stall the watcher").toBeLessThan(5_000);
+    // Quadrupling the lines may cost a few multiples more (allocation, GC and
+    // scheduling slack); a per-line suffix rescan grows an order beyond that.
+    expect(larger).toBeLessThan(smaller * 6 + 500);
+  }, 60_000);
 
   it("closes after Streamable notification retry exhaustion", async () => {
     let getCount = 0;
