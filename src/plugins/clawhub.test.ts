@@ -809,6 +809,107 @@ describe("installPluginFromClawHub", () => {
     }
   });
 
+  it("falls back to the runtime-compatible release when latest drifts ahead of the gateway", async () => {
+    resolveLatestVersionFromPackageMock.mockReturnValue("2026.3.24");
+    mockOfficialClawHubPackageDetail({
+      latestVersion: "2026.3.24",
+      compatibility: { pluginApiRange: ">=2026.3.24", minGatewayVersion: "2026.3.24" },
+    });
+    resolveCompatibilityHostVersionMock.mockReturnValue("2026.3.22");
+    fetchClawHubPackageVersionMock.mockImplementation((params: { version?: string }) =>
+      Promise.resolve({
+        version:
+          params.version === "2026.3.24"
+            ? {
+                version: "2026.3.24",
+                createdAt: 0,
+                changelog: "",
+                sha256hash: DEMO_ARCHIVE_SHA256,
+                compatibility: { pluginApiRange: ">=2026.3.24", minGatewayVersion: "2026.3.24" },
+              }
+            : {
+                version: "2026.3.22",
+                createdAt: 0,
+                changelog: "",
+                sha256hash: DEMO_ARCHIVE_SHA256,
+                compatibility: { pluginApiRange: ">=2026.3.22", minGatewayVersion: "2026.3.0" },
+              },
+      }),
+    );
+    const logger = createLoggerSpies();
+
+    const result = await installPluginFromClawHub({ spec: "clawhub:demo", logger });
+
+    expectSuccessfulClawHubInstall(result);
+    expect(archiveDownloadCall().version).toBe("2026.3.22");
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("using the compatible release demo@2026.3.22 instead"),
+    );
+  });
+
+  it("keeps the incompatibility failure when no runtime-compatible release is published", async () => {
+    resolveLatestVersionFromPackageMock.mockReturnValue("2026.3.24");
+    mockOfficialClawHubPackageDetail({
+      latestVersion: "2026.3.24",
+      compatibility: { pluginApiRange: ">=2026.3.24", minGatewayVersion: "2026.3.24" },
+    });
+    resolveCompatibilityHostVersionMock.mockReturnValue("2026.3.22");
+    fetchClawHubPackageVersionMock.mockImplementation((params: { version?: string }) =>
+      params.version === "2026.3.24"
+        ? Promise.resolve({
+            version: {
+              version: "2026.3.24",
+              createdAt: 0,
+              changelog: "",
+              sha256hash: DEMO_ARCHIVE_SHA256,
+              compatibility: { pluginApiRange: ">=2026.3.24", minGatewayVersion: "2026.3.24" },
+            },
+          })
+        : Promise.reject(
+            new ClawHubRequestError({
+              path: `/api/v1/packages/demo/versions/${params.version ?? "unknown"}`,
+              status: 404,
+              body: "Not Found",
+            }),
+          ),
+    );
+
+    const result = await installPluginFromClawHub({ spec: "clawhub:demo" });
+
+    const failure = expectInstallFailure(result);
+    expect(failure.code).toBe(CLAWHUB_INSTALL_ERROR_CODE.INCOMPATIBLE_PLUGIN_API);
+    expect(failure.error).toContain(">=2026.3.24");
+    expect(downloadClawHubPackageArchiveMock).not.toHaveBeenCalled();
+  });
+
+  it("does not re-resolve an explicitly pinned version after a compatibility failure", async () => {
+    resolveLatestVersionFromPackageMock.mockReturnValue("2026.3.24");
+    mockOfficialClawHubPackageDetail({
+      latestVersion: "2026.3.24",
+      compatibility: { pluginApiRange: ">=2026.3.24", minGatewayVersion: "2026.3.24" },
+    });
+    parseClawHubPluginSpecMock.mockReturnValueOnce({ name: "demo", version: "2026.3.24" });
+    resolveCompatibilityHostVersionMock.mockReturnValue("2026.3.22");
+    fetchClawHubPackageVersionMock.mockResolvedValue({
+      version: {
+        version: "2026.3.24",
+        createdAt: 0,
+        changelog: "",
+        sha256hash: DEMO_ARCHIVE_SHA256,
+        compatibility: { pluginApiRange: ">=2026.3.24", minGatewayVersion: "2026.3.24" },
+      },
+    });
+
+    const result = await installPluginFromClawHub({ spec: "clawhub:demo@2026.3.24" });
+
+    const failure = expectInstallFailure(result);
+    expect(failure.code).toBe(CLAWHUB_INSTALL_ERROR_CODE.INCOMPATIBLE_PLUGIN_API);
+    for (const call of fetchClawHubPackageVersionMock.mock.calls) {
+      expect((call[0] as { version?: string }).version).toBe("2026.3.24");
+    }
+    expect(downloadClawHubPackageArchiveMock).not.toHaveBeenCalled();
+  });
+
   it.each([
     {
       name: "installs when a beta runtime is on the same plugin API floor",

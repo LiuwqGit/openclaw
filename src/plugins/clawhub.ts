@@ -45,6 +45,7 @@ import { root } from "../infra/fs-safe.js";
 import type { ExtractedArchiveVerification } from "../infra/install-flow.js";
 import type { TimedInstallModeOptions } from "../infra/install-mode-options.js";
 import { withInstallActivity } from "../infra/install-progress.js";
+import { isExactSemverVersion } from "../infra/npm-registry-spec.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import type { RuntimeVersionEnv } from "../version.js";
 import { CLAWHUB_INSTALL_ERROR_CODE, type ClawHubInstallErrorCode } from "./clawhub-error-codes.js";
@@ -698,6 +699,70 @@ async function resolveCompatiblePackageVersion(params: {
   };
 }
 
+function isClawHubCompatibilityFailure(result: ClawHubInstallFailure): boolean {
+  return (
+    result.code === CLAWHUB_INSTALL_ERROR_CODE.INCOMPATIBLE_PLUGIN_API ||
+    result.code === CLAWHUB_INSTALL_ERROR_CODE.INCOMPATIBLE_GATEWAY
+  );
+}
+
+/**
+ * An unpinned official install resolves to the package's latest release, which
+ * starts demanding a newer plugin API as soon as the next OpenClaw release is
+ * published. Official packages ship one release per OpenClaw version, so retry
+ * selection against the release matching this runtime before failing — the same
+ * newest-compatible retry the npm installer performs. Explicit version pins,
+ * integrity pins, and non-official packages keep their original resolution, and
+ * a missing or still-incompatible runtime-bound release preserves the original
+ * incompatibility failure.
+ */
+async function resolveRuntimeCompatibleClawHubRelease(params: {
+  detail: ClawHubPackageDetail;
+  failure: ClawHubInstallFailure;
+  resolvedVersion: string;
+  requestedVersion?: string;
+  runtimeVersion: string;
+  hasIntegrityPin: boolean;
+  baseUrl?: string;
+  token?: string;
+  timeoutMs?: number;
+}): Promise<{
+  versionState: { ok: true } & ClawHubInstallArtifactDecision;
+  validation: Extract<ReturnType<typeof validateClawHubPluginPackage>, { ok: true }>;
+} | null> {
+  const requested = normalizeOptionalString(params.requestedVersion)?.toLowerCase();
+  if (
+    (requested !== undefined && requested !== "latest") ||
+    params.hasIntegrityPin ||
+    !isClawHubCompatibilityFailure(params.failure) ||
+    !isDefaultClawHubBaseUrl(params.baseUrl) ||
+    (params.detail.package?.channel !== "official" && !params.detail.package?.isOfficial) ||
+    !isExactSemverVersion(params.runtimeVersion) ||
+    params.runtimeVersion === params.resolvedVersion
+  ) {
+    return null;
+  }
+  const versionState = await resolveCompatiblePackageVersion({
+    detail: params.detail,
+    requestedVersion: params.runtimeVersion,
+    baseUrl: params.baseUrl,
+    token: params.token,
+    timeoutMs: params.timeoutMs,
+  });
+  if (!versionState.ok) {
+    return null;
+  }
+  const validation = validateClawHubPluginPackage({
+    detail: params.detail,
+    compatibility: versionState.compatibility,
+    runtimeVersion: params.runtimeVersion,
+  });
+  if (!validation.ok) {
+    return null;
+  }
+  return { versionState, validation };
+}
+
 function validateClawHubPluginPackage(params: {
   detail: ClawHubPackageDetail;
   compatibility?: ClawHubPackageCompatibility | null;
@@ -846,14 +911,35 @@ export async function installPluginFromClawHub(
       return versionState;
     }
     const runtimeVersion = resolveCompatibilityHostVersion(params.env);
-    const validation = validateClawHubPluginPackage({
+    let validation = validateClawHubPluginPackage({
       detail,
       compatibility: versionState.compatibility,
       runtimeVersion,
     });
+    let selectedVersionState: typeof versionState | null = null;
     if (!validation.ok) {
-      return validation;
+      const compatibleRelease = await resolveRuntimeCompatibleClawHubRelease({
+        detail,
+        failure: validation,
+        resolvedVersion: versionState.version,
+        requestedVersion: parsed.version,
+        runtimeVersion,
+        hasIntegrityPin: expectedIntegrity !== undefined,
+        baseUrl: params.baseUrl,
+        token: params.token,
+        timeoutMs: params.timeoutMs,
+      });
+      if (!compatibleRelease) {
+        return validation;
+      }
+      const releaseName = detail.package?.name ?? parsed.name;
+      params.logger?.warn?.(
+        `${formatClawHubReleaseLabel(releaseName, versionState.version)} is incompatible with this OpenClaw runtime (${validation.error}); using the compatible release ${formatClawHubReleaseLabel(releaseName, compatibleRelease.versionState.version)} instead.`,
+      );
+      selectedVersionState = compatibleRelease.versionState;
+      validation = compatibleRelease.validation;
     }
+    const activeVersionState = selectedVersionState ?? versionState;
     const packageRuntimeId = normalizeOptionalString(detail.package?.runtimeId);
     const capabilitiesRuntimeId = normalizeOptionalString(detail.package?.capabilities?.runtimeId);
     if (packageRuntimeId && capabilitiesRuntimeId && packageRuntimeId !== capabilitiesRuntimeId) {
@@ -876,7 +962,7 @@ export async function installPluginFromClawHub(
     return {
       ok: true as const,
       detail,
-      versionState,
+      versionState: activeVersionState,
       expectedPluginId: expectedPluginId ?? advertisedRuntimeId,
       clawhubFamily: validation.family,
     };
