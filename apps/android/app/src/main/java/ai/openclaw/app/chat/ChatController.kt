@@ -5384,11 +5384,26 @@ class ChatController internal constructor(
             _messages.value.mapNotNullTo(mutableSetOf()) { it.entryId }
           } else {
             val historyJson =
-              requestGatewayBound(
-                flushScope.gatewayId,
-                "chat.history",
-                sessionRequestParams(sessionKey, branchScope.ownerAgentId).toString(),
-              )
+              try {
+                requestGatewayBound(
+                  flushScope.gatewayId,
+                  "chat.history",
+                  sessionRequestParams(sessionKey, branchScope.ownerAgentId).toString(),
+                )
+              } catch (err: GatewayRequestRejected) {
+                if (err.gatewayError.code != "INVALID_REQUEST") throw err
+                // The persisted owner/session can never satisfy this gateway, so retrying the
+                // identical request cannot succeed. Park the queued rows with an actionable
+                // error and stop automatic recovery for this scope instead of re-requesting
+                // the rejected history every retry interval.
+                if (parkOutboxRowsRejectedByHistory(scopedRows, err.gatewayError.message)) {
+                  markOutboxBranchReconciled(flushScope, branchScope)
+                  if (savedCandidate != null) {
+                    ambiguousMutationReconciliationStates.remove(reconciliationKey, savedCandidate)
+                  }
+                }
+                continue
+              }
             val history = parseHistory(historyJson, sessionKey = sessionKey, previousMessages = emptyList())
             if (mutationReconciliationState == null) {
               savedState = reconcileOutboxHistory(flushScope.gatewayId, branchScope, savedState, history) ?: continue
@@ -5433,6 +5448,24 @@ class ChatController internal constructor(
       }
     }
     publishOutbox()
+  }
+
+  /**
+   * Parks the queued rows of a scope whose history the gateway definitively rejected. Returns
+   * false when any status write fails so the caller leaves the scope unreconciled and recovery
+   * retries after the transient storage failure (fail closed, like the other park paths).
+   */
+  private suspend fun parkOutboxRowsRejectedByHistory(
+    rows: List<ChatOutboxItem>,
+    gatewayMessage: String,
+  ): Boolean {
+    val lastError = outboxHistoryRejectedError(gatewayMessage)
+    var parked = true
+    for (row in rows) {
+      if (row.status != ChatOutboxStatus.Queued) continue
+      if (updateOutboxStatusOrNull(row, ChatOutboxStatus.Failed, lastError) == null) parked = false
+    }
+    return parked
   }
 
   // Gated command rows enqueued under an older connection epoch park instead of auto-replaying;
