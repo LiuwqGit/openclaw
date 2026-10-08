@@ -229,6 +229,28 @@ function parseSseFieldLine(line: string): { field: string; value: string } | und
 }
 
 /**
+ * Locates the next SSE line terminator. eventsource-parser accepts LF, CR, and
+ * CRLF, so scanning for LF alone would miss CR-delimited `endpoint`
+ * announcements and keep every completed line resident in the buffer.
+ */
+function findSseLineEnd(buffer: string, from: number): { end: number; next: number } | undefined {
+  const lf = buffer.indexOf("\n", from);
+  const cr = buffer.indexOf("\r", from);
+  const index = lf < 0 ? cr : cr < 0 ? lf : Math.min(lf, cr);
+  if (index < 0) {
+    return undefined;
+  }
+  if (buffer[index] === "\n") {
+    return { end: index, next: index + 1 };
+  }
+  if (index + 1 === buffer.length) {
+    // Hold a trailing CR: only the next chunk can tell a lone CR from a split CRLF.
+    return undefined;
+  }
+  return { end: index, next: buffer[index + 1] === "\n" ? index + 2 : index + 1 };
+}
+
+/**
  * Passes stream chunks through unchanged while reporting every announced SSE
  * `endpoint` payload. Legacy MCP SSE servers create a fresh session per stream,
  * so a changed endpoint URL after a reconnect means later POSTs would target a
@@ -241,6 +263,7 @@ function watchSseEndpointEvents(
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffered = "";
+  let scanFrom = 0;
   let eventType = "";
   let dataLines: string[] = [];
   const consumeLine = (rawLine: string) => {
@@ -277,12 +300,20 @@ function watchSseEndpointEvents(
       }
       const chunk = value ?? new Uint8Array(0);
       buffered += decoder.decode(chunk, { stream: true });
-      let newline = buffered.indexOf("\n");
-      while (newline >= 0) {
-        consumeLine(buffered.slice(0, newline));
-        buffered = buffered.slice(newline + 1);
-        newline = buffered.indexOf("\n");
+      // Release each completed line so CR-terminated traffic (comments included)
+      // cannot accumulate without bound, and resume scanning where the previous
+      // chunk stopped instead of rescanning retained text.
+      let consumed = 0;
+      let lineEnd = findSseLineEnd(buffered, scanFrom);
+      while (lineEnd) {
+        consumeLine(buffered.slice(consumed, lineEnd.end));
+        consumed = lineEnd.next;
+        lineEnd = findSseLineEnd(buffered, consumed);
       }
+      if (consumed > 0) {
+        buffered = buffered.slice(consumed);
+      }
+      scanFrom = buffered.endsWith("\r") ? Math.max(0, buffered.length - 1) : buffered.length;
       controller.enqueue(chunk);
     },
     async cancel(reason) {
@@ -376,7 +407,7 @@ export class OpenClawSSEClientTransport extends OpenClawMcpHttpTransport {
           if (limited.status !== 200 || !isEventStreamResponse(limited) || !limited.body) {
             return limited;
           }
-          return new Response(
+          const watched = new Response(
             watchSseEndpointEvents(limited.body, (data) => this.handleAnnouncedEndpoint(data, url)),
             {
               status: limited.status,
@@ -384,6 +415,13 @@ export class OpenClawSSEClientTransport extends OpenClawMcpHttpTransport {
               headers: limited.headers,
             },
           );
+          // eventsource reads url/redirected off the response handed to it. The
+          // size limiter preserves both, so watching the body must not drop them.
+          Object.defineProperties(watched, {
+            url: { value: limited.url },
+            redirected: { value: limited.redirected },
+          });
+          return watched;
         },
       },
     });
