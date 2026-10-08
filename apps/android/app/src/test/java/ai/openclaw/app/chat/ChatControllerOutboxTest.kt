@@ -231,6 +231,7 @@ class ChatControllerOutboxTest {
     val sentThinkingLevels = mutableListOf<String>()
     val sentAttachmentFileNames = mutableListOf<List<String>>()
     val historyAgentIds = mutableListOf<String?>()
+    var historyGate: CompletableDeferred<Unit>? = null
     var historyFailure: ((sessionKey: String?, agentId: String?) -> Throwable?)? = null
     var echoDeliveredSendsInHistory = true
     private val deliveredSends = mutableListOf<DeliveredSend>()
@@ -296,6 +297,7 @@ class ChatControllerOutboxTest {
           val requestedKey = (params?.get("sessionKey") as? JsonPrimitive)?.content
           val requestedAgentId = (params?.get("agentId") as? JsonPrimitive)?.content
           historyAgentIds += requestedAgentId
+          historyGate?.await()
           historyFailure?.invoke(requestedKey, requestedAgentId)?.let { throw it }
           val echoed =
             if (echoDeliveredSendsInHistory) {
@@ -1553,6 +1555,77 @@ class ChatControllerOutboxTest {
       assertEquals(ChatOutboxStatus.Failed, outbox.rows().getValue("row-unknown-owner").status)
       assertEquals("queued for unknown owner", outbox.rows().getValue("row-unknown-owner").text)
       assertEquals(1, gateway.historyAgentIds.count { it == "openclaw" })
+    }
+
+  @Test
+  fun rowQueuedDuringPermanentBackgroundHistoryRejectionIsNotAdmittedForDelivery() =
+    outboxTest {
+      seed(
+        id = "row-unknown-owner",
+        text = "queued for unknown owner",
+        createdAtMs = System.currentTimeMillis(),
+        sessionKey = "agent:openclaw:background",
+        ownerAgentId = "openclaw",
+      )
+      gateway.historyGate = CompletableDeferred()
+      gateway.historyFailure = { _, agentId ->
+        if (agentId == "openclaw") {
+          GatewayRequestRejected(
+            GatewaySession.ErrorShape(
+              code = "INVALID_REQUEST",
+              message = "Unknown agent id \"openclaw\"",
+            ),
+          )
+        } else {
+          null
+        }
+      }
+      val chat = controller()
+      chat.load("agent:main:main")
+      advanceUntilIdle()
+
+      gateway.online = true
+      chat.handleGatewayEvent("health", null)
+      advanceTimeBy(5_000)
+      runCurrent()
+      assertEquals(1, gateway.historyAgentIds.count { it == "openclaw" })
+
+      // Queued while the rejection is awaited, so this row is absent from the parked set.
+      seed(
+        id = "row-during-rejection",
+        text = "queued during rejection",
+        createdAtMs = System.currentTimeMillis(),
+        sessionKey = "agent:openclaw:background",
+        ownerAgentId = "openclaw",
+      )
+
+      gateway.historyGate?.complete(Unit)
+      advanceUntilIdle()
+
+      // A rejected history read grants no delivery readiness: the later row must not dispatch
+      // onto an unreconciled branch, and the rejected history is not requested again.
+      assertTrue(gateway.sentIdempotencyKeys.isEmpty())
+      assertEquals(ChatOutboxStatus.Failed, outbox.rows().getValue("row-unknown-owner").status)
+      assertEquals(ChatOutboxStatus.Queued, outbox.rows().getValue("row-during-rejection").status)
+      assertEquals(1, gateway.historyAgentIds.count { it == "openclaw" })
+
+      // The next recovery pass parks the later row with the same actionable error, keeping its
+      // text for manual retry instead of leaving it silently queued.
+      chat.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+      val parkedLater = outbox.rows().getValue("row-during-rejection")
+      assertEquals(ChatOutboxStatus.Failed, parkedLater.status)
+      assertEquals("queued during rejection", parkedLater.text)
+      assertTrue(parkedLater.lastError.orEmpty().contains("Unknown agent id"))
+      assertTrue(gateway.sentIdempotencyKeys.isEmpty())
+      assertEquals(1, gateway.historyAgentIds.count { it == "openclaw" })
+
+      // An explicit retry re-reads history authoritatively; the standing rejection re-parks it.
+      chat.retryOutboxCommand("row-during-rejection")
+      advanceUntilIdle()
+      assertEquals(2, gateway.historyAgentIds.count { it == "openclaw" })
+      assertEquals(ChatOutboxStatus.Failed, outbox.rows().getValue("row-during-rejection").status)
+      assertTrue(gateway.sentIdempotencyKeys.isEmpty())
     }
 
   @Test
