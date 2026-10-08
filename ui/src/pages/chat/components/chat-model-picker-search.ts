@@ -6,9 +6,9 @@ function pickerMenu(target: EventTarget | null): HTMLElement | null {
     : null;
 }
 
-function visibleModelRows(root: HTMLElement): HTMLButtonElement[] {
+function selectableModelRows(root: HTMLElement): HTMLButtonElement[] {
   return [...root.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]")]
-    .filter((row) => !row.hidden)
+    .filter((row) => !row.hidden && isSelectableModelRow(row))
     .toSorted(
       (left, right) =>
         Number(left.dataset.chatModelRank ?? left.dataset.chatModelIndex ?? 0) -
@@ -18,10 +18,6 @@ function visibleModelRows(root: HTMLElement): HTMLButtonElement[] {
 
 function isSelectableModelRow(row: HTMLButtonElement): boolean {
   return !row.disabled && row.getAttribute("aria-disabled") !== "true";
-}
-
-function selectableModelRows(root: HTMLElement): HTMLButtonElement[] {
-  return visibleModelRows(root).filter(isSelectableModelRow);
 }
 
 function ensureModelPickerIds(menu: HTMLElement): void {
@@ -37,7 +33,11 @@ function ensureModelPickerIds(menu: HTMLElement): void {
     listbox.id = `${prefix}-listbox-${index}`;
     listbox
       .closest("section")
-      ?.querySelector("[data-chat-model-group-toggle]")
+      ?.querySelector(
+        listbox.hasAttribute("data-chat-model-more")
+          ? "[data-chat-model-more-toggle]"
+          : "[data-chat-model-group-toggle]",
+      )
       ?.setAttribute("aria-controls", listbox.id);
   });
   menu.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]").forEach((row, index) => {
@@ -110,6 +110,10 @@ function modelMatchRank(row: HTMLButtonElement, query: string): number | null {
   return reference.toLocaleLowerCase().includes(query) ? 5 : null;
 }
 
+function isDisclosureCollapsed(section: Element | null, toggleSelector: string): boolean {
+  return section?.querySelector(toggleSelector)?.getAttribute("aria-expanded") === "false";
+}
+
 export function updateModelSearch(input: HTMLInputElement, preserveHighlight = false): void {
   const menu = pickerMenu(input);
   if (!menu) {
@@ -118,14 +122,20 @@ export function updateModelSearch(input: HTMLInputElement, preserveHighlight = f
   ensureModelPickerIds(menu);
   const query = input.value.trim().toLocaleLowerCase();
   menu.toggleAttribute("data-chat-model-filtering", Boolean(query));
+  // Search reaches every model, so the "All models" disclosure only applies while browsing.
+  menu.querySelectorAll<HTMLElement>("[data-chat-model-more-toggle]").forEach((toggle) => {
+    toggle.hidden =
+      Boolean(query) ||
+      isDisclosureCollapsed(toggle.closest("section"), "[data-chat-model-group-toggle]");
+  });
   const rows = [...menu.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]")];
   const matches: Array<{ row: HTMLButtonElement; score: number; index: number }> = [];
   rows.forEach((row, index) => {
+    const section = row.closest("section");
     const collapsed =
-      row
-        .closest("section")
-        ?.querySelector("[data-chat-model-group-toggle]")
-        ?.getAttribute("aria-expanded") === "false";
+      isDisclosureCollapsed(section, "[data-chat-model-group-toggle]") ||
+      (row.closest("[data-chat-model-more]") !== null &&
+        isDisclosureCollapsed(section, "[data-chat-model-more-toggle]"));
     const score = query ? modelMatchRank(row, query) : collapsed ? null : 0;
     row.hidden = score === null;
     row.style.removeProperty("--chat-model-rank");
@@ -160,12 +170,6 @@ export function updateModelSearch(input: HTMLInputElement, preserveHighlight = f
 }
 
 export function resetModelSearch(details: HTMLDetailsElement): void {
-  details.querySelectorAll("[data-chat-model-provider-toggle]").forEach((toggle) => {
-    const selected = toggle
-      .closest("section")
-      ?.querySelector('[data-chat-model-option][aria-selected="true"]');
-    toggle.setAttribute("aria-expanded", String(Boolean(selected)));
-  });
   const input = details.querySelector<HTMLInputElement>("[data-chat-model-search]");
   if (!input) {
     return;
@@ -176,7 +180,7 @@ export function resetModelSearch(details: HTMLDetailsElement): void {
 
 export function toggleModelProviderGroup(event: MouseEvent): void {
   event.stopPropagation();
-  // SAFETY: Bound only to provider group buttons.
+  // SAFETY: Bound only to provider group and "All models" disclosure buttons.
   const toggle = event.currentTarget as HTMLButtonElement;
   toggle.setAttribute("aria-expanded", String(toggle.getAttribute("aria-expanded") !== "true"));
   const input = pickerMenu(toggle)?.querySelector<HTMLInputElement>("[data-chat-model-search]");

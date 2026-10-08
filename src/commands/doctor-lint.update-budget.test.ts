@@ -1,3 +1,5 @@
+import { syncBuiltinESMExports } from "node:module";
+import os from "node:os";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearHealthChecksForTest } from "../flows/health-check-registry.js";
@@ -78,6 +80,7 @@ async function runLintFixture(
   options: DoctorLintCliOptions = {},
   copied = true,
 ) {
+  const processTempDir = os.tmpdir();
   return withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg: OpenClawConfig = {
       agents: {
@@ -110,6 +113,10 @@ async function runLintFixture(
     );
     recordUpdateRunPhase(run.runId, "validating", {}, { env });
     closeOpenClawStateDatabaseForTest();
+    // Emulate the child's rehearsal env without moving the process-lived broker
+    // socket into state that this fixture removes after each case.
+    vi.spyOn(os, "tmpdir").mockReturnValue(processTempDir);
+    syncBuiltinESMExports();
     for (const [key, value] of Object.entries(env)) {
       if (value !== process.env[key]) {
         vi.stubEnv(key, value);
@@ -135,6 +142,7 @@ async function runLintFixture(
     } finally {
       stdout.mockRestore();
       vi.restoreAllMocks();
+      syncBuiltinESMExports();
       vi.unstubAllEnvs();
     }
   });
@@ -148,7 +156,7 @@ it.each([3, 480])(
     expect(result.exitCode, result.stdout).toBe(0);
     expect(report).toMatchObject({ ok: true, findings: [] });
     expect(result.elapsedMs).toBeLessThan(298_000);
-    expect(report.checksRun).toBe(agentCount === 3 ? 1 : 0);
+    expect(report.checksRun).toBe(agentCount === 3 ? 2 : 0);
     expect(report.warnings).toEqual([
       agentCount === 3
         ? {
@@ -276,7 +284,7 @@ it.each(["rehearsal", "standalone", "selected", "required-error", "plugin-error"
         : [],
     );
     if (deferred) {
-      expect(report.checksRun).toBe(required.length + 1);
+      expect(report.checksRun).toBe(required.length + 2);
       expect(JSON.parse(result.stdout).checksSkipped).toBe(optional.length);
       expect(result.elapsedMs).toBeLessThan(72_000);
     }
