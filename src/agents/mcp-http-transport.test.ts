@@ -4,9 +4,10 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { settlesWithin } from "../shared/settle-within.js";
-import { disposeMcpClient } from "./mcp-client-lifecycle.js";
+import { disposeMcpClient, isMcpHttpSessionExpired } from "./mcp-client-lifecycle.js";
 import { redactMcpDiagnosticError } from "./mcp-error.js";
 import {
+  McpSseSessionExpiredError,
   OpenClawSSEClientTransport,
   OpenClawStreamableHTTPClientTransport,
 } from "./mcp-http-transport.js";
@@ -386,6 +387,110 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
         "closed",
       );
       expect(fetchMock.mock.calls.filter((call) => call[1]?.method === "POST")).toHaveLength(0);
+    } finally {
+      await transport.close();
+    }
+  });
+
+  it("closes a legacy SSE transport when a reconnect announces a replacement session", async () => {
+    let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+    let getCount = 0;
+    const encoder = new TextEncoder();
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const method = init?.method ?? "GET";
+      if (method !== "GET") {
+        return new Response(null, { status: 202 });
+      }
+      getCount += 1;
+      const endpoint = `/messages?session_id=${getCount}`;
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            streamController = controller;
+            controller.enqueue(
+              encoder.encode(`retry: 1\n\nevent: endpoint\ndata: ${endpoint}\n\n`),
+            );
+          },
+        }),
+        { headers: { "content-type": "text/event-stream" } },
+      );
+    });
+    const transport = new OpenClawSSEClientTransport(new URL("http://mcp.invalid/sse"), {
+      fetch: fetchMock,
+      eventSourceInit: { fetch: fetchMock },
+    });
+    const onclose = vi.fn();
+    // MCP transports expose callback properties rather than EventTarget listeners.
+    // oxlint-disable-next-line unicorn/prefer-add-event-listener
+    transport.onclose = onclose;
+
+    try {
+      await transport.start();
+      // The server restarted: the stream ends and eventsource reconnects onto a
+      // fresh legacy session that never saw initialize.
+      streamController?.close();
+
+      await vi.waitFor(() => expect(onclose).toHaveBeenCalledOnce());
+      const sendError = await transport
+        .send({ jsonrpc: "2.0", id: 1, method: "tools/call" })
+        .then(() => undefined)
+        .catch((error: unknown) => error);
+      expect(sendError).toBeInstanceOf(McpSseSessionExpiredError);
+      expect(isMcpHttpSessionExpired({ transport, transportType: "sse" }, sendError)).toBe(true);
+      expect(fetchMock.mock.calls.filter((call) => call[1]?.method === "POST")).toHaveLength(0);
+    } finally {
+      await transport.close();
+    }
+  });
+
+  it("keeps a legacy SSE transport open when a reconnect re-announces the same session", async () => {
+    let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+    let getCount = 0;
+    const encoder = new TextEncoder();
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const method = init?.method ?? "GET";
+      if (method !== "GET") {
+        return new Response(null, { status: 202 });
+      }
+      getCount += 1;
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            streamController = controller;
+            controller.enqueue(
+              encoder.encode("retry: 1\n\nevent: endpoint\ndata: /messages?session_id=1\n\n"),
+            );
+          },
+        }),
+        { headers: { "content-type": "text/event-stream" } },
+      );
+    });
+    const transport = new OpenClawSSEClientTransport(new URL("http://mcp.invalid/sse"), {
+      fetch: fetchMock,
+      eventSourceInit: { fetch: fetchMock },
+    });
+    const onclose = vi.fn();
+    // MCP transports expose callback properties rather than EventTarget listeners.
+    // oxlint-disable-next-line unicorn/prefer-add-event-listener
+    transport.onclose = onclose;
+
+    try {
+      await transport.start();
+      streamController?.close();
+
+      await vi.waitFor(() => expect(getCount).toBe(2));
+      await expect(
+        transport.send({ jsonrpc: "2.0", method: "notifications/initialized" }),
+      ).resolves.toBeUndefined();
+      expect(onclose).not.toHaveBeenCalled();
+      const posts = fetchMock.mock.calls.filter((call) => call[1]?.method === "POST");
+      expect(posts).toHaveLength(1);
+      // The legacy transport POSTs to a URL instance built from the re-announced endpoint.
+      const postTarget = posts[0]?.[0];
+      expect(postTarget).toBeInstanceOf(URL);
+      expect(postTarget instanceof URL ? postTarget.searchParams.get("session_id") : null).toBe(
+        "1",
+      );
     } finally {
       await transport.close();
     }
