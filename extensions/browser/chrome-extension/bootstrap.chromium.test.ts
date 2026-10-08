@@ -562,8 +562,8 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
             const received = await uploadPage
               .locator("#upload")
               .evaluate((input: HTMLInputElement) => {
-                const file = input.files?.[0];
-                return file ? { name: file.name, size: file.size } : null;
+                const receivedFile = input.files?.[0];
+                return receivedFile ? { name: receivedFile.name, size: receivedFile.size } : null;
               });
             expect(received).toEqual({ name: path.basename(file), size });
             expect(uploadPathHandoffs - before).toBe(pathHandoff ? 1 : 0);
