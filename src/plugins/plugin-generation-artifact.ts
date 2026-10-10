@@ -106,6 +106,8 @@ function createPluginGenerationArtifact(
     return acquired;
   };
   const moduleCaptures = new Map<string, PluginModuleCapture>();
+  // jiti 2.7.0 resolution is expensive; filesystem/resolver context are stable within a capture, so memoize by dir+spec+conditions.
+  const resolutionMemo = new Map<string, string | undefined>();
   const resolveDependency = sourceFacts.resolveDependency;
   // Callers canonicalize roots; already-captured packages survive removal of their original files.
   const copyPackage = (
@@ -319,12 +321,14 @@ function createPluginGenerationArtifact(
             ? fileURLToPath(reference)
             : reference;
         const resolve = (specifier: string) => {
-          const resolved = resolver.esmResolve(specifier, {
-            try: true,
-            conditions: conditions
-              ? [...conditions]
-              : ["node", "module-sync", kind === "require" ? "require" : "import"],
-          });
+          const conditionsKey = conditions
+            ? [...conditions]
+            : ["node", "module-sync", kind === "require" ? "require" : "import"];
+          const memoKey = `${path.dirname(source)}\0${specifier}\0${conditionsKey.join("\0")}`;
+          const resolved = resolutionMemo.has(memoKey)
+            ? resolutionMemo.get(memoKey)
+            : resolver.esmResolve(specifier, { try: true, conditions: conditionsKey });
+          resolutionMemo.set(memoKey, resolved);
           if (!resolved?.startsWith("file:")) {
             return resolved;
           }
