@@ -47,6 +47,7 @@ type GuardedSessionManager = SessionManager &
       | "flushPendingToolResultsAsync"
       | "clearPendingToolResults"
       | "clearNextUserMessagePersistenceSuppression"
+      | "setNextUserMessagePersistenceSuppression"
     >
   > & {
     /** Refresh the exact owning run when a caller reuses this guarded manager. */
@@ -342,6 +343,8 @@ export function guardSessionManager(
   guardedSessionManager.clearPendingToolResults = guard.clearPendingToolResults;
   guardedSessionManager.clearNextUserMessagePersistenceSuppression =
     guard.clearNextUserMessagePersistenceSuppression;
+  guardedSessionManager.setNextUserMessagePersistenceSuppression =
+    guard.setNextUserMessagePersistenceSuppression;
   guardedSessionManager.setTranscriptRunContext = (
     runId,
     prepare,
