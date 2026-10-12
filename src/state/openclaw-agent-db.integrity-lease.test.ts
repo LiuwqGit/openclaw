@@ -260,7 +260,16 @@ it.each(["forced cleanup", "stale admission"])(
 
 it("does not certify a failed checkpoint or native close", () => {
   const owner = openOwner();
-  vi.spyOn(owner.database.walMaintenance, "close").mockReturnValueOnce(false);
+  const checkpointFailure = new Error("synthetic checkpoint failed");
+  const prepare = vi.spyOn(owner.database.db, "prepare").mockImplementationOnce(() => {
+    throw checkpointFailure;
+  });
+  expect(owner.database.walMaintenance.checkpoint()).toBe(false);
+  expect(owner.database.walMaintenance.health).toMatchObject({
+    state: "error",
+    error: checkpointFailure.message,
+  });
+  prepare.mockRestore();
   closeOpenClawAgentDatabaseByPath(owner.database.path);
   expect(owner.record()).toBeUndefined();
 
@@ -447,7 +456,7 @@ it.each(["", "-wal", "-shm", "-journal"])(
   },
 );
 
-it.each(["quarantine", "terminal latch"] as const)(
+it.each(["quarantine", "schema-version latch"] as const)(
   "gates fresh read-only admission on %s and permits a repaired generation",
   (condition) => {
     const owner = openOwner();
@@ -466,9 +475,9 @@ it.each(["quarantine", "terminal latch"] as const)(
       ).toBe(true);
     }
     closeOpenClawAgentDatabasesForTest();
-    const latchError = new Error("synthetic terminal latch");
-    latchError.name = "SqliteIntegrityError";
-    if (condition === "terminal latch") {
+    const latchError = new Error("synthetic schema-version latch");
+    latchError.name = "SqliteSchemaVersionError";
+    if (condition === "schema-version latch") {
       expect(recordOpenClawAgentDatabaseOpenFailure(owner.database.path, latchError)).toBe(true);
       expect(
         readOpenClawDatabaseQuarantineFailure("agent", owner.database.path, { env: owner.env }),
