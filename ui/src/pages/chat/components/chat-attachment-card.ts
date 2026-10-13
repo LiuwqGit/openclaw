@@ -93,10 +93,15 @@ export function prepareAttachmentCardHeader(options: AttachmentCardHeaderOptions
   const typeLabel = typeLabelKey
     ? translate(typeLabelKey)
     : resolveAttachmentFileIcon(options.label, options.mimeType).extensionLabel;
+  // Document cards carry no inline preview of their own, so their download control
+  // stays visible and labeled instead of deferring to the expand action.
+  const downloadLabeled = options.kind === "document";
   return {
     compactPreview: options.visualMode === "preview-with-favicon",
     formattedSize,
     metadata: [typeLabel, formattedSize].filter(Boolean).join(" · "),
+    downloadLabeled,
+    downloadLabel: downloadLabeled ? translate("chat.attachments.download") : "",
     downloadTitle: translate("chat.mediaPlayer.download", { filename: options.label }),
     expandLabel:
       options.expandLabel ?? translate("chat.attachments.expand", { filename: options.label }),
@@ -105,12 +110,26 @@ export function prepareAttachmentCardHeader(options: AttachmentCardHeaderOptions
 
 export function renderAttachmentCardHeader(options: AttachmentCardHeaderOptions): TemplateResult {
   const skeleton = options.loading ? "skeleton" : "";
-  const { compactPreview, formattedSize, metadata, downloadTitle, expandLabel } =
-    prepareAttachmentCardHeader(options);
+  const {
+    compactPreview,
+    formattedSize,
+    metadata,
+    downloadLabeled,
+    downloadLabel,
+    downloadTitle,
+    expandLabel,
+  } = prepareAttachmentCardHeader(options);
   const hasOpenAction = options.onExpand !== undefined;
   const downloadClass = `chat-assistant-attachment-card__action chat-assistant-attachment-card__download chat-assistant-attachment-card__download--ghost ${
-    hasOpenAction ? "chat-assistant-attachment-card__download--secondary" : ""
+    downloadLabeled
+      ? "chat-assistant-attachment-card__action--labeled"
+      : hasOpenAction
+        ? "chat-assistant-attachment-card__download--secondary"
+        : ""
   }`;
+  const downloadContent = downloadLabeled
+    ? html`${icons.download}<span>${downloadLabel}</span>`
+    : icons.download;
   return html`
     <div
       class="chat-assistant-attachment-card__header ${
@@ -163,7 +182,7 @@ export function renderAttachmentCardHeader(options: AttachmentCardHeaderOptions)
                 title=${downloadTitle}
                 @click=${options.onDownload}
               >
-                ${icons.download}
+                ${downloadContent}
               </button>`
             : options.downloadHref || options.downloadPending
               ? html`<a
@@ -177,7 +196,7 @@ export function renderAttachmentCardHeader(options: AttachmentCardHeaderOptions)
                   rel="noreferrer"
                   aria-label=${downloadTitle}
                   title=${downloadTitle}
-                  >${icons.download}</a
+                  >${downloadContent}</a
                 >`
               : null
         }

@@ -30,6 +30,44 @@ it("keeps downloads separate from opening the attachment, including detached SVG
   expect(open).toHaveBeenCalledTimes(2);
 });
 
+it("labels document downloads while media downloads stay hover-only icons", () => {
+  const documentCard = mountSolid(() => (
+    <CompactAttachmentCard
+      kind="document"
+      label="bundle.zip"
+      mimeType="application/zip"
+      downloadHref="/media/bundle.zip"
+      onExpand={() => {}}
+    />
+  ));
+  flush();
+  const download = documentCard.getByRole("link", { name: /download/i });
+  expect(download.classList.contains("chat-assistant-attachment-card__download--secondary")).toBe(
+    false,
+  );
+  expect(download.classList.contains("chat-assistant-attachment-card__action--labeled")).toBe(true);
+  expect(download.textContent).toContain("Download");
+
+  const mediaCard = mountSolid(() => (
+    <CompactAttachmentCard
+      kind="audio"
+      label="clip.mp3"
+      mimeType="audio/mpeg"
+      downloadHref="/media/clip.mp3"
+      onExpand={() => {}}
+    />
+  ));
+  flush();
+  const mediaDownload = mediaCard.getByRole("link", { name: /download/i });
+  expect(
+    mediaDownload.classList.contains("chat-assistant-attachment-card__download--secondary"),
+  ).toBe(true);
+  expect(mediaDownload.classList.contains("chat-assistant-attachment-card__action--labeled")).toBe(
+    false,
+  );
+  expect(mediaDownload.textContent).not.toContain("Download");
+});
+
 it("updates pending download links and file metadata without replacing the card", () => {
   const [pending, setPending] = createSignal(true);
   const [label, setLabel] = createSignal("report.pdf");

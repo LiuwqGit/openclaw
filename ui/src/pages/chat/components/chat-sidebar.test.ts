@@ -445,6 +445,10 @@ describe("markdown sidebar", () => {
       expect(download?.getAttribute("href")).toBe(src);
       expect(download?.target).toBe("_blank");
       expect(download?.rel).toBe("noreferrer");
+      expect(download?.classList.contains("chat-assistant-attachment-card__action--labeled")).toBe(
+        true,
+      );
+      expect(download?.textContent).toContain("Download");
       expect(fetchMock).not.toHaveBeenCalled();
       panel.remove();
     },
