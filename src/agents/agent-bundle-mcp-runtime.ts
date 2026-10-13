@@ -873,6 +873,9 @@ function createServerMcpRuntime(
     const signal = getSessionMcpRequestSignal();
     signal?.throwIfAborted();
     await racePromiseWithAbortSignal(getCatalog(), signal);
+    if (catalogInFlight && !currentSession?.connected) {
+      await racePromiseWithAbortSignal(catalogInFlight, signal);
+    }
     return requireConnectedSession();
   };
 
