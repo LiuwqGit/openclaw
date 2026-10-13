@@ -19,7 +19,10 @@ import {
   readSessionTranscriptFailureRunId,
   readSessionTranscriptRunId,
 } from "../sessions/transcript-events.js";
-import { formatProviderRefusalText } from "../shared/assistant-error-format.js";
+import {
+  CONTEXT_OVERFLOW_ERROR_MESSAGE,
+  formatProviderRefusalText,
+} from "../shared/assistant-error-format.js";
 import {
   isOpenClawMessageToolMirrorAssistantMessage,
   isTranscriptOnlyOpenClawAssistantMessage,
@@ -60,6 +63,7 @@ export type ChatDisplayProjectionOptions = {
   resolveCronJobName?: (jobId: string) => string | undefined;
   includeCommentaryFallbacks?: boolean;
   maxChars?: number;
+  toolResultMaxChars?: number;
   activity?: false;
   resolveCurrentUserProfileDisplay?: CurrentUserProfileDisplayResolver;
   stripEnvelope?: boolean;
@@ -311,7 +315,22 @@ export function isPendingAssistantError(value: unknown): boolean {
     (isPureStreamErrorFallbackAssistantMessage(message) ||
       (Boolean(readSessionTranscriptRunId(message)) &&
         !hasAssistantDisplayableNonTextContent(message) &&
-        !hasVisibleAssistantDisplayContent(message)))
+        !hasTranscriptMediaFacts(message) &&
+        (!hasVisibleAssistantDisplayContent(message) ||
+          // Older projections stored the host error copy as assistant text. It
+          // is diagnostic-only, but partial answers and media must stay visible.
+          extractAssistantTextForSilentCheck(message)
+            ?.trim()
+            .replace(/^⚠️\s*/u, "") === CONTEXT_OVERFLOW_ERROR_MESSAGE)))
+  );
+}
+
+/** Hidden retry prompts continue a turn; only a real user input ends recovery matching. */
+export function isChatHistoryRecoveryUserBoundary(value: unknown): boolean {
+  const message = asOptionalRecord(value);
+  return (
+    message?.role === "user" &&
+    !(message.display === false && asOptionalRecord(message.provenance)?.kind === "internal_system")
   );
 }
 
@@ -327,7 +346,7 @@ export function createChatHistoryRecoveryProjection(options?: ChatHistoryRecover
   const append = (message: Record<string, unknown>) => {
     const index = messages.length;
     messages.push(message);
-    if (message.role === "user") {
+    if (isChatHistoryRecoveryUserBoundary(message)) {
       unseenPending = false;
       pendingIndexes = [];
       return;
@@ -501,6 +520,7 @@ export function projectChatDisplayMessagesWithState(
   const displayMessages = sanitizeChatHistoryMessages(
     mergeTtsSupplementMessages(filtered.messages),
     options?.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+    { toolResultMaxChars: options?.toolResultMaxChars },
   ) as Array<Record<string, unknown>>;
   const result: ChatDisplayProjectionResult = {
     activity,
