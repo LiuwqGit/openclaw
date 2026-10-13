@@ -153,6 +153,14 @@ function createFleet(
         cfg.session = { ...cfg.session, store: path.join(agentDir, "openclaw-agent.sqlite") };
       }
     },
+    // Simulate "config source revision N accepted": a fresh, equivalent runtime config object.
+    reloadConfig: () => {
+      cfg = structuredClone(cfg);
+    },
+    // Simulate an overlapping secrets snapshot publication advancing the active revision.
+    bumpSecretsRevision: () => {
+      revision++;
+    },
     run: (
       run: (admission: StartupAdmission) => Promise<void>,
       preparationReady: Promise<void> = Promise.resolve(),
@@ -204,6 +212,7 @@ function createFleet(
 
 const recoveredMessage = "agent database recovered after background inspection and preparation";
 const progressMessage = "agent database startup preparation still running";
+const supersededRetryMessage = "agent database startup preparation was superseded; retrying";
 
 it("admits agents before transcript repair and joins repair on shutdown", async ({ signal }) => {
   const fleet = createFleet();
@@ -495,6 +504,101 @@ it.for(["agent removal", "database move", "deletion", "shutdown"] as const)(
         );
         expect(vi.getTimerCount()).toBe(0);
       }
+    });
+  },
+);
+
+it("retries a superseded publication after the runtime config is replaced", async ({ signal }) => {
+  const fleet = createFleet(["large"]);
+  const modelsEntered = createDeferredCore();
+  const releaseModels = fleet.hold();
+  mocks.refreshModels.mockImplementation(async () => {
+    modelsEntered.resolve();
+    await releaseModels.promise;
+  });
+  await fleet.run(async () => {
+    fleet.inspect(0);
+    await withinTest(modelsEntered.promise, signal);
+    // A fresh config source was accepted while the deferred publication was in flight.
+    fleet.reloadConfig();
+    releaseModels.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(readAgentDatabaseAdmissionRefusal("large", fleet)).toBeUndefined();
+    expect(mocks.info).toHaveBeenCalledWith(
+      recoveredMessage,
+      expect.objectContaining({ agentId: "large" }),
+    );
+    expect(mocks.warn).not.toHaveBeenCalledWith(
+      "agent database remains degraded",
+      expect.anything(),
+    );
+    // The superseded attempt released its publication turn; the retry recaptured the
+    // replaced config and published again against the current runtime.
+    expect(mocks.warn).toHaveBeenCalledWith(
+      supersededRetryMessage,
+      expect.objectContaining({ agentId: "large", attempt: 1 }),
+    );
+    expect(mocks.refreshSecrets).toHaveBeenCalledTimes(2);
+    expect(mocks.refreshModels).toHaveBeenCalledTimes(2);
+  });
+});
+
+it("retries a superseded publication after the active secrets revision advances", async ({
+  signal,
+}) => {
+  const fleet = createFleet(["large"]);
+  const modelsEntered = createDeferredCore();
+  const releaseModels = fleet.hold();
+  mocks.refreshModels.mockImplementation(async () => {
+    modelsEntered.resolve();
+    await releaseModels.promise;
+  });
+  await fleet.run(async () => {
+    fleet.inspect(0);
+    await withinTest(modelsEntered.promise, signal);
+    fleet.bumpSecretsRevision();
+    releaseModels.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(readAgentDatabaseAdmissionRefusal("large", fleet)).toBeUndefined();
+    expect(mocks.info).toHaveBeenCalledWith(
+      recoveredMessage,
+      expect.objectContaining({ agentId: "large" }),
+    );
+    expect(mocks.warn).not.toHaveBeenCalledWith(
+      "agent database remains degraded",
+      expect.anything(),
+    );
+    expect(mocks.refreshSecrets).toHaveBeenCalledTimes(2);
+    expect(mocks.refreshModels).toHaveBeenCalledTimes(2);
+  });
+});
+
+it.for(["agent removal", "database move"] as const)(
+  "does not readmit after %s during publication",
+  async (outcome, { signal }) => {
+    const fleet = createFleet(["large"]);
+    const modelsEntered = createDeferredCore();
+    const releaseModels = fleet.hold();
+    mocks.refreshModels.mockImplementation(async () => {
+      modelsEntered.resolve();
+      await releaseModels.promise;
+    });
+    await fleet.run(async () => {
+      fleet.inspect(0);
+      await withinTest(modelsEntered.promise, signal);
+      fleet.changeAgentDatabase("large", outcome);
+      releaseModels.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      const refusal = readAgentDatabaseAdmissionRefusal("large", fleet);
+      expect(refusal?.code).toBe("agent-database-inspection-failed");
+      expect(mocks.info).not.toHaveBeenCalledWith(recoveredMessage, expect.anything());
+      expect(mocks.warn).toHaveBeenCalledWith(
+        "agent database remains degraded",
+        expect.objectContaining({
+          agentId: "large",
+          reason: expect.stringContaining("database configuration changed"),
+        }),
+      );
     });
   },
 );
