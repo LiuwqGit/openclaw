@@ -170,6 +170,16 @@ async function convertAnthropicMessages(
 ): Promise<AnthropicWireMessage[]> {
   const params: AnthropicWireMessage[] = [];
   const appendMessage = (message: AnthropicWireMessage) => {
+    if (message.role === "system") {
+      // Anthropic rejects in-history system messages that do not follow a user
+      // turn. Replay can drop the anchoring turn (excluded Talk consult prompts,
+      // orphaned tool results), so drop the stranded update rather than sending
+      // a request the Messages API rejects with a 400 before inference.
+      const previous = params.at(-1);
+      if (previous === undefined || previous.role === "assistant") {
+        return;
+      }
+    }
     // Interrupted turns can leave a system update last; retain it before the next user turn.
     if (message.role === "user" && params.at(-1)?.role === "system") {
       params.push({

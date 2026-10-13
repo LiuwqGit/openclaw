@@ -134,6 +134,157 @@ describe("Anthropic runtime-context cache lifecycle", () => {
     },
   );
 
+  it("drops operator updates orphaned by excluded-consult replay between two consults", async () => {
+    const model = { ...anthropicModel, id: "claude-opus-5-5" };
+    // Consult one runs live with its generated prompt and a tool round; every
+    // serialized position is valid, so the first consult succeeds (#171227).
+    const consultOne: Context["messages"] = [
+      { role: "user", content: "First consult question", timestamp: 1 },
+      {
+        role: "user",
+        content: "First consult facts",
+        timestamp: 2,
+        operatorMessage: { turnScoped: true },
+      },
+      {
+        role: "assistant",
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        timestamp: 3,
+        stopReason: "toolUse",
+        usage: createZeroUsage(),
+        content: [{ type: "toolCall", id: "consult_lookup", name: "lookup", arguments: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "consult_lookup",
+        toolName: "lookup",
+        isError: false,
+        timestamp: 4,
+        content: [{ type: "text", text: "Calendar entry" }],
+      },
+      {
+        role: "user",
+        content: "Renewed consult facts",
+        timestamp: 5,
+        operatorMessage: { turnScoped: true },
+      },
+      {
+        role: "assistant",
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        timestamp: 6,
+        stopReason: "stop",
+        usage: createZeroUsage(),
+        content: [{ type: "text", text: "First consult answer" }],
+      },
+    ];
+    // Consult two replays the stored turn without the excluded consult prompt:
+    // the first operator update loses its user anchor and must not serialize as
+    // a leading system message the Messages API rejects with a 400.
+    const consultTwo: Context["messages"] = [
+      ...consultOne.slice(1),
+      { role: "user", content: "Second consult question", timestamp: 7 },
+      {
+        role: "user",
+        content: "Second consult facts",
+        timestamp: 8,
+        operatorMessage: { turnScoped: true },
+      },
+    ];
+    for (const implementation of ["provider", "transport"] as const) {
+      const first = await captureAnthropicRequest(implementation, {
+        model,
+        cacheRetention: "none",
+        context: { ...context, messages: consultOne },
+      });
+      expect(first.payload.messages).toMatchObject([
+        { role: "user", content: "First consult question" },
+        {
+          role: "system",
+          content: [{ type: "text", text: "First consult facts" }],
+          clear_at: "next_user_message",
+        },
+        { role: "assistant", content: [{ type: "tool_use", id: "consult_lookup" }] },
+        { role: "user", content: [{ type: "tool_result", tool_use_id: "consult_lookup" }] },
+        {
+          role: "system",
+          content: [{ type: "text", text: "Renewed consult facts" }],
+          clear_at: "next_user_message",
+        },
+        // Opus 5 identities strip a trailing no-prefill assistant turn; the
+        // serialized positions before it stay valid, so consult one succeeds.
+      ]);
+      const second = await captureAnthropicRequest(implementation, {
+        model,
+        cacheRetention: "none",
+        context: { ...context, messages: consultTwo },
+      });
+      expect(second.payload.messages).toMatchObject([
+        { role: "assistant", content: [{ type: "tool_use", id: "consult_lookup" }] },
+        { role: "user", content: [{ type: "tool_result", tool_use_id: "consult_lookup" }] },
+        {
+          role: "system",
+          content: [{ type: "text", text: "Renewed consult facts" }],
+          clear_at: "next_user_message",
+        },
+        { role: "assistant", content: [{ type: "text", text: "First consult answer" }] },
+        { role: "user", content: "Second consult question" },
+        {
+          role: "system",
+          content: [{ type: "text", text: "Second consult facts" }],
+          clear_at: "next_user_message",
+        },
+      ]);
+      const wire = second.payload.messages as Array<{ role: string }>;
+      expect(wire[0]?.role).not.toBe("system");
+      expect(
+        wire.some(
+          (message, index) =>
+            index > 0 && message.role === "system" && wire[index - 1]?.role === "assistant",
+        ),
+      ).toBe(false);
+    }
+  });
+
+  it("drops an operator update stranded after a finished assistant turn", async () => {
+    const model = { ...anthropicModel, id: "claude-opus-5-5" };
+    const messages: Context["messages"] = [
+      { role: "user", content: "Typed question", timestamp: 1 },
+      {
+        role: "assistant",
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        timestamp: 2,
+        stopReason: "stop",
+        usage: createZeroUsage(),
+        content: [{ type: "text", text: "Typed answer" }],
+      },
+      {
+        role: "user",
+        content: "Excluded consult prompt facts",
+        timestamp: 3,
+        operatorMessage: { turnScoped: false },
+      },
+      { role: "user", content: "Next typed question", timestamp: 4 },
+    ];
+    for (const implementation of ["provider", "transport"] as const) {
+      const { payload } = await captureAnthropicRequest(implementation, {
+        model,
+        cacheRetention: "none",
+        context: { ...context, messages },
+      });
+      expect(payload.messages).toEqual([
+        { role: "user", content: "Typed question" },
+        { role: "assistant", content: [{ type: "text", text: "Typed answer" }] },
+        { role: "user", content: "Next typed question" },
+      ]);
+    }
+  });
+
   it.each([true])(
     "sends operator context with system authority (turn-scoped=%s)",
     async (turnScoped) => {
