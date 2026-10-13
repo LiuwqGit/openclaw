@@ -1,0 +1,102 @@
+> Task :app:generateGatewayProtocol UP-TO-DATE
+> Task :app:generateNativeI18n UP-TO-DATE
+
+> Task :app:generateMermaidAssets
+vite v8.3.2 building client environment for production...
+transforming...
+$ node ../../scripts/run-node-package-bin.mts vite build
+✓ 9 modules transformed.
+rendering chunks...
+computing gzip size...
+../../apps/shared/mermaid/assets/mermaid/frame.js                            3.96 kB
+../../apps/shared/mermaid/assets/mermaid/assets/mermaid.min-RZ6v1efX.js  3,420.74 kB
+../../apps/shared/mermaid/assets/mermaid/native.js                          36.06 kB │ gzip: 14.15 kB
+
+✓ built in 1.94s
+
+> Task :app:validateThirdPartyLicenseAssets
+> Task :app:preBuild
+> Task :app:prePlayDebugBuild
+> Task :app:generatePlayDebugBuildConfig
+> Task :app:extractPlayDebugSupportedLocales
+> Task :app:mapPlayDebugSourceSetPaths
+> Task :wear-shared:preBuild UP-TO-DATE
+> Task :wear-shared:preDebugBuild UP-TO-DATE
+> Task :wear-shared:extractDebugSupportedLocales
+> Task :app:generatePlayDebugResources
+> Task :wear-shared:processDebugNavigationResources
+> Task :app:generatePlayDebugLocaleConfig
+> Task :app:processPlayDebugNavigationResources
+> Task :app:packagePlayDebugResources
+> Task :wear-shared:generateDebugResources
+> Task :wear-shared:packageDebugResources
+> Task :wear-shared:javaPreCompileDebug
+> Task :wear-shared:parseDebugLocalResources
+> Task :app:parsePlayDebugLocalResources
+> Task :wear-shared:writeDebugAarMetadata
+> Task :app:javaPreCompilePlayDebug
+> Task :wear-shared:generateDebugRFile
+> Task :app:generatePlayDebugRFile
+> Task :app:checkPlayDebugAarMetadata
+> Task :app:compilePlayDebugNavigationResources
+> Task :app:createPlayDebugCompatibleScreenManifests
+> Task :app:extractDeepLinksPlayDebug
+> Task :wear-shared:extractDeepLinksDebug
+> Task :wear-shared:mapDebugSourceSetPaths
+> Task :app:prePlayDebugUnitTestBuild
+> Task :wear-shared:compileDebugLibraryResources
+> Task :app:javaPreCompilePlayDebugUnitTest
+> Task :wear-shared:processDebugManifest
+> Task :app:extractCloudflareSodiumTest
+> Task :app:mergePlayDebugResources
+> Task :app:processPlayDebugMainManifest
+> Task :app:processPlayDebugManifest
+> Task :app:processPlayDebugManifestForPackage
+> Task :app:generatePlayDebugAssets UP-TO-DATE
+> Task :wear-shared:generateDebugAssets UP-TO-DATE
+> Task :wear-shared:mergeDebugAssets
+> Task :app:mergePlayDebugAssets
+> Task :app:mergePlayDebugUnitTestManifest
+> Task :app:processPlayDebugUnitTestManifest
+> Task :app:processPlayDebugResources
+> Task :app:packagePlayDebugUnitTestForUnitTest
+> Task :app:generatePlayDebugUnitTestConfig
+> Task :wear-shared:compileDebugKotlin
+> Task :wear-shared:compileDebugJavaWithJavac NO-SOURCE
+> Task :wear-shared:processDebugJavaRes
+> Task :wear-shared:bundleLibRuntimeToJarDebug
+> Task :wear-shared:bundleLibCompileToJarDebug
+> Task :app:kspPlayDebugKotlin
+> Task :app:compilePlayDebugKotlin
+> Task :app:compilePlayDebugJavaWithJavac
+> Task :app:processPlayDebugJavaRes
+> Task :app:bundlePlayDebugClassesToRuntimeJar
+> Task :app:bundlePlayDebugClassesToCompileJar
+> Task :app:kspPlayDebugUnitTestKotlin
+> Task :app:compilePlayDebugUnitTestKotlin
+> Task :app:compilePlayDebugUnitTestJavaWithJavac NO-SOURCE
+> Task :app:processPlayDebugUnitTestJavaRes
+
+> Task :app:testPlayDebugUnitTest
+
+ClawComponentsTest > statusRowsKeepTheirHorizontalInsetInsideZeroPaddingPanels FAILED
+    java.lang.AssertionError: Status labels must keep the shared 10dp inset from the panel edge: title=Rect.fromLTRB(0.0, 8.0, 209.0, 27.0) panel=Rect.fromLTRB(0.0, 0.0, 280.0, 48.0)
+        at org.junit.Assert.fail(Assert.java:89)
+        at org.junit.Assert.assertTrue(Assert.java:42)
+        at ai.openclaw.app.ui.design.ClawComponentsTest.statusRowsKeepTheirHorizontalInsetInsideZeroPaddingPanels(ClawComponentsTest.kt:135)
+
+1 test completed, 1 failed
+
+> Task :app:testPlayDebugUnitTest FAILED
+57 actionable tasks: 55 executed, 2 up-to-date
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':app:testPlayDebugUnitTest'.
+> There were failing tests. See the report at: file:///home/0668000710/code/PR/aispace/worktrees/issue-171296/apps/android/app/build/reports/tests/testPlayDebugUnitTest/index.html
+
+* Try:
+> Run with --scan to get full insights from a Build Scan (powered by Develocity).
+
+BUILD FAILED in 3m 40s
