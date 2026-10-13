@@ -52,7 +52,7 @@ export function activateGatewayAgentDatabaseStartup(params: {
       signal.throwIfAborted();
       assertCurrent();
       if (!params.isCurrent()) {
-        throw new AgentDatabaseStartupSupersededError(agentId, "startup");
+        throw new Error(`Agent ${agentId} startup preparation was superseded`);
       }
       const currentConfig = params.getConfig();
       if (currentConfig !== cfg) {

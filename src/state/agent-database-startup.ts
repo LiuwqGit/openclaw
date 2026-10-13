@@ -27,7 +27,6 @@ import { readAgentDeletionJournalStatusInWorker } from "./agent-deletion-journal
 import {
   AGENT_DATABASE_PREFLIGHT_CONCURRENCY,
   AGENT_DATABASE_PREPARATION_CONCURRENCY,
-  AGENT_DATABASE_STARTUP_SUPERSEDED_ATTEMPTS,
   OPENCLAW_AGENT_SCHEMA_VERSION,
 } from "./openclaw-agent-db-contract.js";
 import {
@@ -79,6 +78,7 @@ type PendingRecovery = {
 };
 
 const PREPARATION_PROGRESS_INTERVAL_MS = 60_000;
+const STARTUP_PUBLICATION_ATTEMPTS = 4;
 
 function recoveryTiming(recovery: PendingRecovery, now = performance.now()) {
   return {
@@ -119,11 +119,6 @@ function matchesInspectionPath(
 const log = createSubsystemLogger("state/agent-admission");
 const startupAdmission = new AsyncLocalStorage<AgentDatabaseStartupAdmission>();
 
-/**
- * A deferred publication lost a race with an overlapping config or secrets refresh.
- * The database itself stays healthy; the startup owner retries the preparation
- * against the current runtime instead of recording a permanent degraded refusal.
- */
 export class AgentDatabaseStartupSupersededError extends Error {
   constructor(agentId: string, subject: "startup" | "secrets") {
     super(`Agent ${agentId} ${subject} preparation was superseded`);
@@ -408,6 +403,7 @@ class AgentDatabaseStartupAdmission {
       const checked = Promise.allSettled(inspections.map(({ result }) => result));
       // Gateway-owned recovery outlives the caller's temporary discovery snapshot.
       const work = runInDetachedAsyncContext(async () => {
+        const publicationComplete = createDeferredCore();
         const preparation: { maintenance?: () => Promise<void> } = {};
         try {
           const results = await checked;
@@ -459,92 +455,77 @@ class AgentDatabaseStartupAdmission {
               );
             }
           }
-          // An overlapping config or secrets refresh supersedes only the captured
-          // publication revision; the healthy database needs no repair. Retry the
-          // deferred preparation against the current runtime instead of freezing a
-          // transient coordination conflict into a permanent degraded refusal.
-          for (let attempt = 1; ; attempt++) {
-            // Each attempt owns its publication turn; a superseded attempt releases it.
-            const publicationComplete = createDeferredCore();
-            try {
-              phase("readiness");
-              await racePromiseWithAbortSignal(activation.preparationReady, this.signal);
-              assertCurrent();
-              await withSqliteReadOnlyWorkerScope(
-                async () => {
-                  await assertNotDeleted();
-                  await preparePendingAgentDatabase(refusal, { env, assertCurrent }, async () => {
-                    const input = {
-                      agentId,
-                      paths,
-                      env,
-                      signal: this.signal,
-                      assertCurrent,
-                      phase,
-                    };
-                    phase("open-wait");
-                    const release = await this.opening.acquire({ signal: this.signal });
-                    try {
-                      assertCurrent();
-                      phase("open");
-                      await activation.openAgent(input);
-                    } finally {
-                      release?.();
-                    }
-                    phase("migration-wait");
-                    const releaseMigration = await this.migrating.acquire({ signal: this.signal });
-                    try {
-                      assertCurrent();
-                      phase("migration");
-                      const migrated = await activation.migrateAgent(input);
-                      preparation.maintenance = migrated ? migrated.maintain : undefined;
-                    } finally {
-                      releaseMigration?.();
-                    }
-                    // Keep the revision until admission publishes after its final journal check.
-                    phase("publication-wait");
-                    const previous = this.publication;
-                    this.publication = publicationComplete.promise;
-                    await previous;
-                    assertCurrent();
-                    this.publishingAgentId = agentId;
+          phase("readiness");
+          await racePromiseWithAbortSignal(activation.preparationReady, this.signal);
+          assertCurrent();
+          await withSqliteReadOnlyWorkerScope(
+            async () => {
+              await assertNotDeleted();
+              await preparePendingAgentDatabase(refusal, { env, assertCurrent }, async () => {
+                const input = {
+                  agentId,
+                  paths,
+                  env,
+                  signal: this.signal,
+                  assertCurrent,
+                  phase,
+                };
+                phase("open-wait");
+                const release = await this.opening.acquire({ signal: this.signal });
+                try {
+                  assertCurrent();
+                  phase("open");
+                  await activation.openAgent(input);
+                } finally {
+                  release?.();
+                }
+                phase("migration-wait");
+                const releaseMigration = await this.migrating.acquire({ signal: this.signal });
+                try {
+                  assertCurrent();
+                  phase("migration");
+                  const migrated = await activation.migrateAgent(input);
+                  preparation.maintenance = migrated ? migrated.maintain : undefined;
+                } finally {
+                  releaseMigration?.();
+                }
+                // Keep the revision until admission publishes after its final journal check.
+                phase("publication-wait");
+                const previous = this.publication;
+                this.publication = publicationComplete.promise;
+                await previous;
+                assertCurrent();
+                this.publishingAgentId = agentId;
+                // Retry only publication; opening and migration have already completed.
+                for (let attempt = 1; ; attempt++) {
+                  try {
                     await activation.publishAgent(input);
-                    phase("publication");
+                    break;
+                  } catch (error) {
+                    if (
+                      !(error instanceof AgentDatabaseStartupSupersededError) ||
+                      attempt >= STARTUP_PUBLICATION_ATTEMPTS
+                    ) {
+                      throw error;
+                    }
+                    log.warn("agent database startup preparation was superseded; retrying", {
+                      agentId,
+                      attempt,
+                    });
                     await assertNotDeleted();
-                  });
-                },
-                { signal: this.signal, deadlineOwnedByCaller: true },
-              );
-              log.info("agent database recovered after background inspection and preparation", {
-                agentId,
-                paths,
-                ...recoveryTiming(recovery),
+                  }
+                }
+                phase("publication");
+                await assertNotDeleted();
               });
-              break;
-            } catch (error) {
-              if (
-                attempt >= AGENT_DATABASE_STARTUP_SUPERSEDED_ATTEMPTS ||
-                !(error instanceof AgentDatabaseStartupSupersededError) ||
-                this.stopped ||
-                !activation.isCurrent() ||
-                this.pending.get(agentId) !== recovery
-              ) {
-                throw error;
-              }
-              log.warn("agent database startup preparation was superseded; retrying", {
-                agentId,
-                paths,
-                reason: formatErrorMessage(error),
-                attempt,
-                ...recoveryTiming(recovery),
-              });
-            } finally {
-              if (this.publishingAgentId === agentId) {
-                this.publishingAgentId = undefined;
-              }
-              publicationComplete.resolve();
-            }
-          }
+            },
+            { signal: this.signal, deadlineOwnedByCaller: true },
+          );
+          log.info("agent database recovered after background inspection and preparation", {
+            agentId,
+            paths,
+            ...recoveryTiming(recovery),
+          });
         } catch (error) {
           if (!this.stopped) {
             const reason = formatErrorMessage(error);
@@ -564,6 +545,10 @@ class AgentDatabaseStartupAdmission {
           if (this.pending.size === 0) {
             this.clearProgress();
           }
+          if (this.publishingAgentId === agentId) {
+            this.publishingAgentId = undefined;
+          }
+          publicationComplete.resolve();
           completion.resolve();
         }
         // End the admission borrow and publication turn before advisory repair.

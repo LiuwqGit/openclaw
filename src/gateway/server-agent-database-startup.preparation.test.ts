@@ -153,11 +153,9 @@ function createFleet(
         cfg.session = { ...cfg.session, store: path.join(agentDir, "openclaw-agent.sqlite") };
       }
     },
-    // Simulate "config source revision N accepted": a fresh, equivalent runtime config object.
     reloadConfig: () => {
       cfg = structuredClone(cfg);
     },
-    // Simulate an overlapping secrets snapshot publication advancing the active revision.
     bumpSecretsRevision: () => {
       revision++;
     },
@@ -508,68 +506,64 @@ it.for(["agent removal", "database move", "deletion", "shutdown"] as const)(
   },
 );
 
-it("retries a superseded publication after the runtime config is replaced", async ({ signal }) => {
-  const fleet = createFleet(["large"]);
-  const modelsEntered = createDeferredCore();
-  const releaseModels = fleet.hold();
-  mocks.refreshModels.mockImplementation(async () => {
-    modelsEntered.resolve();
-    await releaseModels.promise;
-  });
-  await fleet.run(async () => {
-    fleet.inspect(0);
-    await withinTest(modelsEntered.promise, signal);
-    // A fresh config source was accepted while the deferred publication was in flight.
-    fleet.reloadConfig();
-    releaseModels.resolve();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(readAgentDatabaseAdmissionRefusal("large", fleet)).toBeUndefined();
-    expect(mocks.info).toHaveBeenCalledWith(
-      recoveredMessage,
-      expect.objectContaining({ agentId: "large" }),
-    );
-    expect(mocks.warn).not.toHaveBeenCalledWith(
-      "agent database remains degraded",
-      expect.anything(),
-    );
-    // The superseded attempt released its publication turn; the retry recaptured the
-    // replaced config and published again against the current runtime.
-    expect(mocks.warn).toHaveBeenCalledWith(
-      supersededRetryMessage,
-      expect.objectContaining({ agentId: "large", attempt: 1 }),
-    );
-    expect(mocks.refreshSecrets).toHaveBeenCalledTimes(2);
-    expect(mocks.refreshModels).toHaveBeenCalledTimes(2);
-  });
-});
+it.for(["config", "secrets", "secrets preparation"] as const)(
+  "retries a superseded publication after %s replacement",
+  async (replacement, { signal }) => {
+    const fleet = createFleet(["large"]);
+    const entered = createDeferredCore();
+    const release = fleet.hold();
+    if (replacement === "secrets preparation") {
+      const refresh = mocks.refreshSecrets.getMockImplementation()!;
+      mocks.refreshSecrets.mockImplementationOnce(async (params) => {
+        entered.resolve();
+        await release.promise;
+        return refresh(params);
+      });
+    } else {
+      mocks.refreshModels.mockImplementationOnce(async () => {
+        entered.resolve();
+        await release.promise;
+      });
+    }
+    await fleet.run(async (admission) => {
+      fleet.inspect(0);
+      await withinTest(entered.promise, signal);
+      if (replacement === "secrets") {
+        fleet.bumpSecretsRevision();
+      } else {
+        fleet.reloadConfig();
+      }
+      release.resolve();
+      await withinTest(admission.waitForAgentPreparation("large", fleet)!, signal);
+      expect(readAgentDatabaseAdmissionRefusal("large", fleet)).toBeUndefined();
+      expect(mocks.info).toHaveBeenCalledWith(
+        recoveredMessage,
+        expect.objectContaining({ agentId: "large" }),
+      );
+      expect(mocks.warn).toHaveBeenCalledWith(
+        supersededRetryMessage,
+        expect.objectContaining({ agentId: "large", attempt: 1 }),
+      );
+      expect(mocks.opened).toHaveBeenCalledTimes(1);
+      expect(mocks.migrate).toHaveBeenCalledTimes(1);
+      expect(mocks.refreshSecrets).toHaveBeenCalledTimes(2);
+    });
+  },
+);
 
-it("retries a superseded publication after the active secrets revision advances", async ({
-  signal,
-}) => {
+it("fails admission after four continuously superseded publications", async ({ signal }) => {
   const fleet = createFleet(["large"]);
-  const modelsEntered = createDeferredCore();
-  const releaseModels = fleet.hold();
-  mocks.refreshModels.mockImplementation(async () => {
-    modelsEntered.resolve();
-    await releaseModels.promise;
-  });
-  await fleet.run(async () => {
+  mocks.refreshModels.mockImplementation(async () => fleet.bumpSecretsRevision());
+  await fleet.run(async (admission) => {
     fleet.inspect(0);
-    await withinTest(modelsEntered.promise, signal);
-    fleet.bumpSecretsRevision();
-    releaseModels.resolve();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(readAgentDatabaseAdmissionRefusal("large", fleet)).toBeUndefined();
-    expect(mocks.info).toHaveBeenCalledWith(
-      recoveredMessage,
-      expect.objectContaining({ agentId: "large" }),
+    await withinTest(admission.waitForAgentPreparation("large", fleet)!, signal);
+    expect(readAgentDatabaseAdmissionRefusal("large", fleet)?.code).toBe(
+      "agent-database-inspection-failed",
     );
-    expect(mocks.warn).not.toHaveBeenCalledWith(
-      "agent database remains degraded",
-      expect.anything(),
-    );
-    expect(mocks.refreshSecrets).toHaveBeenCalledTimes(2);
-    expect(mocks.refreshModels).toHaveBeenCalledTimes(2);
+    expect(mocks.refreshModels).toHaveBeenCalledTimes(4);
+    expect(mocks.opened).toHaveBeenCalledTimes(1);
+    expect(mocks.migrate).toHaveBeenCalledTimes(1);
+    expect(mocks.info).not.toHaveBeenCalledWith(recoveredMessage, expect.anything());
   });
 });
 
@@ -583,12 +577,12 @@ it.for(["agent removal", "database move"] as const)(
       modelsEntered.resolve();
       await releaseModels.promise;
     });
-    await fleet.run(async () => {
+    await fleet.run(async (admission) => {
       fleet.inspect(0);
       await withinTest(modelsEntered.promise, signal);
       fleet.changeAgentDatabase("large", outcome);
       releaseModels.resolve();
-      await vi.advanceTimersByTimeAsync(0);
+      await withinTest(admission.waitForAgentPreparation("large", fleet)!, signal);
       const refusal = readAgentDatabaseAdmissionRefusal("large", fleet);
       expect(refusal?.code).toBe("agent-database-inspection-failed");
       expect(mocks.info).not.toHaveBeenCalledWith(recoveredMessage, expect.anything());

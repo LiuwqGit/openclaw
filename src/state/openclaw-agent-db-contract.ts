@@ -17,11 +17,6 @@ export const CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION = 21;
 export { AGENT_DATABASE_PREFLIGHT_CONCURRENCY } from "../infra/worker-pool-sizing.js";
 // Bounds startup session reconciliation for large fleets without letting one slow store hold every slot.
 export const AGENT_DATABASE_PREPARATION_CONCURRENCY = 4;
-// Bounds attempts for a superseded deferred publication: an overlapping config or
-// secrets refresh replaced the captured revision mid-flight, but the healthy
-// database itself needs no repair, so the startup owner retries against the
-// current runtime before recording a permanent degraded refusal.
-export const AGENT_DATABASE_STARTUP_SUPERSEDED_ATTEMPTS = 4;
 
 export type OpenClawAgentDatabase = {
   agentId: string;
