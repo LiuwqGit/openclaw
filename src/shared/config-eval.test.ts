@@ -217,6 +217,22 @@ describe("prepared binary availability", () => {
     expect((await prepareBinaryAvailability([bin])).hasBinary(bin)).toBe(true);
     expect(hasBinary(bin)).toBe(true);
   });
+
+  it("checks PATH freshness once per binary instead of once per candidate path", async () => {
+    const realCwd = process.cwd();
+    const root = tempDirs.make("openclaw-prepared-freshness-");
+    // Missing binaries over many PATH entries used to re-read the environment for every candidate path.
+    const pathEntries = Array.from({ length: 30 }, (_, index) =>
+      path.join(root, `missing-${index}`),
+    );
+    vi.stubEnv("PATH", pathEntries.join(path.delimiter));
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(realCwd);
+    const facts = await prepareBinaryAvailability(["missing-tool-a", "missing-tool-b"]);
+    expect(facts.hasBinary("missing-tool-a")).toBe(false);
+    expect(facts.hasBinary("missing-tool-b")).toBe(false);
+    expect(facts.isCurrent()).toBe(true);
+    expect(cwdSpy.mock.calls.length).toBeLessThan(20);
+  });
 });
 
 describe("runtime requirements through eligibility", () => {

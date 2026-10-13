@@ -158,7 +158,9 @@ export async function prepareBinaryAvailability(
     process.cwd() === cwd;
   const probe = async (bin: string) => {
     for (const candidate of binaryCandidates(search, bin)) {
-      if (failure || !isCurrent()) {
+      // Candidates come from the captured search; the worker loop and hit publication below
+      // still check freshness, so stale preparations are rejected without per-candidate env reads.
+      if (failure) {
         return;
       }
       assertCurrent?.();
