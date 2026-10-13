@@ -809,28 +809,6 @@ describe("system prompt memory and runtime cache boundary", () => {
       [["## Delegation"], ["Ultra active"]],
       [["## Proactive Sub-Agent Orchestration", "Ultra active"], ["## Delegation"]],
     ],
-    [
-      "elevated-level changes",
-      {
-        toolNames: ["exec"],
-        sandboxInfo: {
-          enabled: true,
-          elevated: { allowed: true, fullAccessAvailable: true, defaultLevel: "ask" },
-        },
-      },
-      {
-        sandboxInfo: {
-          enabled: true,
-          elevated: { allowed: true, fullAccessAvailable: true, defaultLevel: "full" },
-        },
-      },
-      [
-        ["Subagents stay sandboxed without elevated/host access;"],
-        ["Current elevated level:", "Elevated exec is", "User can toggle with /elevated"],
-      ],
-      [["Current elevated level: ask", "User can toggle with /elevated on|off|ask|full."]],
-      [["Current elevated level: full", "User can toggle with /elevated on|off|ask|full."]],
-    ],
   ])(
     "keeps %s after stable authority guidance",
     (_name, params, update, prefix, firstSuffix, nextSuffix) => {

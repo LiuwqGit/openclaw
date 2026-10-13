@@ -842,9 +842,6 @@ export function buildAgentSystemPrompt(params: {
       hasSessionsSpawn,
     }),
     ...subagentDelegationPreferenceSection,
-    // Per-run elevated facts change between run types (normal turn vs
-    // sessions_yield/announce re-entry); their guidance belongs below the
-    // cache boundary so the stable prefix stays byte-identical across turns.
     elevated?.allowed
       ? "Elevated exec is available for this session."
       : elevated
