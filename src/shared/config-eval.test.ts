@@ -218,15 +218,15 @@ describe("prepared binary availability", () => {
     expect(hasBinary(bin)).toBe(true);
   });
 
-  it("checks PATH freshness once per binary instead of once per candidate path", async () => {
-    const realCwd = process.cwd();
+  it("bounds environment reads when missing binaries expand across PATH and PATHEXT", async () => {
+    mockProcessPlatform("win32");
     const root = tempDirs.make("openclaw-prepared-freshness-");
-    // Missing binaries over many PATH entries used to re-read the environment for every candidate path.
     const pathEntries = Array.from({ length: 30 }, (_, index) =>
       path.join(root, `missing-${index}`),
     );
     vi.stubEnv("PATH", pathEntries.join(path.delimiter));
-    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(realCwd);
+    vi.stubEnv("PATHEXT", ".EXE;.CMD;.BAT;.COM");
+    const cwdSpy = vi.spyOn(process, "cwd");
     const facts = await prepareBinaryAvailability(["missing-tool-a", "missing-tool-b"]);
     expect(facts.hasBinary("missing-tool-a")).toBe(false);
     expect(facts.hasBinary("missing-tool-b")).toBe(false);
