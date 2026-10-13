@@ -35,9 +35,6 @@ async function restDownloadState(
 ): Promise<{ opacity: string; pointerEvents: string }> {
   const host = document.createElement("div");
   render(renderCompactAttachmentCard(options), host);
-  await new Promise<void>((resolve) => {
-    setTimeout(resolve, 0);
-  });
   const page = await browser.newPage();
   try {
     await page.setContent(`<!doctype html>
