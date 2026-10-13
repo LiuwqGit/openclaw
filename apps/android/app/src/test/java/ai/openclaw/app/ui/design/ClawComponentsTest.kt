@@ -120,6 +120,23 @@ class ClawComponentsTest {
   }
 
   @Test
+  fun statusRowsKeepTheirHorizontalInsetInsideZeroPaddingPanels() {
+    composeRule.setContent {
+      ClawDesignTheme {
+        Box(modifier = Modifier.testTag("status-row-panel").width(280.dp)) {
+          ClawStatusRow("Phone Node", "Online", healthy = true)
+        }
+      }
+    }
+    val panel = composeRule.onNodeWithTag("status-row-panel").fetchSemanticsNode().boundsInRoot
+    val title = composeRule.onNodeWithText("Phone Node").fetchSemanticsNode().boundsInRoot
+    val value = composeRule.onNodeWithText("Online").fetchSemanticsNode().boundsInRoot
+    val inset = 10 * composeRule.density.density
+    assertTrue("Status labels must keep the shared 10dp inset from the panel edge: title=$title panel=$panel", title.left >= panel.left + inset - 1f)
+    assertTrue("Status badges must keep the shared 10dp inset from the panel edge: value=$value panel=$panel", value.right <= panel.right - inset + 1f)
+  }
+
+  @Test
   fun standaloneStatusPillWrapsItsCompleteValueAtLargeFont() {
     val label = "Connexion interrompue : nouvelle tentative nécessaire"
     composeRule.setContent {

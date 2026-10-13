@@ -270,7 +270,10 @@ internal fun ClawStatusRow(
   modifier: Modifier = Modifier,
 ) {
   FlowRow(
-    modifier = modifier.fillMaxWidth().heightIn(min = ClawTheme.spacing.touchTarget).padding(vertical = 6.dp),
+    // Keep the panel inset other zero-padding rows carry (gateway log and dream diary rows
+    // supply the same 10dp horizontal padding); panels hosting this row render it with
+    // PaddingValues(0.dp), so without this padding labels and badges hug the card edges.
+    modifier = modifier.fillMaxWidth().heightIn(min = ClawTheme.spacing.touchTarget).padding(horizontal = 10.dp, vertical = 6.dp),
     horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs, Alignment.End),
     verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs),
     itemVerticalAlignment = Alignment.CenterVertically,
