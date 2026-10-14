@@ -38,15 +38,15 @@ jobs:
         run: |
           set -euo pipefail
           echo "ANDROID_HOME=${ANDROID_HOME}"
-          ls "${ANDROID_HOME}"
           SDKM="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
           if [ ! -d "${ANDROID_HOME}/system-images/android-36/google_apis/x86_64" ]; then
-            yes | "$SDKM" --install "system-images;android-36;google_apis;x86_64" >/dev/null
+            "$SDKM" --install "system-images;android-36;google_apis;x86_64" >/dev/null
           fi
           if [ ! -x "${ANDROID_HOME}/emulator/emulator" ]; then
-            yes | "$SDKM" --install "emulator" >/dev/null
+            "$SDKM" --install "emulator" >/dev/null
           fi
-          "$SDKM" --list_installed | head -20
+          ls "${ANDROID_HOME}/system-images/android-36/google_apis/"
+          test -x "${ANDROID_HOME}/emulator/emulator"
 
       - name: Build AFTER apk (PR head)
         run: |
