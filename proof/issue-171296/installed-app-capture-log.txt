@@ -1,0 +1,37 @@
+capture	Capture installed-app screenshots	2026-10-14T11:57:49.1004644Z [capture 11:57:49] === capture set: before (/home/runner/work/openclaw/openclaw/proof-out/before-main.apk) ===
+capture	Capture installed-app screenshots	2026-10-14T11:58:09.4748104Z [capture 11:58:09] install before: Success
+capture	Capture installed-app screenshots	2026-10-14T11:58:15.5187971Z [capture 11:58:15] am start (settings): Complete
+capture	Capture installed-app screenshots	2026-10-14T11:58:38.7738286Z [capture 11:58:38] tap_label[health-nav-before-normal]: ['Diagnostics and logs', 'Diagnostics et journaux'] clickable ancestor at (540, 1644)
+capture	Capture installed-app screenshots	2026-10-14T11:58:50.3149998Z [capture 11:58:50] captured health-before-normal.png (110806 bytes)
+capture	Capture installed-app screenshots	2026-10-14T11:59:18.9038505Z [capture 11:59:18] tap_label[sidebar-before-normal]: ['Show Sidebar', 'Afficher la barre latérale'] clickable ancestor at (105, 84)
+capture	Capture installed-app screenshots	2026-10-14T11:59:26.1265342Z [capture 11:59:26] tap_label[pages-menu-before-normal]: ['Edit pinned items', 'Modifier les éléments épinglés'] clickable ancestor at (850, 210)
+capture	Capture installed-app screenshots	2026-10-14T11:59:32.2371312Z [capture 11:59:32] tap_label[dreaming-nav-before-normal]: ['Dreaming', 'Rêve en cours'] clickable ancestor at (632, 1234)
+capture	Capture installed-app screenshots	2026-10-14T11:59:41.1695579Z [capture 11:59:41] captured dreaming-before-normal.png (135905 bytes)
+capture	Capture installed-app screenshots	2026-10-14T11:59:44.8912242Z [capture 11:59:44] narrow display: Physical size: 1080x1920
+capture	Capture installed-app screenshots	2026-10-14T11:59:50.0498054Z [capture 11:59:50] am start (settings): Complete
+capture	Capture installed-app screenshots	2026-10-14T12:00:14.0794131Z [capture 12:00:14] tap_label[health-nav-before-narrow-fr-2x]: ['Diagnostics and logs', 'Diagnostics et journaux'] clickable ancestor at (320, 307)
+capture	Capture installed-app screenshots	2026-10-14T12:00:22.9536086Z [capture 12:00:22] captured health-before-narrow-fr-2x.png (92902 bytes)
+capture	Capture installed-app screenshots	2026-10-14T12:00:53.8784592Z [capture 12:00:53] tap_label[sidebar-before-narrow-fr-2x]: ['Show Sidebar', 'Afficher la barre latérale'] clickable ancestor at (80, 109)
+capture	Capture installed-app screenshots	2026-10-14T12:00:59.9934662Z [capture 12:00:59] tap_label[pages-menu-before-narrow-fr-2x]: ['Edit pinned items', 'Modifier les éléments épinglés'] clickable ancestor at (568, 160)
+capture	Capture installed-app screenshots	2026-10-14T12:01:06.1277995Z [capture 12:01:06] tap_label[dreaming-nav-before-narrow-fr-2x]: ['Dreaming', 'Rêve en cours'] clickable ancestor at (332, 832)
+capture	Capture installed-app screenshots	2026-10-14T12:01:14.9690684Z [capture 12:01:14] captured dreaming-before-narrow-fr-2x.png (82272 bytes)
+capture	Capture installed-app screenshots	2026-10-14T12:01:18.3152061Z [capture 12:01:18] === capture set: after (/home/runner/work/openclaw/openclaw/proof-out/after-head.apk) ===
+capture	Capture installed-app screenshots	2026-10-14T12:01:20.0568745Z [capture 12:01:20] install after: Success
+capture	Capture installed-app screenshots	2026-10-14T12:01:23.6803814Z [capture 12:01:23] am start (settings): Complete
+capture	Capture installed-app screenshots	2026-10-14T12:01:36.7183430Z [capture 12:01:36] tap_label[health-nav-after-normal]: ['Diagnostics and logs', 'Diagnostics et journaux'] clickable ancestor at (540, 1460)
+capture	Capture installed-app screenshots	2026-10-14T12:01:45.7086190Z [capture 12:01:45] captured health-after-normal.png (111724 bytes)
+capture	Capture installed-app screenshots	2026-10-14T12:02:06.3615797Z [capture 12:02:06] tap_label[sidebar-after-normal]: ['Show Sidebar', 'Afficher la barre latérale'] clickable ancestor at (105, 84)
+capture	Capture installed-app screenshots	2026-10-14T12:02:12.4515637Z [capture 12:02:12] tap_label[pages-menu-after-normal]: ['Edit pinned items', 'Modifier les éléments épinglés'] clickable ancestor at (850, 210)
+capture	Capture installed-app screenshots	2026-10-14T12:02:18.5534764Z [capture 12:02:18] tap_label[dreaming-nav-after-normal]: ['Dreaming', 'Rêve en cours'] clickable ancestor at (632, 1234)
+capture	Capture installed-app screenshots	2026-10-14T12:02:27.4827703Z [capture 12:02:27] captured dreaming-after-normal.png (136568 bytes)
+capture	Capture installed-app screenshots	2026-10-14T12:02:30.9939654Z [capture 12:02:30] narrow display: Physical size: 1080x1920
+capture	Capture installed-app screenshots	2026-10-14T12:02:34.0757852Z [capture 12:02:34] am start (settings): Complete
+capture	Capture installed-app screenshots	2026-10-14T12:02:54.1621201Z [capture 12:02:54] tap_label[health-nav-after-narrow-fr-2x]: ['Diagnostics and logs', 'Diagnostics et journaux'] clickable ancestor at (320, 986)
+capture	Capture installed-app screenshots	2026-10-14T12:03:03.0174679Z [capture 12:03:03] captured health-after-narrow-fr-2x.png (93040 bytes)
+capture	Capture installed-app screenshots	2026-10-14T12:03:37.6064350Z [capture 12:03:37] tap_label[sidebar-after-narrow-fr-2x]: ['Show Sidebar', 'Afficher la barre latérale'] clickable ancestor at (80, 109)
+capture	Capture installed-app screenshots	2026-10-14T12:03:43.6915963Z [capture 12:03:43] tap_label[pages-menu-after-narrow-fr-2x]: ['Edit pinned items', 'Modifier les éléments épinglés'] clickable ancestor at (568, 160)
+capture	Capture installed-app screenshots	2026-10-14T12:03:49.7798359Z [capture 12:03:49] tap_label[dreaming-nav-after-narrow-fr-2x]: ['Dreaming', 'Rêve en cours'] clickable ancestor at (332, 832)
+capture	Capture installed-app screenshots	2026-10-14T12:03:58.5745045Z [capture 12:03:58] captured dreaming-after-narrow-fr-2x.png (82273 bytes)
+capture	Capture installed-app screenshots	2026-10-14T12:04:01.9945152Z [capture 12:04:01] captures: ['dreaming-after-narrow-fr-2x.png', 'dreaming-after-normal.png', 'dreaming-before-narrow-fr-2x.png', 'dreaming-before-normal.png', 'health-after-narrow-fr-2x.png', 'health-after-normal.png', 'health-before-narrow-fr-2x.png', 'health-before-normal.png']
+capture	Capture installed-app screenshots	2026-10-14T12:04:01.9947518Z [capture 12:04:01] before ok=True after ok=True
+capture	Capture installed-app screenshots	2026-10-14T12:04:01.9948107Z [capture 12:04:01] ALL CAPTURES COMPLETE
