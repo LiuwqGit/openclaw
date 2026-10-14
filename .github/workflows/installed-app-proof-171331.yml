@@ -108,12 +108,18 @@ jobs:
           openclaw config set gateway.auth.mode token
           openclaw config set gateway.auth.token "$PROOF_TOKEN"
           nohup openclaw gateway --port 18790 --allow-unconfigured > "${RUNNER_TEMP}/gateway.log" 2>&1 &
-          for i in $(seq 1 60); do
-            if grep -q "ready" "${RUNNER_TEMP}/gateway.log" 2>/dev/null; then echo "gateway ready"; break; fi
+          READY=0
+          for i in $(seq 1 90); do
+            if curl -fsS -o /dev/null http://127.0.0.1:18790/ 2>/dev/null; then READY=1; break; fi
             sleep 2
           done
+          if [ "$READY" != "1" ]; then
+            echo "gateway never became reachable" >&2
+            tail -20 "${RUNNER_TEMP}/gateway.log" >&2
+            exit 1
+          fi
+          echo "gateway http reachable"
           tail -5 "${RUNNER_TEMP}/gateway.log"
-          curl -fsS -o /dev/null http://127.0.0.1:18790/ && echo "gateway http reachable"
 
       - name: Create and boot emulator
         run: |
