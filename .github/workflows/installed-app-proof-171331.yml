@@ -125,12 +125,25 @@ jobs:
         run: |
           set -euo pipefail
           export PATH="${ANDROID_HOME}/platform-tools:${ANDROID_HOME}/emulator:${ANDROID_HOME}/cmdline-tools/latest/bin:$PATH"
-          if ! echo no | avdmanager create avd --force --name proof_api36 --package "system-images;android-36;google_apis;x86_64" --device pixel_2 2>"${RUNNER_TEMP}/avdmanager.log"; then
-            echo "avdmanager failed; creating AVD manually"
-            cat "${RUNNER_TEMP}/avdmanager.log" || true
-            AVD_HOME="$HOME/.android/avd/proof_api36.avd"
-            mkdir -p "$AVD_HOME"
-            cat > "$AVD_HOME/config.ini" <<'AVDINI'
+          mkdir -p "${GITHUB_WORKSPACE}/proof-out/diagnostics"
+          DBG="${GITHUB_WORKSPACE}/proof-out/diagnostics/emulator-setup.log"
+          {
+            echo "=== /dev/kvm ==="
+            ls -la /dev/kvm || true
+            echo "=== env ==="
+            echo "HOME=$HOME AVD_HOME=${ANDROID_AVD_HOME:-unset} SDK_HOME=${ANDROID_SDK_HOME:-unset} ANDROID_HOME=$ANDROID_HOME"
+            echo "=== avdmanager attempt ==="
+            echo no | avdmanager create avd --force --name proof_api36 --package "system-images;android-36;google_apis;x86_64" --device pixel_2 || echo "avdmanager rc=$?"
+          } > "$DBG" 2>&1 || true
+
+          AVD_DIR="$HOME/.android/avd/proof_api36.avd"
+          INI="$HOME/.android/avd/proof_api36.ini"
+          mkdir -p "$AVD_DIR"
+          if [ ! -f "$INI" ]; then
+            printf 'avd.ini.encoding=UTF-8\npath=%s\npath.rel=avd/proof_api36.avd\ntarget=android-36\n' "$AVD_DIR" > "$INI"
+          fi
+          if [ ! -f "$AVD_DIR/config.ini" ]; then
+            cat > "$AVD_DIR/config.ini" <<'AVDINI'
           avd.ini.encoding=UTF-8
           AvdId=proof_api36
           tag.display=Google APIs
@@ -152,16 +165,17 @@ jobs:
           showDeviceFrame=no
           fastboot.forceColdBoot=no
           AVDINI
-            cat > "$HOME/.android/avd/proof_api36.ini" <<'AVDROOT'
-          avd.ini.encoding=UTF-8
-          path=$HOME/.android/avd/proof_api36.avd
-          path.rel=avd/proof_api36.avd
-          target=android-36
-          AVDROOT
-            # expand $HOME written literally above
-            sed -i "s|\$HOME|$HOME|g" "$HOME/.android/avd/proof_api36.ini"
           fi
-          "${ANDROID_HOME}/emulator/emulator" -list-avds
+          {
+            echo "=== avd dir ==="
+            ls -la "$HOME/.android/avd/"
+            echo "=== ini ==="
+            cat "$INI"
+            echo "=== list-avds ==="
+            "${ANDROID_HOME}/emulator/emulator" -list-avds
+          } >> "$DBG" 2>&1 || true
+          export ANDROID_AVD_HOME="$HOME/.android/avd"
+
           nohup "${ANDROID_HOME}/emulator/emulator" -avd proof_api36 \
             -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect \
             -no-snapshot -memory 3072 -cores 2 -port 5554 -verbose > "${RUNNER_TEMP}/emulator.log" 2>&1 &
@@ -170,12 +184,9 @@ jobs:
             if timeout 20 adb devices 2>/dev/null | grep -q "emulator-5554.*device$"; then EMU_OK=1; break; fi
             sleep 5
           done
-          mkdir -p "${GITHUB_WORKSPACE}/proof-out/diagnostics"
           if [ "$EMU_OK" != "1" ]; then
             echo "emulator never registered with adb" >&2
             cp "${RUNNER_TEMP}/emulator.log" "${GITHUB_WORKSPACE}/proof-out/diagnostics/" 2>/dev/null || true
-            ls -la "$HOME/.android/avd/" >&2 || true
-            ls -la "$HOME/.android/avd/proof_api36.avd/" >&2 || true
             exit 1
           fi
           for i in $(seq 1 120); do
