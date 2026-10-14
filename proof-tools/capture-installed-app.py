@@ -32,6 +32,7 @@ SERIAL = "emulator-5554"
 HEALTH_LABELS = ["Diagnostics and logs", "Diagnostics et journaux"]
 DREAMING_LABELS = ["Dreaming", "Rêve en cours"]
 SIDEBAR_LABELS = ["Show Sidebar", "Afficher la barre latérale"]
+PAGES_MENU_LABELS = ["Edit pinned items", "Modifier les éléments épinglés"]
 HEALTH_MARKERS = ["Phone Node", "Nœud du téléphone"]
 DREAMING_MARKERS = ["Memory Store", "Stockage de la mémoire"]
 
@@ -258,11 +259,14 @@ def capture_health(out_dir, tag):
 
 
 def capture_dreaming(out_dir, tag):
-    """Dreaming is a sidebar page: scroll the settings list to the top so the
-    'Show Sidebar' top-bar button is visible, open the sidebar, tap Dreaming."""
+    """Dreaming is a sidebar page hidden from the default page list. Open the
+    sidebar, open the Pages dropdown ('Edit pinned items' button navigates all
+    destinations), and pick Dreaming from the dropdown menu."""
     if not scroll_to_top_find(out_dir, f"sidebar-{tag}", SIDEBAR_LABELS):
         return False
     if not tap_label(out_dir, f"sidebar-{tag}", SIDEBAR_LABELS, timeout=30, scroll=False):
+        return False
+    if not tap_label(out_dir, f"pages-menu-{tag}", PAGES_MENU_LABELS, timeout=30, scroll=False):
         return False
     if not tap_label(out_dir, f"dreaming-nav-{tag}", DREAMING_LABELS, timeout=30):
         return False
