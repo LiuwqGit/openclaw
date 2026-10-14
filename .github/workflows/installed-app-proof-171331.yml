@@ -58,6 +58,14 @@ jobs:
             --filter '@openclaw/mermaid-renderer...' \
             --filter '@openclaw/gateway-protocol...'
 
+      - name: Checkout upstream main (BEFORE baseline source)
+        uses: actions/checkout@v4
+        with:
+          repository: openclaw/openclaw
+          ref: main
+          path: upstream-main
+          fetch-depth: 1
+
       - name: Build AFTER apk (PR head)
         run: |
           set -euo pipefail
@@ -66,14 +74,22 @@ jobs:
           mkdir -p "${GITHUB_WORKSPACE}/proof-out"
           cp app/build/outputs/apk/play/debug/*-play-debug.apk "${GITHUB_WORKSPACE}/proof-out/after-head.apk"
 
-      - name: Build BEFORE apk (origin/main row padding)
+      - name: Build BEFORE apk (upstream main row padding)
         run: |
           set -euo pipefail
-          git checkout origin/main -- apps/android/app/src/main/java/ai/openclaw/app/ui/design/ClawComponents.kt
+          SRC="upstream-main/apps/android/app/src/main/java/ai/openclaw/app/ui/design/ClawComponents.kt"
+          DST="apps/android/app/src/main/java/ai/openclaw/app/ui/design/ClawComponents.kt"
+          test -f "$SRC"
+          if grep -q 'padding(horizontal = 10.dp' "$SRC"; then
+            echo "upstream main already carries the fix; BEFORE baseline invalid" >&2
+            exit 2
+          fi
+          cp "$SRC" "$DST"
           cd apps/android
           ./gradlew :app:assemblePlayDebug --console=plain
           cp app/build/outputs/apk/play/debug/*-play-debug.apk "${GITHUB_WORKSPACE}/proof-out/before-main.apk"
-          git checkout HEAD -- apps/android/app/src/main/java/ai/openclaw/app/ui/design/ClawComponents.kt
+          cd "${GITHUB_WORKSPACE}"
+          git checkout HEAD -- "$DST"
           git status --short
 
       - name: Install openclaw CLI (gateway for pairing)
