@@ -4,7 +4,11 @@ import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
-import { withEphemeralCodexAuthStore } from "./auth-start-options.js";
+import {
+  codexAppServerStartZeroUnloadDelay,
+  withEphemeralCodexAuthStore,
+  withManagedCodexThreadUnloadDelay,
+} from "./auth-start-options.js";
 import type { CodexAppServerStartOptions } from "./config-contracts.js";
 import { resolveManagedCodexAppServerStartOptions } from "./managed-binary.js";
 import { createCodexNativeTestState } from "./native-app-server.test-support.js";
@@ -60,6 +64,7 @@ type NativeConfigCase = {
   authProfileId?: null;
   posixOnly?: boolean;
   managed?: boolean;
+  zeroUnloadDelay?: boolean;
 };
 
 const cases: NativeConfigCase[] = [
@@ -124,6 +129,13 @@ const cases: NativeConfigCase[] = [
     invocation: (command) => ({ command, args: [...mixedArgs] }),
     expected: { ...expectedMixedConfig, cli_auth_credentials_store: "file" },
     authProfileId: null,
+  },
+  {
+    name: "managed zero-delay thread unload",
+    invocation: () => ({ command: "codex", args: ["app-server", "--listen", "stdio://"] }),
+    expected: { thread_unload_delay_secs: 0 },
+    managed: true,
+    zeroUnloadDelay: true,
   },
 ];
 
@@ -215,13 +227,17 @@ describe("Codex stdio effective configuration", () => {
         ...testCase.invocation(command, launcher),
         transport: "stdio",
         commandSource: testCase.managed ? "managed" : "config",
+        ...(testCase.zeroUnloadDelay ? { homeScope: "agent" as const } : {}),
         cwd,
         headers: {},
       };
       const start = withEphemeralCodexAuthStore({
-        startOptions: await resolveManagedCodexAppServerStartOptions(options, {
-          pluginRoot: fileURLToPath(new URL("../../", import.meta.url)),
-        }),
+        startOptions: await resolveManagedCodexAppServerStartOptions(
+          testCase.zeroUnloadDelay ? withManagedCodexThreadUnloadDelay(options) : options,
+          {
+            pluginRoot: fileURLToPath(new URL("../../", import.meta.url)),
+          },
+        ),
         authProfileId: testCase.authProfileId,
       });
       const { config } = await readNativeConfig(start, env);
@@ -230,5 +246,63 @@ describe("Codex stdio effective configuration", () => {
         code: "ENOENT",
       });
     });
+  });
+});
+
+describe("managed thread unload delay scoping", () => {
+  const managedLocalStart = (): CodexAppServerStartOptions => ({
+    transport: "stdio",
+    command: "codex",
+    commandSource: "managed",
+    homeScope: "agent",
+    args: ["app-server", "--listen", "stdio://"],
+    headers: {},
+  });
+
+  it("appends zero delay to managed local starts", () => {
+    const scoped = withManagedCodexThreadUnloadDelay(managedLocalStart());
+    expect(scoped.args).toEqual([
+      "-c",
+      "thread_unload_delay_secs=0",
+      "app-server",
+      "--listen",
+      "stdio://",
+    ]);
+    expect(codexAppServerStartZeroUnloadDelay(scoped)).toBe(true);
+    expect(
+      codexAppServerStartZeroUnloadDelay({
+        ...scoped,
+        commandSource: "resolved-managed",
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps user-configured delay, foreign homes and external transports unchanged", () => {
+    const configured: CodexAppServerStartOptions = {
+      ...managedLocalStart(),
+      args: ["app-server", "-c", "thread_unload_delay_secs=300", "--listen", "stdio://"],
+    };
+    expect(withManagedCodexThreadUnloadDelay(configured)).toBe(configured);
+    expect(codexAppServerStartZeroUnloadDelay(configured)).toBe(false);
+
+    const userHome = { ...managedLocalStart(), homeScope: "user" as const };
+    expect(withManagedCodexThreadUnloadDelay(userHome).args).toEqual(managedLocalStart().args);
+    expect(codexAppServerStartZeroUnloadDelay(userHome)).toBe(false);
+
+    const configuredCommand = { ...managedLocalStart(), commandSource: "config" as const };
+    expect(withManagedCodexThreadUnloadDelay(configuredCommand).args).toEqual(
+      managedLocalStart().args,
+    );
+    expect(codexAppServerStartZeroUnloadDelay(configuredCommand)).toBe(false);
+
+    const websocket = { ...managedLocalStart(), transport: "websocket" as const };
+    expect(withManagedCodexThreadUnloadDelay(websocket)).toBe(websocket);
+
+    const proxy = {
+      ...managedLocalStart(),
+      args: ["app-server", "proxy", "stdio://"],
+    };
+    expect(withManagedCodexThreadUnloadDelay(proxy)).toBe(proxy);
+    expect(codexAppServerStartZeroUnloadDelay(proxy)).toBe(false);
   });
 });

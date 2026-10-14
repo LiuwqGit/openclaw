@@ -2,10 +2,16 @@ import { homedir as readHomeDir } from "node:os";
 import path from "node:path";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexAppServerStartOptions } from "./config-contracts.js";
-import { normalizeCodexAppServerArgs } from "./launch-args.js";
+import {
+  isCodexAppServerProxyLaunch,
+  normalizeCodexAppServerArgs,
+  readCodexAppServerConfigOptions,
+} from "./launch-args.js";
 
 const CODEX_APP_SERVER_HOME_DIRNAME = "codex-home";
 const CODEX_EPHEMERAL_AUTH_STORE_OVERRIDE = 'cli_auth_credentials_store="ephemeral"';
+const CODEX_THREAD_UNLOAD_DELAY_CONFIG_KEY = "thread_unload_delay_secs";
+const CODEX_MANAGED_THREAD_UNLOAD_DELAY_OVERRIDE = "thread_unload_delay_secs=0";
 
 export function resolveCodexAppServerHomeDir(agentDir: string | undefined): string {
   if (!agentDir) {
@@ -52,6 +58,57 @@ export function withEphemeralCodexAuthStore(params: {
     return startOptions;
   }
   const args = normalizeCodexAppServerArgs(startOptions.args, CODEX_EPHEMERAL_AUTH_STORE_OVERRIDE);
+  return args === startOptions.args ? startOptions : { ...startOptions, args };
+}
+
+function readConfiguredThreadUnloadDelay(args: readonly string[]): string | undefined {
+  for (const option of readCodexAppServerConfigOptions(args)) {
+    const value = option.value?.trim();
+    if (!value?.includes("=")) {
+      continue;
+    }
+    const [key, ...rest] = value.split("=");
+    if (key.trim() === CODEX_THREAD_UNLOAD_DELAY_CONFIG_KEY) {
+      return rest.join("=").trim();
+    }
+  }
+  return undefined;
+}
+
+function isManagedLocalCodexAppServerStart(startOptions: CodexAppServerStartOptions): boolean {
+  return (
+    startOptions.transport === "stdio" &&
+    startOptions.homeScope === "agent" &&
+    (startOptions.commandSource === "managed" ||
+      startOptions.commandSource === "resolved-managed") &&
+    !isCodexAppServerProxyLaunch(startOptions.args)
+  );
+}
+
+/** True when this managed local server unloads threads as soon as their last subscription is released. */
+export function codexAppServerStartZeroUnloadDelay(
+  startOptions: CodexAppServerStartOptions,
+): boolean {
+  return (
+    isManagedLocalCodexAppServerStart(startOptions) &&
+    readConfiguredThreadUnloadDelay(startOptions.args) === "0"
+  );
+}
+
+/** Lets OpenClaw-owned local servers release a settled failed thread without retiring the shared client. */
+export function withManagedCodexThreadUnloadDelay(
+  startOptions: CodexAppServerStartOptions,
+): CodexAppServerStartOptions {
+  if (
+    !isManagedLocalCodexAppServerStart(startOptions) ||
+    readConfiguredThreadUnloadDelay(startOptions.args) !== undefined
+  ) {
+    return startOptions;
+  }
+  const args = normalizeCodexAppServerArgs(
+    startOptions.args,
+    CODEX_MANAGED_THREAD_UNLOAD_DELAY_OVERRIDE,
+  );
   return args === startOptions.args ? startOptions : { ...startOptions, args };
 }
 

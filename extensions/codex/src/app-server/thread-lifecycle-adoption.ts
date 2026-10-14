@@ -24,6 +24,7 @@ import { codexDynamicToolsFingerprint } from "./thread-fingerprints.js";
 import {
   CodexAdoptedThreadActiveError,
   CodexThreadBindingConflictError,
+  CODEX_THREAD_UNLOAD_UNCONFIRMED_ERROR,
 } from "./thread-lifecycle-errors.js";
 import { resumeExistingCodexThread } from "./thread-lifecycle-io.js";
 import {
@@ -312,6 +313,15 @@ function observeCodexThreadConfiguration(
   }
   const settledSystemError = thread.status.type === "systemError";
   let unloaded = thread.status.type === "notLoaded";
+  let confirmUnload: (() => void) | undefined;
+  // The waiting resume owns this observation; a missing notification leaves it
+  // pending so its caller's bounded wait decides the outcome.
+  const unloadedConfirmation = new Promise<void>((resolve) => {
+    confirmUnload = resolve;
+  });
+  if (unloaded) {
+    confirmUnload?.();
+  }
   const dispose = params.client.addNotificationHandler((notification) => {
     if (
       notification.method === "thread/status/changed" &&
@@ -321,21 +331,21 @@ function observeCodexThreadConfiguration(
       notification.params.status.type === "notLoaded"
     ) {
       unloaded = true;
+      confirmUnload?.();
     }
   });
   return {
     modelProvider: thread.modelProvider,
     dispose,
     settledSystemError,
+    unloaded: unloadedConfirmation,
     assertConfigured: () => {
       assertCurrent();
       // Native resume can acknowledge ignored overrides when another subscriber
       // or failed shutdown retains the session. notLoaded proves teardown, not a
       // reservation against native-internal reloads outside OpenClaw's thread queue.
       if (!unloaded) {
-        throw new Error(
-          "Codex did not confirm unloading its previous configuration. The thread is preserved; stop competing native work and reconnect before retrying.",
-        );
+        throw new Error(CODEX_THREAD_UNLOAD_UNCONFIRMED_ERROR);
       }
     },
   };

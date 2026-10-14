@@ -33,3 +33,6 @@ export class CodexAdoptedThreadActiveError extends AgentHarnessPreflightError {
     this.name = "CodexAdoptedThreadActiveError";
   }
 }
+
+export const CODEX_THREAD_UNLOAD_UNCONFIRMED_ERROR =
+  "Codex did not confirm unloading its previous configuration. The thread is preserved; stop competing native work and reconnect before retrying.";

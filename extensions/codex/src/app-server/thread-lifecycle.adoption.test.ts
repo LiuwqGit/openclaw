@@ -4,16 +4,22 @@ import { upsertSessionEntry, patchSessionEntry } from "openclaw/plugin-sdk/sessi
 import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  claimCodexAppServerLiveThread,
   consumeCodexAppServerLiveThread,
   ensureCodexAppServerClientRuntime,
   retainCodexAppServerLiveThread,
 } from "./client-runtime.js";
 import { threadStartResult as createThreadStartResult } from "./codex-app-server.test-fixtures.js";
+import { DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT } from "./run-attempt.context-engine.test-support.js";
 import { sessionBindingIdentity } from "./session-binding.js";
 import {
   resetCodexTestBindingStore,
   testCodexAppServerBindingStore,
 } from "./session-binding.test-helpers.js";
+import {
+  getLeasedSharedCodexAppServerClient,
+  releaseLeasedSharedCodexAppServerClient,
+} from "./shared-client.js";
 import {
   createAppServerOptions,
   createLeasedCodexLifecycleHarness,
@@ -257,4 +263,162 @@ describe("Codex app-server adopted thread lifecycle", () => {
       }
     },
   );
+
+  it("resumes a settled failed thread after zero-delay unload while a sibling stays active", async () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createThreadLifecycleParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    const threadId = "thread-settled-failed";
+    const siblingId = "thread-active-sibling";
+    type LifecycleHarness = Awaited<ReturnType<typeof createLeasedCodexLifecycleHarness>>;
+    const wire: { current?: LifecycleHarness } = {};
+    const fixture = await createLeasedCodexLifecycleHarness({
+      agentDir: path.join(tempDir, "agent"),
+      respond: async (method) => {
+        if (method === "thread/resume") {
+          return threadStartResult(threadId);
+        }
+        return readEmptyNativeConfig(method);
+      },
+      unsubscribe: (releasedThreadId) => {
+        // A zero-delay server finishes this unload just after the response.
+        setTimeout(() => {
+          wire.current?.notify({
+            method: "thread/status/changed",
+            params: { threadId: releasedThreadId, status: { type: "notLoaded" } },
+          });
+        }, 0);
+        return { status: "notLoaded" };
+      },
+    });
+    wire.current = fixture;
+    const settled = threadStartResult(threadId);
+    fixture.seed(
+      { ...settled, thread: { ...settled.thread, status: { type: "systemError" } } },
+      { loaded: true, subscribed: true },
+    );
+    const siblingResponse = threadStartResult(siblingId);
+    fixture.seed(
+      {
+        ...siblingResponse,
+        thread: { ...siblingResponse.thread, status: { type: "active", activeFlags: [] } },
+      },
+      { loaded: true, subscribed: true },
+    );
+    const identity = sessionBindingIdentity({
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      config: params.config,
+    });
+    expect(
+      await testCodexAppServerBindingStore.mutate(identity, {
+        kind: "set",
+        binding: {
+          threadId,
+          cwd: workspaceDir,
+          webSearchThreadConfigFingerprint: DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT,
+        },
+      }),
+    ).toBe(true);
+    await retainCodexAppServerLiveThread(fixture.client, threadId);
+    const siblingClient = await getLeasedSharedCodexAppServerClient(fixture.acquireOptions);
+    const siblingClaim = await claimCodexAppServerLiveThread(siblingClient, siblingId);
+    try {
+      expect(siblingClaim).toBeDefined();
+      const resumed = await startOrResumeThread({
+        client: fixture.client,
+        params,
+        cwd: workspaceDir,
+        dynamicTools: [],
+        appServer: {
+          ...createThreadLifecycleAppServerOptions(),
+          start: {
+            ...createThreadLifecycleAppServerOptions().start,
+            commandSource: "managed",
+            homeScope: "agent",
+            args: ["app-server", "-c", "thread_unload_delay_secs=0"],
+          },
+        },
+        developerInstructions: "changed policy after the settled failure",
+      });
+      expect(resumed).toMatchObject({ threadId, lifecycle: { action: "resumed" } });
+      const methods = fixture.request.mock.calls.map(([method]) => method as string);
+      const unsubscribeIndex = methods.indexOf("thread/unsubscribe");
+      expect(unsubscribeIndex).toBeGreaterThanOrEqual(0);
+      expect(methods.lastIndexOf("thread/resume")).toBeGreaterThan(unsubscribeIndex);
+      expect(fixture.request.mock.calls.some(([method]) => method === "thread/start")).toBe(false);
+      expect(() => siblingClaim!.assertCurrent()).not.toThrow();
+      expect(fixture.client.getCloseError()).toBeUndefined();
+    } finally {
+      await siblingClaim?.release(siblingId);
+      releaseLeasedSharedCodexAppServerClient(siblingClient);
+    }
+  });
+
+  it("keeps refusing a settled failed thread without managed zero-delay unload", async () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createThreadLifecycleParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    const threadId = "thread-settled-failed-no-delay";
+    const siblingId = "thread-active-sibling-no-delay";
+    const fixture = await createLeasedCodexLifecycleHarness({
+      agentDir: path.join(tempDir, "agent"),
+      respond: async (method) => {
+        if (method === "thread/resume") {
+          return threadStartResult(threadId);
+        }
+        return readEmptyNativeConfig(method);
+      },
+    });
+    const settled = threadStartResult(threadId);
+    fixture.seed(
+      { ...settled, thread: { ...settled.thread, status: { type: "systemError" } } },
+      { loaded: true, subscribed: true },
+    );
+    const siblingResponse = threadStartResult(siblingId);
+    fixture.seed(
+      {
+        ...siblingResponse,
+        thread: { ...siblingResponse.thread, status: { type: "active", activeFlags: [] } },
+      },
+      { loaded: true, subscribed: true },
+    );
+    const identity = sessionBindingIdentity({
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      config: params.config,
+    });
+    expect(
+      await testCodexAppServerBindingStore.mutate(identity, {
+        kind: "set",
+        binding: {
+          threadId,
+          cwd: workspaceDir,
+          webSearchThreadConfigFingerprint: DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT,
+        },
+      }),
+    ).toBe(true);
+    await retainCodexAppServerLiveThread(fixture.client, threadId);
+    const siblingClient = await getLeasedSharedCodexAppServerClient(fixture.acquireOptions);
+    const siblingClaim = await claimCodexAppServerLiveThread(siblingClient, siblingId);
+    try {
+      expect(siblingClaim).toBeDefined();
+      await expect(
+        startOrResumeThread({
+          client: fixture.client,
+          params,
+          cwd: workspaceDir,
+          dynamicTools: [],
+          appServer: createThreadLifecycleAppServerOptions(),
+          developerInstructions: "changed policy after the settled failure",
+        }),
+      ).rejects.toThrow("did not confirm unloading its previous configuration");
+      expect(fixture.request.mock.calls.some(([method]) => method === "thread/start")).toBe(false);
+      expect(() => siblingClaim!.assertCurrent()).not.toThrow();
+      expect(fixture.client.getCloseError()).toBeUndefined();
+    } finally {
+      await siblingClaim?.release(siblingId);
+      releaseLeasedSharedCodexAppServerClient(siblingClient);
+    }
+  });
 });

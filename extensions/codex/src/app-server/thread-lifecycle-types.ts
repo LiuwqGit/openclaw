@@ -107,4 +107,6 @@ export type CodexThreadResumePreparation = {
   assertCurrent: () => void;
   dispose: () => void;
   settledSystemError: boolean;
+  /** Resolves when the exact thread's notLoaded notification arrived; never rejects. */
+  unloaded: Promise<void>;
 };

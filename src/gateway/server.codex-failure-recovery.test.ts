@@ -34,8 +34,6 @@ type ReadyThread = {
 
 const RECOVERY_FAILURE_TEXT =
   "⚠️ OpenClaw couldn't finish this reply. Check the conversation before trying again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow` in your terminal.";
-const UNLOAD_FAILURE_DETAIL =
-  "Codex did not confirm unloading its previous configuration. The thread is preserved; stop competing native work and reconnect before retrying.";
 const SHUTDOWN_FAILURE_DETAIL =
   "The previous conversation process did not confirm shutdown; the conversation was preserved.";
 
@@ -47,7 +45,7 @@ const cases: Array<{
   shutdown?: "delayed" | "cancelled" | "unconfirmed";
 }> = [
   {
-    name: "leaves active siblings alone",
+    name: "recovers a settled failed thread beside an active sibling",
     failFirst: true,
     activeSibling: true,
   },
@@ -483,17 +481,20 @@ it.each(cases)(
 
     await fs.writeFile(instruction, "NEW_POLICY_BETA");
     if (siblingRunId) {
-      for (const key of ["second", "retry"]) {
-        const refused = await start("Continue with changed instructions.", key);
-        const result = await wait(refused.runId);
-        expect(result.status).toBe("error");
-        expect(result.error).toBe(RECOVERY_FAILURE_TEXT);
-        expect(lifecycleErrors.get(refused.runId)).toEqual(
-          expect.arrayContaining([expect.stringContaining(UNLOAD_FAILURE_DETAIL)]),
-        );
-        expect(readyThreads.has(refused.runId)).toBe(false);
-      }
-      expect(primaryRequests).toHaveLength(1);
+      const continued = await start("Continue with changed instructions.", "second");
+      expect(await wait(continued.runId)).toMatchObject({ status: "ok" });
+      const recovered = await ready(continued.runId);
+      expect(recovered.threadId).toBe(previous.threadId);
+      expect(recovered.action).toBe("resumed");
+      // The active sibling vetoes client replacement, so recovery keeps its client.
+      expect(recovered.clientId).toBe(previous.clientId);
+      expect(primaryRequests).toHaveLength(2);
+      expect(primaryRequests[1]).toMatchObject({
+        threadId: previous.threadId,
+        body: expect.stringContaining("HISTORY_ALPHA"),
+      });
+      expect(primaryRequests[1]?.body).toContain("NEW_POLICY_BETA");
+      expect(readyThreads.has(continued.runId)).toBe(true);
       await assertOriginalBinding();
 
       releaseSibling.resolve();
@@ -510,25 +511,28 @@ it.each(cases)(
         threadId: siblingThread.threadId,
         clientId: previous.clientId,
       });
-      expect(primaryRequests).toHaveLength(1);
-      expect(requests).toHaveLength(3);
+      expect(primaryRequests).toHaveLength(2);
+      expect(requests).toHaveLength(4);
       return;
     }
     if (idleSibling === "incognito") {
-      const refused = await start("Continue with changed instructions.", "second");
-      const result = await wait(refused.runId);
-      expect(result).toMatchObject({
-        status: "error",
-        error: RECOVERY_FAILURE_TEXT,
+      const continued = await start("Continue with changed instructions.", "second");
+      expect(await wait(continued.runId)).toMatchObject({ status: "ok" });
+      const recovered = await ready(continued.runId);
+      expect(recovered.threadId).toBe(previous.threadId);
+      expect(recovered.action).toBe("resumed");
+      // The idle Incognito sibling vetoes client replacement; per-thread unload
+      // now recovers beside it without retiring that shared client.
+      expect(recovered.clientId).toBe(previous.clientId);
+      expect(primaryRequests).toHaveLength(2);
+      expect(primaryRequests[1]).toMatchObject({
+        threadId: previous.threadId,
+        body: expect.stringContaining("HISTORY_ALPHA"),
       });
-      expect(lifecycleErrors.get(refused.runId)).toEqual(
-        expect.arrayContaining([expect.stringContaining(UNLOAD_FAILURE_DETAIL)]),
-      );
-      expect(readyThreads.has(refused.runId)).toBe(false);
-      expect(primaryRequests).toHaveLength(1);
+      expect(primaryRequests[1]?.body).toContain("NEW_POLICY_BETA");
       await assertOriginalBinding();
       await continueIdleSibling(previous.clientId);
-      expect(requests).toHaveLength(3);
+      expect(requests).toHaveLength(4);
       return;
     }
     const exitGate = shutdown

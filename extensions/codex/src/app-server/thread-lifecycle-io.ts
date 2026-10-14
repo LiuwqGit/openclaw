@@ -7,7 +7,10 @@ import {
   CodexAppServerUnsafeSubscriptionError,
   unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
-import { resolveCodexAppServerLocalHomeDir } from "./auth-start-options.js";
+import {
+  codexAppServerStartZeroUnloadDelay,
+  resolveCodexAppServerLocalHomeDir,
+} from "./auth-start-options.js";
 import { recordCodexThreadForkSettings } from "./client-fork-settings.js";
 import { hasCodexAppServerSiblingThreadWork } from "./client-runtime.js";
 import { createCodexEphemeralThreadPolicy } from "./client-thread-owner.js";
@@ -38,6 +41,7 @@ import {
   CodexThreadBindingConflictError,
   CodexThreadClientReplacementError,
   CodexThreadStartRequestError,
+  CODEX_THREAD_UNLOAD_UNCONFIRMED_ERROR,
 } from "./thread-lifecycle-errors.js";
 import {
   buildCodexThreadBindingPolicy,
@@ -56,6 +60,7 @@ import { resolveCodexAppServerModelProvider } from "./thread-model-selection.js"
 import { CodexThreadPolicyHandoffError, refreshCodexThreadPolicy } from "./thread-policy.js";
 import { buildThreadStartParams } from "./thread-requests.js";
 import { resumeCodexAppServerThread } from "./thread-resume.js";
+import { withAbortableTimeout } from "./timeout.js";
 import { hasCodexAppServerSiblingRouteWork } from "./turn-router.js";
 
 type CodexResumeThreadContext = CodexThreadRequestContext & {
@@ -154,6 +159,22 @@ export async function resumeExistingCodexThread(
       // retirement, so only an otherwise inactive client can recover this way.
       await abandonClient();
       throw new CodexThreadClientReplacementError();
+    }
+    if (codexAppServerStartZeroUnloadDelay(params.appServer.start)) {
+      // A zero-delay managed server unloads this thread as soon as the released
+      // subscription above drops its last subscriber, and native rejects resume
+      // while that unload is still closing. Resume must observe the exact
+      // thread's notLoaded notification before it can reload the configuration.
+      configuration.assertCurrent();
+      await lifecycleTiming.measure("thread-resume-await-unload", () =>
+        withAbortableTimeout({
+          promise: configuration.unloaded,
+          timeoutMs: params.appServer.requestTimeoutMs,
+          signal: params.signal,
+          timeoutMessage: CODEX_THREAD_UNLOAD_UNCONFIRMED_ERROR,
+        }),
+      );
+      configuration.assertCurrent();
     }
     const authProfileId =
       resumeBinding.connectionScope === "supervision"

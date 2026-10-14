@@ -6,6 +6,7 @@ import {
   parseBooleanValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { parse as parseToml } from "smol-toml";
+import { withManagedCodexThreadUnloadDelay } from "./auth-start-options.js";
 import type {
   CodexAppServerCommandSource,
   CodexAppServerHomeScope,
@@ -291,20 +292,22 @@ export function createCodexAppServerConfig({
       ...new Set([DEFAULT_CODEX_COMPUTER_USE_PLUGIN_NAME, computerUseConfig.pluginName]),
     ];
 
+    const resolvedStart: CodexAppServerStartOptions = {
+      transport,
+      homeScope,
+      command,
+      commandSource,
+      ...(includeManagedCommandOrder ? { managedCommandOrder } : {}),
+      ...(commandSource === "managed" ? { managedComputerUsePluginNames } : {}),
+      args: args.length > 0 ? args : ["app-server", "--listen", "stdio://"],
+      ...(url ? { url } : {}),
+      ...(authToken ? { authToken } : {}),
+      headers,
+      ...(transport === "stdio" && clearEnv.length > 0 ? { clearEnv } : {}),
+    };
+
     return {
-      start: {
-        transport,
-        homeScope,
-        command,
-        commandSource,
-        ...(includeManagedCommandOrder ? { managedCommandOrder } : {}),
-        ...(commandSource === "managed" ? { managedComputerUsePluginNames } : {}),
-        args: args.length > 0 ? args : ["app-server", "--listen", "stdio://"],
-        ...(url ? { url } : {}),
-        ...(authToken ? { authToken } : {}),
-        headers,
-        ...(transport === "stdio" && clearEnv.length > 0 ? { clearEnv } : {}),
-      },
+      start: withManagedCodexThreadUnloadDelay(resolvedStart),
       connectionClass,
       ...(remoteWorkspaceRoot ? { remoteWorkspaceRoot } : {}),
       ...(config.nativeHookRelay ? { nativeHookRelay: config.nativeHookRelay } : {}),
