@@ -164,14 +164,24 @@ jobs:
           "${ANDROID_HOME}/emulator/emulator" -list-avds
           nohup "${ANDROID_HOME}/emulator/emulator" -avd proof_api36 \
             -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect \
-            -no-snapshot -memory 3072 -cores 2 -port 5554 > "${RUNNER_TEMP}/emulator.log" 2>&1 &
-          adb wait-for-device
+            -no-snapshot -memory 3072 -cores 2 -port 5554 -verbose > "${RUNNER_TEMP}/emulator.log" 2>&1 &
+          EMU_OK=0
+          for i in $(seq 1 60); do
+            if adb devices 2>/dev/null | grep -q "emulator-5554.*device$"; then EMU_OK=1; break; fi
+            sleep 5
+          done
+          if [ "$EMU_OK" != "1" ]; then
+            echo "emulator never registered with adb" >&2
+            tail -40 "${RUNNER_TEMP}/emulator.log" >&2
+            exit 1
+          fi
           for i in $(seq 1 120); do
             BC="$(adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
             if [ "$BC" = "1" ]; then echo "boot completed"; break; fi
             sleep 5
           done
           adb devices
+          tail -10 "${RUNNER_TEMP}/emulator.log"
 
       - name: Capture installed-app screenshots
         run: |
