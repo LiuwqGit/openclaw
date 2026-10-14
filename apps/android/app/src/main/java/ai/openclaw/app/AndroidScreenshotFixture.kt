@@ -314,6 +314,18 @@ internal object AndroidScreenshotFixture {
           cronRuns()
         }
 
+        "doctor.memory.status" -> {
+          dreamingStatus()
+        }
+
+        "doctor.memory.dreamDiary" -> {
+          dreamingDiary()
+        }
+
+        "logs.tail" -> {
+          logsTail(fixtureNowMs)
+        }
+
         "openclaw.chat" -> {
           systemAgentChat(paramsJson)
         }
@@ -1142,4 +1154,75 @@ internal object AndroidScreenshotFixture {
         }
       }
     }.toString()
+
+  private fun dreamingStatus(): String =
+    buildJsonObject {
+      putJsonObject("dreaming") {
+        put("enabled", JsonPrimitive(true))
+        put("timezone", JsonPrimitive("UTC"))
+        put("shortTermCount", JsonPrimitive(12))
+        put("totalSignalCount", JsonPrimitive(48))
+        put("promotedToday", JsonPrimitive(3))
+        put("promotedTotal", JsonPrimitive(27))
+        putJsonObject("phases") {
+          putJsonObject("light") { put("nextRunAtMs", JsonPrimitive(System.currentTimeMillis() + 360_000L)) }
+          putJsonObject("deep") { put("nextRunAtMs", JsonPrimitive(System.currentTimeMillis() + 5_400_000L)) }
+          putJsonObject("rem") { put("nextRunAtMs", JsonPrimitive(System.currentTimeMillis() + 21_600_000L)) }
+        }
+      }
+    }.toString()
+
+  private fun dreamingDiary(): String =
+    buildJsonObject {
+      put("found", JsonPrimitive(true))
+      put(
+        "content",
+        JsonPrimitive(
+          listOf(
+            "<!-- openclaw:dreaming:diary:start -->",
+            "*2026-07-08*",
+            "Consolidated release planning signals and promoted the recurring screenshot review preference.",
+            "---",
+            "*2026-07-07*",
+            "Pruned stale short-term notes from the android-release-digest thread.",
+            "<!-- openclaw:dreaming:diary:end -->",
+          ).joinToString("\n"),
+        ),
+      )
+    }.toString()
+
+  private fun logsTail(nowMs: Long): String =
+    buildJsonObject {
+      put("file", JsonPrimitive("/tmp/openclaw/logs/gateway.log"))
+      put("cursor", JsonPrimitive(4096L))
+      put("truncated", JsonPrimitive(false))
+      putJsonArray("lines") {
+        listOf(
+          gatewayLogLine(nowMs - 240_000L, "info", "gateway", "listening on ws://127.0.0.1:18789 (openclaw ${BuildConfig.VERSION_NAME})"),
+          gatewayLogLine(nowMs - 180_000L, "info", "gateway/node", "android node Pixel paired and approved"),
+          gatewayLogLine(nowMs - 120_000L, "info", "models", "model catalog refreshed: 1 provider, 1 model"),
+          gatewayLogLine(nowMs - 60_000L, "warn", "memory", "dreaming phase rem rescheduled after clock drift"),
+          gatewayLogLine(nowMs - 30_000L, "info", "gateway/health", "health check ok"),
+        ).forEach { add(JsonPrimitive(it)) }
+      }
+    }.toString()
+
+  private fun gatewayLogLine(
+    tsMs: Long,
+    level: String,
+    name: String,
+    message: String,
+  ): String {
+    val time = Instant.ofEpochMilli(tsMs).toString()
+    return buildJsonObject {
+      put("0", JsonPrimitive(name))
+      put("1", JsonPrimitive(message))
+      put("time", JsonPrimitive(time))
+      putJsonObject("_meta") {
+        put("logLevelName", JsonPrimitive(level))
+        put("date", JsonPrimitive(time))
+        put("name", JsonPrimitive(name))
+      }
+    }.toString()
+  }
 }

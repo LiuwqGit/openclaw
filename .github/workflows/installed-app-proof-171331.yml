@@ -2,7 +2,8 @@ name: Installed-app proof captures (PR 171331)
 
 # 一次性证据采集工作流（fork 专用，不属于 PR diff）：
 # 在带 KVM 的 hosted runner 上构建 before/after 两个 APK，
-# 安装到真实 Android 模拟器（installed-app 执行），连接本地 openclaw gateway，
+# 安装到真实 Android 模拟器（installed-app 执行），用 app 内建 screenshot fixture 模式
+# （scripts/android-screenshots.sh 同款机制）渲染确定性已连接状态，
 # 驱动 UI 采集 Health / Dreaming before/after 截图（含 fr + 2x 字体 + 320dp 窄屏用例）。
 
 on:
@@ -92,35 +93,6 @@ jobs:
           git checkout HEAD -- "$DST"
           git status --short
 
-      - name: Install openclaw CLI (gateway for pairing)
-        run: |
-          set -euo pipefail
-          npm install -g openclaw@2026.10.3
-          openclaw --version
-
-      - name: Start local gateway
-        run: |
-          set -euo pipefail
-          export OPENCLAW_STATE_DIR="${RUNNER_TEMP}/oc-state"
-          mkdir -p "$OPENCLAW_STATE_DIR"
-          PROOF_TOKEN="$(openssl rand -hex 24)"
-          echo "$PROOF_TOKEN" > "${RUNNER_TEMP}/gateway-token.txt"
-          openclaw config set gateway.auth.mode token
-          openclaw config set gateway.auth.token "$PROOF_TOKEN"
-          nohup openclaw gateway --port 18790 --allow-unconfigured > "${RUNNER_TEMP}/gateway.log" 2>&1 &
-          READY=0
-          for i in $(seq 1 90); do
-            if curl -fsS -o /dev/null http://127.0.0.1:18790/ 2>/dev/null; then READY=1; break; fi
-            sleep 2
-          done
-          if [ "$READY" != "1" ]; then
-            echo "gateway never became reachable" >&2
-            tail -20 "${RUNNER_TEMP}/gateway.log" >&2
-            exit 1
-          fi
-          echo "gateway http reachable"
-          tail -5 "${RUNNER_TEMP}/gateway.log"
-
       - name: Create and boot emulator
         run: |
           set -euo pipefail
@@ -202,20 +174,11 @@ jobs:
       - name: Capture installed-app screenshots
         run: |
           set -euo pipefail
-          GATEWAY_TOKEN="$(cat "${RUNNER_TEMP}/gateway-token.txt")"
-          export GATEWAY_TOKEN
           export PATH="${ANDROID_HOME}/platform-tools:${ANDROID_HOME}/emulator:${ANDROID_HOME}/cmdline-tools/latest/bin:$PATH"
-          adb reverse tcp:18790 tcp:18790
-          adb -s emulator-5554 shell settings put global window_animation_scale 0
-          adb -s emulator-5554 shell settings put global transition_animation_scale 0
-          adb -s emulator-5554 shell settings put global animator_duration_scale 0
-          adb -s emulator-5554 shell svc power stayon true
-          adb -s emulator-5554 shell wm dismiss-keyguard || true
           python3 proof-tools/capture-installed-app.py \
             --before-apk "${GITHUB_WORKSPACE}/proof-out/before-main.apk" \
             --after-apk "${GITHUB_WORKSPACE}/proof-out/after-head.apk" \
-            --out-dir "${GITHUB_WORKSPACE}/proof-out/captures" \
-            --gateway-url "ws://127.0.0.1:18790"
+            --out-dir "${GITHUB_WORKSPACE}/proof-out/captures"
 
       - name: Collect diagnostics
         if: always()
@@ -223,7 +186,6 @@ jobs:
           export PATH="${ANDROID_HOME}/platform-tools:${ANDROID_HOME}/emulator:${ANDROID_HOME}/cmdline-tools/latest/bin:$PATH"
           mkdir -p "${GITHUB_WORKSPACE}/proof-out/diagnostics"
           timeout 60 adb -s emulator-5554 logcat -d > "${GITHUB_WORKSPACE}/proof-out/diagnostics/logcat.txt" 2>/dev/null || true
-          cp "${RUNNER_TEMP}/gateway.log" "${GITHUB_WORKSPACE}/proof-out/diagnostics/" 2>/dev/null || true
           cp "${RUNNER_TEMP}/emulator.log" "${GITHUB_WORKSPACE}/proof-out/diagnostics/" 2>/dev/null || true
           ls -la "${GITHUB_WORKSPACE}/proof-out/captures" || true
 
