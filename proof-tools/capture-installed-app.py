@@ -28,10 +28,12 @@ APP_PACKAGE = "ai.openclaw.app.debug"
 ACTIVITY = f"{APP_PACKAGE}/ai.openclaw.app.MainActivity"
 SERIAL = "emulator-5554"
 
-HEALTH_LABEL = "Diagnostics and logs"
-DREAMING_LABEL = "Dreaming"
-HEALTH_MARKER = "Phone Node"
-DREAMING_MARKER = "Memory Store"
+# EN + fr-FR variants (labels are translated at runtime via apps/.i18n/native/fr.json).
+HEALTH_LABELS = ["Diagnostics and logs", "Diagnostics et journaux"]
+DREAMING_LABELS = ["Dreaming", "Rêve en cours"]
+SIDEBAR_LABELS = ["Show Sidebar", "Afficher la barre latérale"]
+HEALTH_MARKERS = ["Phone Node", "Nœud du téléphone"]
+DREAMING_MARKERS = ["Memory Store", "Stockage de la mémoire"]
 
 
 def adb(*args, timeout=120):
@@ -118,13 +120,34 @@ def tap(x, y, wait=1.5):
     time.sleep(wait)
 
 
+def screen_size():
+    """Current logical screen size (honors `wm size` override)."""
+    out = adb("shell", "wm", "size")
+    sizes = re.findall(r"(\d+)x(\d+)", out)
+    if not sizes:
+        return (1080, 1920)
+    w, h = map(int, sizes[-1])  # Override size comes after Physical size
+    return (w, h)
+
+
 def scroll_down():
-    adb("shell", "input", "swipe", "540", "1500", "540", "600", "300")
+    w, h = screen_size()
+    adb("shell", "input", "swipe", str(w // 2), str(int(h * 0.78)), str(w // 2), str(int(h * 0.3)), "300")
     time.sleep(1.2)
 
 
-def wait_label(out_dir, step, label, timeout=90, scroll=False, max_scrolls=8):
-    """Wait until `label` appears; optionally scroll the list to reveal it."""
+def find_any(root, labels):
+    for label in labels:
+        nodes = find_nodes(root, label)
+        if nodes:
+            return label, nodes
+    return None, []
+
+
+def wait_label(out_dir, step, labels, timeout=90, scroll=False, max_scrolls=8):
+    """Wait until any of `labels` appears; optionally scroll the list to reveal it."""
+    if isinstance(labels, str):
+        labels = [labels]
     deadline = time.time() + timeout
     scrolls = 0
     last_xml = ""
@@ -132,8 +155,10 @@ def wait_label(out_dir, step, label, timeout=90, scroll=False, max_scrolls=8):
         xml = dump_xml()
         last_xml = xml
         root = parse_tree(xml)
-        if root is not None and find_nodes(root, label):
-            return True
+        if root is not None:
+            found, _ = find_any(root, labels)
+            if found:
+                return True
         if scroll and scrolls < max_scrolls:
             scroll_down()
             scrolls += 1
@@ -141,21 +166,21 @@ def wait_label(out_dir, step, label, timeout=90, scroll=False, max_scrolls=8):
         time.sleep(2)
     save_dump(out_dir, f"fail-wait-{step}", last_xml)
     screencap(out_dir / f"fail-wait-{step}.png")
-    log(f"wait_label FAILED: '{label}' (step {step})")
+    log(f"wait_label FAILED: {labels} (step {step})")
     return False
 
 
-def tap_label(out_dir, step, label, timeout=90, scroll=True):
-    """Wait for `label`, tap it (prefer clickable ancestor), verify it took effect
-    by waiting for the screen to change (label's own tap target disappears or a
-    caller-provided marker appears via wait_label afterwards)."""
-    if not wait_label(out_dir, step, label, timeout=timeout, scroll=scroll):
+def tap_label(out_dir, step, labels, timeout=90, scroll=True):
+    """Wait for any of `labels`, then tap it (prefer clickable ancestor)."""
+    if isinstance(labels, str):
+        labels = [labels]
+    if not wait_label(out_dir, step, labels, timeout=timeout, scroll=scroll):
         return False
     xml = dump_xml()
     root = parse_tree(xml)
     if root is None:
         return False
-    nodes = find_nodes(root, label)
+    _, nodes = find_any(root, labels)
     parent_map = {c: p for p in root.iter() for c in p}
     for node in nodes:
         # nearest clickable ancestor (including self)
@@ -164,14 +189,14 @@ def tap_label(out_dir, step, label, timeout=90, scroll=True):
             if cur.get("clickable") == "true":
                 c = center_of(cur)
                 if c:
-                    log(f"tap_label[{step}]: '{label}' clickable ancestor at {c}")
+                    log(f"tap_label[{step}]: {labels} clickable ancestor at {c}")
                     tap(*c, wait=2.0)
                     return True
             cur = parent_map.get(cur)
     for node in nodes:
         c = center_of(node)
         if c:
-            log(f"tap_label[{step}]: '{label}' text node at {c}")
+            log(f"tap_label[{step}]: {labels} text node at {c}")
             tap(*c, wait=2.0)
             return True
     return False
@@ -199,9 +224,9 @@ def go_back(wait=1.5):
 
 
 def capture_health(out_dir, tag):
-    if not tap_label(out_dir, f"health-nav-{tag}", HEALTH_LABEL):
+    if not tap_label(out_dir, f"health-nav-{tag}", HEALTH_LABELS):
         return False
-    if not wait_label(out_dir, f"health-screen-{tag}", HEALTH_MARKER, timeout=60):
+    if not wait_label(out_dir, f"health-screen-{tag}", HEALTH_MARKERS, timeout=60):
         return False
     time.sleep(2.5)  # let status rows and fixture RPCs settle
     save_dump(out_dir, f"ui-health-{tag}")
@@ -211,9 +236,12 @@ def capture_health(out_dir, tag):
 
 
 def capture_dreaming(out_dir, tag):
-    if not tap_label(out_dir, f"dreaming-nav-{tag}", DREAMING_LABEL):
+    """Dreaming is a sidebar page, not a settings-home row: open the sidebar first."""
+    if not tap_label(out_dir, f"sidebar-{tag}", SIDEBAR_LABELS, scroll=False):
         return False
-    if not wait_label(out_dir, f"dreaming-screen-{tag}", DREAMING_MARKER, timeout=60):
+    if not tap_label(out_dir, f"dreaming-nav-{tag}", DREAMING_LABELS):
+        return False
+    if not wait_label(out_dir, f"dreaming-screen-{tag}", DREAMING_MARKERS, timeout=60):
         return False
     time.sleep(2.5)
     save_dump(out_dir, f"ui-dreaming-{tag}")
@@ -249,13 +277,13 @@ def capture_set(apk_path, label, out_dir):
 
     ok = True
 
-    # Normal-scale captures: settings home -> Health, back -> Dreaming.
+    # Normal-scale captures: settings home -> Health, back -> sidebar -> Dreaming.
     launch_fixture_scene("settings")
-    if not wait_label(out_dir, f"settings-home-{label}", HEALTH_LABEL, timeout=120, scroll=True):
+    if not wait_label(out_dir, f"settings-home-{label}", HEALTH_LABELS, timeout=120, scroll=True):
         return False
     if capture_health(out_dir, f"{label}-normal"):
         go_back()
-        wait_label(out_dir, f"back-to-settings-{label}", HEALTH_LABEL, timeout=45, scroll=True)
+        wait_label(out_dir, f"back-to-settings-{label}", HEALTH_LABELS, timeout=45, scroll=True)
     else:
         ok = False
     if not capture_dreaming(out_dir, f"{label}-normal"):
@@ -263,11 +291,12 @@ def capture_set(apk_path, label, out_dir):
 
     # Narrow localized large-font captures (fr-FR, 2x font scale, 640x1360@320).
     apply_narrow_fr_2x()
+    log(f"narrow display: {adb('shell', 'wm size').strip()} density={adb('shell', 'wm density').strip()}")
     launch_fixture_scene("settings")
-    if wait_label(out_dir, f"settings-home-narrow-{label}", HEALTH_LABEL, timeout=120, scroll=True):
+    if wait_label(out_dir, f"settings-home-narrow-{label}", HEALTH_LABELS, timeout=120, scroll=True):
         if capture_health(out_dir, f"{label}-narrow-fr-2x"):
             go_back()
-            wait_label(out_dir, f"back-to-settings-narrow-{label}", HEALTH_LABEL, timeout=45, scroll=True)
+            wait_label(out_dir, f"back-to-settings-narrow-{label}", HEALTH_LABELS, timeout=45, scroll=True)
         else:
             ok = False
         if not capture_dreaming(out_dir, f"{label}-narrow-fr-2x"):
