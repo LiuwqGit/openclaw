@@ -95,7 +95,7 @@ jobs:
       - name: Install openclaw CLI (gateway for pairing)
         run: |
           set -euo pipefail
-          npm install -g openclaw@1.10.0
+          npm install -g openclaw@2026.10.3
           openclaw --version
 
       - name: Start local gateway
