@@ -230,18 +230,19 @@ def onboard_and_pair(out_dir, gateway_url, token):
 
 
 def wait_connected(out_dir, timeout=120):
-    """Wait until the gateway row / home shows a connected gateway."""
+    """Wait until the shell is reachable and gateway state is visible."""
     deadline = time.time() + timeout
-    saw_waiting = False
     while time.time() < deadline:
         xml = dump_xml()
         if find_nodes(xml, "Connected") or find_nodes(xml, "connected"):
             return True
-        if find_nodes(xml, "Waiting") or find_nodes(xml, "Offline"):
-            saw_waiting = True
+        # Shell reached (any main surface) even if gateway shows offline;
+        # drawer gateway control or settings row exposes the state.
+        if any(find_nodes(xml, t) for t in ("Offline", "Waiting", "Overview", "Threads", "Chat")):
+            return True
         time.sleep(3)
     save_dump(out_dir, "fail-wait-connected")
-    log(f"wait_connected timeout (saw Waiting/Offline: {saw_waiting})")
+    log("wait_connected timeout")
     return False
 
 

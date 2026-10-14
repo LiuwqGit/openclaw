@@ -124,7 +124,43 @@ jobs:
       - name: Create and boot emulator
         run: |
           set -euo pipefail
-          echo no | avdmanager create avd --force --name proof_api36 --package "system-images;android-36;google_apis;x86_64" --device pixel_2
+          if ! echo no | avdmanager create avd --force --name proof_api36 --package "system-images;android-36;google_apis;x86_64" --device pixel_2 2>"${RUNNER_TEMP}/avdmanager.log"; then
+            echo "avdmanager failed; creating AVD manually"
+            cat "${RUNNER_TEMP}/avdmanager.log" || true
+            AVD_HOME="$HOME/.android/avd/proof_api36.avd"
+            mkdir -p "$AVD_HOME"
+            cat > "$AVD_HOME/config.ini" <<'AVDINI'
+          avd.ini.encoding=UTF-8
+          AvdId=proof_api36
+          tag.display=Google APIs
+          tag.id=google_apis
+          abi.type=x86_64
+          disk.dataPartition.size=6G
+          hw.audioInput=yes
+          hw.cpu.arch=x86_64
+          hw.cpu.ncore=2
+          hw.device.name=pixel_2
+          hw.gpu.enabled=yes
+          hw.gpu.mode=swiftshader_indirect
+          hw.keyboard=yes
+          hw.lcd.density=420
+          hw.lcd.height=1920
+          hw.lcd.width=1080
+          hw.ramSize=3072
+          image.sysdir.1=system-images/android-36/google_apis/x86_64/
+          showDeviceFrame=no
+          fastboot.forceColdBoot=no
+          AVDINI
+            cat > "$HOME/.android/avd/proof_api36.ini" <<'AVDROOT'
+          avd.ini.encoding=UTF-8
+          path=$HOME/.android/avd/proof_api36.avd
+          path.rel=avd/proof_api36.avd
+          target=android-36
+          AVDROOT
+            # expand $HOME written literally above
+            sed -i "s|\$HOME|$HOME|g" "$HOME/.android/avd/proof_api36.ini"
+          fi
+          "${ANDROID_HOME}/emulator/emulator" -list-avds
           nohup "${ANDROID_HOME}/emulator/emulator" -avd proof_api36 \
             -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect \
             -no-snapshot -memory 3072 -cores 2 -port 5554 > "${RUNNER_TEMP}/emulator.log" 2>&1 &
