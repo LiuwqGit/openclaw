@@ -80,7 +80,7 @@ jobs:
           SRC="upstream-main/apps/android/app/src/main/java/ai/openclaw/app/ui/design/ClawComponents.kt"
           DST="apps/android/app/src/main/java/ai/openclaw/app/ui/design/ClawComponents.kt"
           test -f "$SRC"
-          if grep -q 'padding(horizontal = 10.dp' "$SRC"; then
+          if grep -q 'padding(horizontal = 10.dp, vertical = 6.dp)' "$SRC"; then
             echo "upstream main already carries the fix; BEFORE baseline invalid" >&2
             exit 2
           fi
