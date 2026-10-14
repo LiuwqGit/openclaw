@@ -136,6 +136,28 @@ def scroll_down():
     time.sleep(1.2)
 
 
+def scroll_up():
+    w, h = screen_size()
+    adb("shell", "input", "swipe", str(w // 2), str(int(h * 0.3)), str(w // 2), str(int(h * 0.85)), "300")
+    time.sleep(1.0)
+
+
+def scroll_to_top_find(out_dir, step, labels, max_scrolls=10):
+    """Scroll the list toward the top until any of `labels` is visible."""
+    for _ in range(max_scrolls + 1):
+        xml = dump_xml()
+        root = parse_tree(xml)
+        if root is not None:
+            found, _ = find_any(root, labels)
+            if found:
+                return True
+        scroll_up()
+    save_dump(out_dir, f"fail-scrolltop-{step}")
+    screencap(out_dir / f"fail-scrolltop-{step}.png")
+    log(f"scroll_to_top_find FAILED: {labels} (step {step})")
+    return False
+
+
 def find_any(root, labels):
     for label in labels:
         nodes = find_nodes(root, label)
@@ -236,10 +258,13 @@ def capture_health(out_dir, tag):
 
 
 def capture_dreaming(out_dir, tag):
-    """Dreaming is a sidebar page, not a settings-home row: open the sidebar first."""
-    if not tap_label(out_dir, f"sidebar-{tag}", SIDEBAR_LABELS, scroll=False):
+    """Dreaming is a sidebar page: scroll the settings list to the top so the
+    'Show Sidebar' top-bar button is visible, open the sidebar, tap Dreaming."""
+    if not scroll_to_top_find(out_dir, f"sidebar-{tag}", SIDEBAR_LABELS):
         return False
-    if not tap_label(out_dir, f"dreaming-nav-{tag}", DREAMING_LABELS):
+    if not tap_label(out_dir, f"sidebar-{tag}", SIDEBAR_LABELS, timeout=30, scroll=False):
+        return False
+    if not tap_label(out_dir, f"dreaming-nav-{tag}", DREAMING_LABELS, timeout=30):
         return False
     if not wait_label(out_dir, f"dreaming-screen-{tag}", DREAMING_MARKERS, timeout=60):
         return False
