@@ -1,0 +1,140 @@
+name: Installed-app proof captures (PR 171331)
+
+# 一次性证据采集工作流（fork 专用，不属于 PR diff）：
+# 在带 KVM 的 hosted runner 上构建 before/after 两个 APK，
+# 安装到真实 Android 模拟器（installed-app 执行），连接本地 openclaw gateway，
+# 驱动 UI 采集 Health / Dreaming before/after 截图（含 fr + 2x 字体 + 320dp 窄屏用例）。
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ci/installed-app-proof-171331]
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Setup Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Ensure Android SDK components
+        run: |
+          set -euo pipefail
+          echo "ANDROID_HOME=${ANDROID_HOME}"
+          ls "${ANDROID_HOME}"
+          SDKM="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -d "${ANDROID_HOME}/system-images/android-36/google_apis/x86_64" ]; then
+            yes | "$SDKM" --install "system-images;android-36;google_apis;x86_64" >/dev/null
+          fi
+          if [ ! -x "${ANDROID_HOME}/emulator/emulator" ]; then
+            yes | "$SDKM" --install "emulator" >/dev/null
+          fi
+          "$SDKM" --list_installed | head -20
+
+      - name: Build AFTER apk (PR head)
+        run: |
+          set -euo pipefail
+          cd apps/android
+          ./gradlew :app:assemblePlayDebug --console=plain
+          mkdir -p "${GITHUB_WORKSPACE}/proof-out"
+          cp app/build/outputs/apk/play/debug/*-play-debug.apk "${GITHUB_WORKSPACE}/proof-out/after-head.apk"
+
+      - name: Build BEFORE apk (origin/main row padding)
+        run: |
+          set -euo pipefail
+          git checkout origin/main -- apps/android/app/src/main/java/ai/openclaw/app/ui/design/ClawComponents.kt
+          cd apps/android
+          ./gradlew :app:assemblePlayDebug --console=plain
+          cp app/build/outputs/apk/play/debug/*-play-debug.apk "${GITHUB_WORKSPACE}/proof-out/before-main.apk"
+          git checkout HEAD -- apps/android/app/src/main/java/ai/openclaw/app/ui/design/ClawComponents.kt
+          git status --short
+
+      - name: Install openclaw CLI (gateway for pairing)
+        run: |
+          set -euo pipefail
+          npm install -g openclaw@1.10.0
+          openclaw --version
+
+      - name: Start local gateway
+        run: |
+          set -euo pipefail
+          export OPENCLAW_STATE_DIR="${RUNNER_TEMP}/oc-state"
+          mkdir -p "$OPENCLAW_STATE_DIR"
+          PROOF_TOKEN="$(openssl rand -hex 24)"
+          echo "$PROOF_TOKEN" > "${RUNNER_TEMP}/gateway-token.txt"
+          openclaw config set gateway.auth.mode token
+          openclaw config set gateway.auth.token "$PROOF_TOKEN"
+          nohup openclaw gateway --port 18790 --allow-unconfigured > "${RUNNER_TEMP}/gateway.log" 2>&1 &
+          for i in $(seq 1 60); do
+            if grep -q "ready" "${RUNNER_TEMP}/gateway.log" 2>/dev/null; then echo "gateway ready"; break; fi
+            sleep 2
+          done
+          tail -5 "${RUNNER_TEMP}/gateway.log"
+          curl -fsS -o /dev/null http://127.0.0.1:18790/ && echo "gateway http reachable"
+
+      - name: Create and boot emulator
+        run: |
+          set -euo pipefail
+          echo no | avdmanager create avd --force --name proof_api36 --package "system-images;android-36;google_apis;x86_64" --device pixel_2
+          nohup "${ANDROID_HOME}/emulator/emulator" -avd proof_api36 \
+            -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect \
+            -no-snapshot -memory 3072 -cores 2 -port 5554 > "${RUNNER_TEMP}/emulator.log" 2>&1 &
+          adb wait-for-device
+          for i in $(seq 1 120); do
+            BC="$(adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
+            if [ "$BC" = "1" ]; then echo "boot completed"; break; fi
+            sleep 5
+          done
+          adb devices
+
+      - name: Capture installed-app screenshots
+        run: |
+          set -euo pipefail
+          GATEWAY_TOKEN="$(cat "${RUNNER_TEMP}/gateway-token.txt")"
+          export GATEWAY_TOKEN
+          adb reverse tcp:18790 tcp:18790
+          adb -s emulator-5554 shell settings put global window_animation_scale 0
+          adb -s emulator-5554 shell settings put global transition_animation_scale 0
+          adb -s emulator-5554 shell settings put global animator_duration_scale 0
+          adb -s emulator-5554 shell svc power stayon true
+          adb -s emulator-5554 shell wm dismiss-keyguard || true
+          python3 proof-tools/capture-installed-app.py \
+            --before-apk "${GITHUB_WORKSPACE}/proof-out/before-main.apk" \
+            --after-apk "${GITHUB_WORKSPACE}/proof-out/after-head.apk" \
+            --out-dir "${GITHUB_WORKSPACE}/proof-out/captures" \
+            --gateway-url "ws://127.0.0.1:18790"
+
+      - name: Collect diagnostics
+        if: always()
+        run: |
+          mkdir -p "${GITHUB_WORKSPACE}/proof-out/diagnostics"
+          adb -s emulator-5554 logcat -d > "${GITHUB_WORKSPACE}/proof-out/diagnostics/logcat.txt" 2>/dev/null || true
+          cp "${RUNNER_TEMP}/gateway.log" "${GITHUB_WORKSPACE}/proof-out/diagnostics/" 2>/dev/null || true
+          cp "${RUNNER_TEMP}/emulator.log" "${GITHUB_WORKSPACE}/proof-out/diagnostics/" 2>/dev/null || true
+          ls -la "${GITHUB_WORKSPACE}/proof-out/captures" || true
+
+      - name: Upload captures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: installed-app-proof-captures
+          path: proof-out/
+          retention-days: 14
+          if-no-files-found: warn
