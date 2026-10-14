@@ -48,6 +48,16 @@ jobs:
           ls "${ANDROID_HOME}/system-images/android-36/google_apis/"
           test -x "${ANDROID_HOME}/emulator/emulator"
 
+      - name: Setup pnpm
+        run: npm install -g pnpm@12.3.4
+
+      - name: Install mermaid renderer dependencies (gradle preBuild needs them)
+        run: |
+          set -euo pipefail
+          pnpm install --frozen-lockfile --prefer-offline --optional \
+            --filter '@openclaw/mermaid-renderer...' \
+            --filter '@openclaw/gateway-protocol...'
+
       - name: Build AFTER apk (PR head)
         run: |
           set -euo pipefail
