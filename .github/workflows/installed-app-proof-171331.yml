@@ -166,17 +166,20 @@ jobs:
             -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect \
             -no-snapshot -memory 3072 -cores 2 -port 5554 -verbose > "${RUNNER_TEMP}/emulator.log" 2>&1 &
           EMU_OK=0
-          for i in $(seq 1 60); do
-            if adb devices 2>/dev/null | grep -q "emulator-5554.*device$"; then EMU_OK=1; break; fi
+          for i in $(seq 1 120); do
+            if timeout 20 adb devices 2>/dev/null | grep -q "emulator-5554.*device$"; then EMU_OK=1; break; fi
             sleep 5
           done
+          mkdir -p "${GITHUB_WORKSPACE}/proof-out/diagnostics"
           if [ "$EMU_OK" != "1" ]; then
             echo "emulator never registered with adb" >&2
-            tail -40 "${RUNNER_TEMP}/emulator.log" >&2
+            cp "${RUNNER_TEMP}/emulator.log" "${GITHUB_WORKSPACE}/proof-out/diagnostics/" 2>/dev/null || true
+            ls -la "$HOME/.android/avd/" >&2 || true
+            ls -la "$HOME/.android/avd/proof_api36.avd/" >&2 || true
             exit 1
           fi
           for i in $(seq 1 120); do
-            BC="$(adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
+            BC="$(timeout 20 adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
             if [ "$BC" = "1" ]; then echo "boot completed"; break; fi
             sleep 5
           done
@@ -206,7 +209,7 @@ jobs:
         run: |
           export PATH="${ANDROID_HOME}/platform-tools:${ANDROID_HOME}/emulator:${ANDROID_HOME}/cmdline-tools/latest/bin:$PATH"
           mkdir -p "${GITHUB_WORKSPACE}/proof-out/diagnostics"
-          adb -s emulator-5554 logcat -d > "${GITHUB_WORKSPACE}/proof-out/diagnostics/logcat.txt" 2>/dev/null || true
+          timeout 60 adb -s emulator-5554 logcat -d > "${GITHUB_WORKSPACE}/proof-out/diagnostics/logcat.txt" 2>/dev/null || true
           cp "${RUNNER_TEMP}/gateway.log" "${GITHUB_WORKSPACE}/proof-out/diagnostics/" 2>/dev/null || true
           cp "${RUNNER_TEMP}/emulator.log" "${GITHUB_WORKSPACE}/proof-out/diagnostics/" 2>/dev/null || true
           ls -la "${GITHUB_WORKSPACE}/proof-out/captures" || true
