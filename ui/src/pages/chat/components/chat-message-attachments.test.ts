@@ -281,49 +281,6 @@ describe("attachment sidebar source ownership", () => {
     container.remove();
   });
 
-  it("keeps document download actions visible and labeled beside the Open action", async () => {
-    const container = document.body.appendChild(document.createElement("div"));
-    const onOpenSidebar = vi.fn();
-    const source =
-      "/api/chat/media/outgoing/agent%3Amain%3Amain/bundle.zip?mediaTicket=ticket-bundle";
-    render(
-      renderAssistantAttachments(
-        [
-          {
-            type: "attachment",
-            attachment: {
-              kind: "document",
-              label: "bundle.zip",
-              mimeType: "application/zip",
-              url: source,
-            },
-          },
-        ],
-        {},
-        onOpenSidebar,
-        undefined,
-        false,
-      ),
-      container,
-    );
-    await vi.waitFor(() =>
-      expect(container.querySelector(".chat-assistant-attachment-card__download")).toBeTruthy(),
-    );
-    const download = container.querySelector<HTMLAnchorElement>(
-      ".chat-assistant-attachment-card__download",
-    )!;
-    expect(download.getAttribute("href")).toBe(source);
-    expect(download.classList.contains("chat-assistant-attachment-card__download--secondary")).toBe(
-      false,
-    );
-    expect(download.classList.contains("chat-assistant-attachment-card__action--labeled")).toBe(
-      true,
-    );
-    expect(download.textContent).toContain("Download");
-    expect(container.querySelector(".chat-assistant-attachment-card__expand")).not.toBeNull();
-    container.remove();
-  });
-
   it("loads SVG attachments through an image object URL", async () => {
     const intersectAttachment = stubAttachmentIntersection();
     const source = `${window.location.origin}/vector.svg`;

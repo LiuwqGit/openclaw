@@ -1,5 +1,3 @@
-// Document attachment downloads must stay visible at rest on hover-capable
-// pointers, while media downloads keep deferring to hover.
 import { render } from "lit";
 import { chromium, type Browser } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -17,19 +15,6 @@ const describeDownloadVisibility = canRunPlaywrightChromium(chromiumExecutablePa
 
 let browser: Browser;
 
-beforeAll(async () => {
-  if (!canRunPlaywrightChromium(chromiumExecutablePath)) {
-    return;
-  }
-  browser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
-});
-
-afterAll(async () => {
-  await browser?.close().catch(() => {});
-});
-
-// Renders the real card through the production Lit renderer, then measures
-// the painted download control inside a hover-capable browser.
 async function restDownloadState(
   options: Parameters<typeof renderCompactAttachmentCard>[0],
 ): Promise<{ opacity: string; pointerEvents: string }> {
@@ -50,11 +35,19 @@ async function restDownloadState(
       return { opacity: style.opacity, pointerEvents: style.pointerEvents };
     });
   } finally {
-    await page.close().catch(() => {});
+    await page.close();
   }
 }
 
 describeDownloadVisibility("attachment download visibility", () => {
+  beforeAll(async () => {
+    browser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
+  });
+
+  afterAll(async () => {
+    await browser.close();
+  });
+
   it("keeps a document download visible and clickable without hovering", async () => {
     expect(
       await restDownloadState({
