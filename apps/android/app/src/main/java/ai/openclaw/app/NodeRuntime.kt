@@ -2869,6 +2869,29 @@ class NodeRuntime internal constructor(
     systemAgentChatSupported.value = true
     _nodesDevicesSummary.value = AndroidScreenshotFixture.nodes
     channelsSummary.update { it.copy(summary = AndroidScreenshotFixture.channels) }
+    // Proof-capture harness (PR #171331, ci branch only): launchGatewayRefresh is a no-op in
+    // fixture mode, so load the dreaming and health-logs summaries from the fixture requester
+    // directly to let the Dreaming and Health status cards render their rows.
+    runCatching {
+      val dreamingStatusRoot = json.parseToJsonElement(screenshotRequester("doctor.memory.status", null)).asObjectOrNull()
+      val dreamingDiaryRoot = json.parseToJsonElement(screenshotRequester("doctor.memory.dreamDiary", null)).asObjectOrNull()
+      dreamingSummary.update {
+        it.copy(summary = parseDreamingSummary(dreaming = dreamingStatusRoot?.get("dreaming").asObjectOrNull(), diary = dreamingDiaryRoot))
+      }
+      val logsRoot = json.parseToJsonElement(screenshotRequester("logs.tail", null)).asObjectOrNull()
+      val logLines = (logsRoot?.get("lines") as? JsonArray)?.mapNotNull { line -> line.asStringOrNull() }.orEmpty()
+      healthLogsSummary.update {
+        it.copy(
+          summary =
+            GatewayHealthLogsSummary(
+              fileName = logsRoot.nonBlankString("file")?.substringAfterLast('/'),
+              cursor = logsRoot.long("cursor"),
+              truncated = logsRoot.boolean("truncated"),
+              entries = logLines.map { line -> parseGatewayLogEntry(line) },
+            ),
+        )
+      }
+    }
     _nodeCapabilityApproval.value = GatewayNodeCapabilityApproval.Approved
     _mainSessionKey.value = AndroidScreenshotFixture.mainSessionKey
     chat.applyMainSessionKey(AndroidScreenshotFixture.mainSessionKey)
