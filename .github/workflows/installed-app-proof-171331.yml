@@ -125,6 +125,8 @@ jobs:
         run: |
           set -euo pipefail
           export PATH="${ANDROID_HOME}/platform-tools:${ANDROID_HOME}/emulator:${ANDROID_HOME}/cmdline-tools/latest/bin:$PATH"
+          sudo chmod 666 /dev/kvm || true
+          ls -la /dev/kvm
           mkdir -p "${GITHUB_WORKSPACE}/proof-out/diagnostics"
           DBG="${GITHUB_WORKSPACE}/proof-out/diagnostics/emulator-setup.log"
           {
