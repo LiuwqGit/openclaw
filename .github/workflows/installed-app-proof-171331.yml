@@ -124,6 +124,7 @@ jobs:
       - name: Create and boot emulator
         run: |
           set -euo pipefail
+          export PATH="${ANDROID_HOME}/platform-tools:${ANDROID_HOME}/emulator:${ANDROID_HOME}/cmdline-tools/latest/bin:$PATH"
           if ! echo no | avdmanager create avd --force --name proof_api36 --package "system-images;android-36;google_apis;x86_64" --device pixel_2 2>"${RUNNER_TEMP}/avdmanager.log"; then
             echo "avdmanager failed; creating AVD manually"
             cat "${RUNNER_TEMP}/avdmanager.log" || true
@@ -177,6 +178,7 @@ jobs:
           set -euo pipefail
           GATEWAY_TOKEN="$(cat "${RUNNER_TEMP}/gateway-token.txt")"
           export GATEWAY_TOKEN
+          export PATH="${ANDROID_HOME}/platform-tools:${ANDROID_HOME}/emulator:${ANDROID_HOME}/cmdline-tools/latest/bin:$PATH"
           adb reverse tcp:18790 tcp:18790
           adb -s emulator-5554 shell settings put global window_animation_scale 0
           adb -s emulator-5554 shell settings put global transition_animation_scale 0
@@ -192,6 +194,7 @@ jobs:
       - name: Collect diagnostics
         if: always()
         run: |
+          export PATH="${ANDROID_HOME}/platform-tools:${ANDROID_HOME}/emulator:${ANDROID_HOME}/cmdline-tools/latest/bin:$PATH"
           mkdir -p "${GITHUB_WORKSPACE}/proof-out/diagnostics"
           adb -s emulator-5554 logcat -d > "${GITHUB_WORKSPACE}/proof-out/diagnostics/logcat.txt" 2>/dev/null || true
           cp "${RUNNER_TEMP}/gateway.log" "${GITHUB_WORKSPACE}/proof-out/diagnostics/" 2>/dev/null || true
