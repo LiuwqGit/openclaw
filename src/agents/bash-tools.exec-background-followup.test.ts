@@ -142,7 +142,7 @@ test("does not advertise detached continuation when process is unavailable", asy
   expect(result.details).not.toHaveProperty("followUp");
 });
 
-test.each(["ordinary", "live cron", "ended cron", "cron ended during admission"])(
+test.for(["ordinary", "live cron", "ended cron", "cron ended during admission"])(
   "keeps exec completion bound to its origin: %s",
   async (scenario, { signal }) => {
     const cron = scenario !== "ordinary";
