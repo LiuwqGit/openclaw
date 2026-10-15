@@ -3,6 +3,10 @@ import {
   captureSessionEventTargetForHost as captureSessionEventTarget,
   enqueueSessionEventForHost as enqueueSessionEvent,
 } from "../auto-reply/reply/session-event-handoff.js";
+import {
+  hasAgentRunContextExecutionOwner,
+  listAgentRunsForSession,
+} from "../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveEventSessionKeyForPolicy } from "../infra/event-session-routing.js";
 import { readExecRequestOwners, withExecRequestOwners } from "../infra/exec-request-context.js";
@@ -10,7 +14,7 @@ import { withSystemEventOwner } from "../infra/system-event-ownership.js";
 import { enqueueSystemEventWithReceipt } from "../infra/system-events.js";
 import { logWarn } from "../logger.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
-import { isSubagentSessionKey } from "../sessions/session-key-utils.js";
+import { isCronRunSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import { recordNotifyOnExitRemoval, tail, type ProcessSession } from "./bash-process-registry.js";
 import {
   appendExecTimeoutRetryGuidance,
@@ -19,6 +23,13 @@ import {
 } from "./bash-tools.exec-output.js";
 
 const DEFAULT_NOTIFY_TAIL_CHARS = 400;
+
+/** A cron-run completion belongs to its own run, never to the agent main session. */
+function isLiveCronRunSession(sessionKey: string): boolean {
+  return listAgentRunsForSession({ sessionKey }).some((run) =>
+    hasAgentRunContextExecutionOwner(run.runId),
+  );
+}
 
 /** Capture the original session before spawning work that may outlive its turn. */
 export function prepareExecExitNotification(
@@ -33,7 +44,13 @@ export function prepareExecExitNotification(
   ) {
     return undefined;
   }
-  const targetKey = resolveEventSessionKeyForPolicy(session.sessionKey, session.eventRouting ?? {});
+  // Exec completions from an isolated cron run must stay bound to the run that
+  // started them. The generic cron-run remap to agent-main exists for queue
+  // consumers (heartbeat drain) that only peek main/global; routing an exec
+  // completion there wakes an unrelated main-session turn instead (#172651).
+  const targetKey = isCronRunSessionKey(session.sessionKey)
+    ? session.sessionKey
+    : resolveEventSessionKeyForPolicy(session.sessionKey, session.eventRouting ?? {});
   const owner = session.agentId ?? parseAgentSessionKey(targetKey)?.agentId;
   if (!owner) {
     return undefined;
@@ -92,7 +109,18 @@ export function maybeNotifyOnExit(
     : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
   const eventText = appendExecTimeoutRetryGuidance(summary, session.exitReason);
   const eventRouting = session.eventRouting ?? {};
-  const eventSessionKey = resolveEventSessionKeyForPolicy(sessionKey, eventRouting);
+  const cronRunSession = isCronRunSessionKey(sessionKey);
+  // Once the originating cron run has ended, nobody consumes the completion;
+  // the output stays available through `process log` instead of waking main.
+  if (cronRunSession && !isLiveCronRunSession(sessionKey)) {
+    logWarn(
+      `exec: completion ${session.id} arrived after its cron run ended; inspect its process result.`,
+    );
+    return;
+  }
+  const eventSessionKey = cronRunSession
+    ? sessionKey
+    : resolveEventSessionKeyForPolicy(sessionKey, eventRouting);
   const eventOptions = withExecRequestOwners(
     {
       sessionKey: eventSessionKey,

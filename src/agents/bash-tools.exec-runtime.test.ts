@@ -3,6 +3,11 @@ import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
+  claimAgentRunContext,
+  releaseAgentRunContext,
+  resetAgentRunRegistryForTest,
+} from "../infra/agent-run-registry.js";
+import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
   type DiagnosticEventMetadata,
@@ -831,6 +836,95 @@ describe("exec notifyOnExit suppression", () => {
       expect(message).toContain("…");
       expect(message).toContain(head);
     }
+  });
+});
+
+describe("exec cron-run completion routing", () => {
+  const cronRunKey = "agent:ops:cron:nightly:run:abc123";
+
+  async function runCronRunBackgroundedExit(sessionKey: string) {
+    supervisorMock.spawn.mockImplementationOnce(
+      async (input: { onStdout?: (chunk: string) => void }) => {
+        input.onStdout?.("CRON_EXEC_OUTPUT\n");
+        return {
+          activity: { resultSettled: true, lastOutputAtMs: Date.now() },
+          runId: "cron-exec",
+          startedAtMs: Date.now(),
+          pid: 123,
+          wait: async () => createRunExit({ exitCode: 0 }),
+          cancel: vi.fn(),
+        };
+      },
+    );
+    const run = await runTestExecProcess({
+      command: "nightly-audit",
+      notifyOnExit: true,
+      sessionKey,
+      agentId: "ops",
+    });
+    markBackgrounded(run.session);
+    return { run, outcome: await run.promise };
+  }
+
+  beforeEach(() => {
+    resetAgentRunRegistryForTest();
+  });
+
+  afterEach(() => {
+    resetAgentRunRegistryForTest();
+  });
+
+  it("routes completions back to the live cron-run session instead of agent main", async () => {
+    const claim = claimAgentRunContext(
+      "cron-run-live",
+      { sessionKey: cronRunKey, agentId: "ops" },
+      { trackOwner: true },
+    );
+    const { outcome } = await runCronRunBackgroundedExit(cronRunKey);
+
+    expect(outcome.status).toBe("completed");
+    expect(enqueueSessionEventMock).toHaveBeenCalledTimes(1);
+    const [message, options] =
+      expectDefined(enqueueSessionEventMock.mock.calls[0], "cron-run completion enqueue call") ??
+      [];
+    expect(message).toContain("Exec completed");
+    expect(message).toContain("CRON_EXEC_OUTPUT");
+    expect(options.sessionKey).toBe(cronRunKey);
+    expect(options).toMatchObject({
+      agentId: "ops",
+      source: "exec",
+      expectedTarget: expect.objectContaining({ agentId: "ops", sessionKey: cronRunKey }),
+    });
+    releaseAgentRunContext("cron-run-live", claim);
+  });
+
+  it("drops the completion wake after the cron run ended while keeping process output", async () => {
+    const claim = claimAgentRunContext(
+      "cron-run-ended",
+      { sessionKey: cronRunKey, agentId: "ops" },
+      { trackOwner: true },
+    );
+    releaseAgentRunContext("cron-run-ended", claim);
+    const { run, outcome } = await runCronRunBackgroundedExit(cronRunKey);
+
+    expect(outcome.status).toBe("completed");
+    expect(enqueueSessionEventMock).not.toHaveBeenCalled();
+    expect(enqueueSystemEventWithReceiptMock).not.toHaveBeenCalled();
+    // The finished process keeps its output for `process log`/poll inspection.
+    expect(getFinishedSession(run.session.id)).toMatchObject({
+      exited: true,
+      aggregated: expect.stringContaining("CRON_EXEC_OUTPUT"),
+    });
+  });
+
+  it("keeps ordinary routing for non-run cron job session keys", async () => {
+    await runCronRunBackgroundedExit("agent:ops:cron:nightly");
+
+    expect(enqueueSessionEventMock).toHaveBeenCalledTimes(1);
+    const [, options] =
+      expectDefined(enqueueSessionEventMock.mock.calls[0], "cron job completion enqueue call") ??
+      [];
+    expect(options.sessionKey).toBe("agent:ops:cron:nightly");
   });
 });
 

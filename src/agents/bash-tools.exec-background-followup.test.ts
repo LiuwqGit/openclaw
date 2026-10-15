@@ -9,6 +9,7 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import * as sessionReads from "../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
 import { resetSystemEventsForTest } from "../infra/system-events.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
@@ -37,6 +38,7 @@ await Promise.all([
 let state: OpenClawTestState;
 let config: OpenClawConfig;
 const receipts: sessionEvents.SessionEventReceipt[] = [];
+const enqueuedSessionKeys: string[] = [];
 const enqueue = sessionEvents.enqueueSessionEventForHost;
 
 beforeAll(async () => {
@@ -76,6 +78,7 @@ beforeEach(() => {
   vi.spyOn(sessionEvents, "enqueueSessionEventForHost").mockImplementation((text, options) => {
     const receipt = enqueue(text, options);
     receipts.push(receipt);
+    enqueuedSessionKeys.push(options.sessionKey);
     return receipt;
   });
 });
@@ -86,6 +89,7 @@ afterEach(async () => {
   }
   await Promise.all(receipts.map((receipt) => receipt.settled));
   receipts.length = 0;
+  enqueuedSessionKeys.length = 0;
   vi.restoreAllMocks();
   resetProcessRegistryForTests();
   resetSystemEventsForTest();
@@ -139,6 +143,44 @@ test("does not advertise detached continuation when process is unavailable", asy
   });
   expect(result.details).toMatchObject({ status: "completed", aggregated: "FOREGROUND_COMPLETE" });
   expect(result.details).not.toHaveProperty("followUp");
+});
+
+test("routes an isolated cron-run completion back to its run session, not agent main", async ({
+  signal,
+}) => {
+  const sessionKey = "agent:main:cron:nightly:run:abc123";
+  await seedOrigin(sessionKey);
+  const claim = claimAgentRunContext(
+    "cron-run-followup",
+    { sessionKey, agentId: "main" },
+    { trackOwner: true },
+  );
+  const exec = createExecTool({
+    config,
+    host: "gateway",
+    security: "full",
+    ask: "off",
+    agentId: "main",
+    sessionKey,
+    scopeKey: sessionKey,
+    notifyOnExit: true,
+    allowBackground: true,
+  });
+  try {
+    const started = await exec.execute("cron-followup", {
+      command: nodeCommand('process.stdout.write("CRON_EXEC_DONE")'),
+      background: true,
+    });
+    expect(started.details.status).toBe("running");
+    await withinTest(waitForExecScope(sessionKey), signal);
+    await completion(signal);
+    expect(receipts).toHaveLength(1);
+    expect(model).toHaveBeenCalledOnce();
+    // The ordinary completion turn runs on the cron-run session, never on main.
+    expect(enqueuedSessionKeys).toEqual([sessionKey]);
+  } finally {
+    releaseAgentRunContext("cron-run-followup", claim);
+  }
 });
 
 test("starts and notifies when identity enrichment fails, then resolves child identity again", async ({
