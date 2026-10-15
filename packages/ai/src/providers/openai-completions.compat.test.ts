@@ -242,6 +242,34 @@ describe("OpenAI-compatible completions compatibility", () => {
     },
   );
 
+  it.each([
+    "anthropic/claude-haiku-latest",
+    "~anthropic/claude-haiku-latest",
+    "openrouter/~anthropic/claude-haiku-latest",
+  ])("defaults cache markers for OpenRouter Anthropic model id %s", (id) => {
+    expect(
+      resolveOpenAICompletionsCompat(
+        createModel({
+          provider: "openrouter",
+          id,
+          baseUrl: "https://openrouter.ai/api/v1",
+        }),
+      ).cacheControlFormat,
+    ).toBe("anthropic");
+  });
+
+  it("does not default cache markers for OpenRouter non-Anthropic tilde aliases", () => {
+    expect(
+      resolveOpenAICompletionsCompat(
+        createModel({
+          provider: "openrouter",
+          id: "~openai/gpt-5.6",
+          baseUrl: "https://openrouter.ai/api/v1",
+        }),
+      ).cacheControlFormat,
+    ).toBeUndefined();
+  });
+
   it.each([true])(
     "sends custom-endpoint long TTL only with explicit support: %s",
     async (supportsLongCacheRetention) => {

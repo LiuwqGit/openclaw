@@ -123,6 +123,25 @@ describe("proxy stream wrappers", () => {
     ]);
   });
 
+  it.each(["~anthropic/claude-haiku-latest", "openrouter/~anthropic/claude-haiku-latest"])(
+    "injects cache_control markers for OpenRouter Anthropic alias %s",
+    (id) => {
+      const payload = runSystemCacheWrapper({ id });
+
+      expect(payload.messages[0]?.content).toEqual([
+        { type: "text", text: "system prompt", cache_control: { type: "ephemeral" } },
+      ]);
+    },
+  );
+
+  it("does not inject cache_control markers for OpenRouter non-Anthropic tilde aliases", () => {
+    const payload = runSystemCacheWrapper({
+      id: "~openai/gpt-5.6",
+    });
+
+    expect(payload.messages[0]?.content).toBe("system prompt");
+  });
+
   it("does not inject cache_control markers for declared OpenRouter providers on custom proxy URLs", () => {
     const payload = runSystemCacheWrapper({
       baseUrl: "https://proxy.example.com/v1",

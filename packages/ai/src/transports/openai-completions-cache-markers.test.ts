@@ -179,6 +179,29 @@ describe("managed Completions cache markers", () => {
     },
   );
 
+  it.each(["~anthropic/claude-haiku-latest", "openrouter/~anthropic/claude-haiku-latest"])(
+    "applies the same marker layout to OpenRouter Anthropic alias %s as to exact ids",
+    (id) => {
+      const aliasRoute = { ...model, id };
+      const exactRoute = {
+        ...model,
+        id: "anthropic/claude-haiku-5.5",
+      };
+      const aliasPayload = buildOpenAICompletionsParams(aliasRoute, context, undefined);
+      const exactPayload = buildOpenAICompletionsParams(exactRoute, context, undefined);
+      expect(markers(aliasPayload)).toHaveLength(3);
+      expect(aliasPayload.messages).toEqual(exactPayload.messages);
+      expect(aliasPayload.tools).toEqual(exactPayload.tools);
+    },
+  );
+
+  it("does not apply cache markers to OpenRouter non-Anthropic tilde aliases", () => {
+    const payload = buildOpenAICompletionsParams({ ...model, id: "~openai/gpt-5.6" }, context, {
+      cacheRetention: "short",
+    });
+    expect(markers(payload)).toHaveLength(0);
+  });
+
   it.each([
     ["openrouter", "", 3, true],
     ["custom", "https://openrouter.ai/api/v1", 3, true],

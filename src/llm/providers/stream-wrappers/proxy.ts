@@ -115,6 +115,23 @@ function resolveOpenRouterResponseCacheHeaders(
   return headers;
 }
 
+/**
+ * Strips the OpenRouter provider qualifier and tilde-alias prefix from a model ref
+ * (e.g. `openrouter/~anthropic/claude-haiku-latest` -> `anthropic/claude-haiku-latest`).
+ * Mirrors `normalizeOpenRouterModelFamilyId` from extensions/openrouter without
+ * importing plugin code into core.
+ */
+function normalizeOpenRouterModelFamilyRef(modelId: string | undefined): string | undefined {
+  if (!modelId) {
+    return undefined;
+  }
+  const familyId = modelId
+    .toLowerCase()
+    .replace(/^openrouter\//, "")
+    .replace(/^~/, "");
+  return familyId || undefined;
+}
+
 /** @deprecated OpenRouter provider-owned stream helper; do not use from third-party plugins. */
 export function createOpenRouterSystemCacheWrapper(
   baseStreamFn: StreamFn | undefined,
@@ -125,7 +142,13 @@ export function createOpenRouterSystemCacheWrapper(
     const modelId = readStringValue(model.id);
     // Keep OpenRouter-specific cache markers on verified OpenRouter routes
     // (or the provider's default route), but not on arbitrary OpenAI proxies.
-    if (!isOpenRouterEndpoint(model) || !modelId || !isAnthropicModelRef(modelId)) {
+    // Tilde aliases (e.g. `~anthropic/claude-haiku-latest`) and provider-qualified
+    // refs (`openrouter/~anthropic/...`) name the same upstream Anthropic routes as
+    // exact ids; normalize the family before the prefix check. Mirrors
+    // normalizeOpenRouterModelFamilyId from extensions/openrouter without importing
+    // plugin code into core.
+    const modelFamilyId = normalizeOpenRouterModelFamilyRef(modelId);
+    if (!isOpenRouterEndpoint(model) || !modelFamilyId || !isAnthropicModelRef(modelFamilyId)) {
       return underlying(model, context, options);
     }
 

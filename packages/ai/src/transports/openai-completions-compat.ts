@@ -189,6 +189,17 @@ function resolveOpenAICompletionsCompatDefaults(
     (isDefaultRoute &&
       isDefaultRouteProvider(input.provider, "cerebras", "chutes", "deepseek", "opencode", "xai"));
   const isOpenRouterLike = input.provider === "openrouter" || endpointClass === "openrouter";
+  // Tilde aliases (e.g. `~anthropic/claude-haiku-latest`) and provider-qualified
+  // refs (`openrouter/~anthropic/...`) name the same upstream Anthropic routes as
+  // exact ids; normalize the family before the prefix check. Mirrors
+  // normalizeOpenRouterModelFamilyId from extensions/openrouter without importing
+  // plugin code into packages/ai.
+  const anthropicFamilyModelId =
+    modelId
+      ?.toLowerCase()
+      .replace(/^openrouter\//, "")
+      .replace(/^~/, "")
+      .startsWith("anthropic/") === true;
   const isLocalEndpoint = endpointClass === "local";
   const isMistral = knownProviderFamily === "mistral" || endpointClass === "mistral-public";
   const usesMaxTokens =
@@ -236,7 +247,7 @@ function resolveOpenAICompletionsCompatDefaults(
     requiresNonEmptyUserOrAssistantMessage: isModelStudioLike,
     cacheControlFormat:
       (isModelStudioLike && endpointClass !== "custom") ||
-      (modelId?.toLowerCase().startsWith("anthropic/") === true &&
+      (anthropicFamilyModelId &&
         (endpointClass === "openrouter" ||
           (isDefaultRoute && provider === "openrouter") ||
           provider === "deepinfra"))
