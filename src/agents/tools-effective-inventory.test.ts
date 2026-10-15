@@ -197,6 +197,19 @@ describe("resolveEffectiveToolInventory", () => {
     });
   });
 
+  it("propagates the session web-search gate to the coding tool construction", async () => {
+    await resolveEffectiveToolInventory({ cfg: {}, webSearchEnabled: false });
+
+    expect(effectiveInventoryState.createToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ webSearchEnabled: false }),
+    );
+
+    await resolveEffectiveToolInventory({ cfg: {} });
+    expect(
+      effectiveInventoryState.createToolsMock.mock.calls.at(-1)?.[0]?.webSearchEnabled,
+    ).toBeUndefined();
+  });
+
   it("groups bundled MCP tools separately from generic plugin tools", async () => {
     await loadHarness({
       tools: [

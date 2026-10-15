@@ -72,3 +72,66 @@ it("invalidates fresh inventory when only the persisted session ceiling changes"
     inventoryMocks.resolveEffectiveToolInventory.mock.calls[1]?.[0].conversationCapabilityProfile,
   ).toMatchObject({ policy: { inheritedToolPolicy: { deny: ["exec"] } } });
 });
+
+it("invalidates fresh inventory when only the saved web-search override changes", async () => {
+  const sessionKey = "agent:main:subagent:web-search-refresh";
+  const loaded: Awaited<ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>> = {
+    cfg: { agents: { entries: { main: {} } } },
+    agentId: "main",
+    storePath: "/tmp/tools-effective-web-search/sessions.sqlite",
+    store: {},
+    canonicalKey: sessionKey,
+    storeKeys: [sessionKey],
+    legacyKey: undefined,
+    entry: {
+      sessionId: "unchanged-session",
+      updatedAt: 1,
+      spawnDepth: 1,
+      spawnedBy: "agent:main:main",
+    },
+  };
+  vi.mocked(loadGatewaySessionEntryReadOnlyInWorker)
+    .mockResolvedValueOnce(loaded)
+    .mockResolvedValueOnce({
+      ...loaded,
+      entry: {
+        ...expectDefined(loaded.entry, "session fixture"),
+        toolOverrides: { webSearch: false },
+      },
+    });
+  const handler = expectDefined(
+    toolsEffectiveHandlers["tools.effective"],
+    "tools.effective handler",
+  );
+  const invoke = async () => {
+    const respond = vi.fn();
+    await handler({
+      params: { sessionKey },
+      respond: respond as never,
+      context: { getRuntimeConfig: () => loaded.cfg } as never,
+      client: null,
+      req: { type: "req", id: "req-web-search-refresh", method: "tools.effective" },
+      isWebchatConnect: () => false,
+    });
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
+    return respond.mock.calls[0]?.[1];
+  };
+
+  const first = await invoke();
+  inventoryMocks.resolveEffectiveToolInventory.mockResolvedValueOnce({
+    agentId: "main",
+    profile: "coding",
+    groups: [],
+  });
+  const second = await invoke();
+
+  expect(first).toMatchObject({ groups: [{ tools: [{ id: "exec" }] }] });
+  expect(second).toMatchObject({ groups: [] });
+  expect(inventoryMocks.resolveEffectiveToolInventory).toHaveBeenCalledTimes(2);
+  expect(inventoryMocks.resolveEffectiveToolInventory.mock.calls[0]?.[0].webSearchEnabled).toBe(
+    undefined,
+  );
+  expect(inventoryMocks.resolveEffectiveToolInventory.mock.calls[1]?.[0].webSearchEnabled).toBe(
+    false,
+  );
+});

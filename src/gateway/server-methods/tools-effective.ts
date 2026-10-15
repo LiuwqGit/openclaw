@@ -105,6 +105,10 @@ function buildToolsEffectiveCacheKey(context: TrustedToolsEffectiveContext): str
     groupChannel: optionalCacheString(context.groupChannel),
     groupSpace: optionalCacheString(context.groupSpace),
     replyToMode: optionalCacheString(context.replyToMode),
+    // The saved web-search override gates the base inventory's core web_search
+    // tool, so previews across differing override states must never share an
+    // entry. Normalized like the session store: only an explicit false differs.
+    webSearch: context.toolOverrides?.webSearch === false,
     // Prepared session ceilings can change without a config or session-id change.
     policy: buildConversationToolPolicyPipelineSteps({
       capabilityProfile: context.capabilityProfile,
@@ -285,6 +289,9 @@ async function resolveBaseToolsEffectiveInventory(
         groupChannel: context.groupChannel,
         groupSpace: context.groupSpace,
         replyToMode: context.replyToMode,
+        // Mirror the run-preparation path: a saved SessionToolOverrides.webSearch
+        // false value omits the managed core web_search tool from the preview.
+        webSearchEnabled: context.toolOverrides?.webSearch === false ? false : undefined,
       }),
     );
   } finally {

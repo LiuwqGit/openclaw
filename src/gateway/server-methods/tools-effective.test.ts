@@ -506,6 +506,28 @@ describe("tools.effective handler", () => {
     expect(resolveEffectiveToolInventoryArg(1)?.workspaceDir).toBe("/tmp/workspace-sandbox");
   });
 
+  it("passes the saved session web-search override into the base inventory projection", async () => {
+    const loaded = runtimeMocks.loadSessionEntry("main:abc");
+    runtimeMocks.loadSessionEntry.mockReturnValueOnce({
+      ...loaded,
+      entry: { ...loaded.entry, toolOverrides: { webSearch: false } },
+    } as never);
+
+    const { respond, invoke } = createInvokeParams({ sessionKey: "main:abc" });
+    await invoke();
+
+    expect(firstRespondCall(respond)?.[0]).toBe(true);
+    expect(resolveEffectiveToolInventoryArg()?.webSearchEnabled).toBe(false);
+  });
+
+  it("keeps the base projection unchanged when no session web-search override is saved", async () => {
+    const { respond, invoke } = createInvokeParams({ sessionKey: "main:abc" });
+    await invoke();
+
+    expect(firstRespondCall(respond)?.[0]).toBe(true);
+    expect(resolveEffectiveToolInventoryArg()?.webSearchEnabled).toBeUndefined();
+  });
+
   it("coalesces identical base inventory cache misses while inventory resolution is pending", async () => {
     const first = createInvokeParams({ sessionKey: "main:abc" });
     const second = createInvokeParams({ sessionKey: "main:abc" });
