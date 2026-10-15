@@ -187,7 +187,8 @@ test.for(["ordinary", "live cron", "ended cron", "cron ended during admission"])
       if (scenario.includes("ended")) {
         if (scenario === "cron ended during admission") {
           expect(receipts).toHaveLength(1);
-          expect(await withinTest(receipts[0].settled, signal)).toMatchObject({
+          const receipt = expectDefined(receipts[0], "cron completion receipt");
+          expect(await withinTest(receipt.settled, signal)).toMatchObject({
             status: "failed",
             executionStarted: false,
             error: expect.stringContaining("Originating cron run ended"),
@@ -200,7 +201,8 @@ test.for(["ordinary", "live cron", "ended cron", "cron ended during admission"])
         await completion(signal);
         expect(receipts).toHaveLength(1);
         expect(model).toHaveBeenCalledOnce();
-        expect(model.mock.calls[0][0].sessionKey).toBe(sessionKey);
+        const [params] = expectDefined(model.mock.calls[0], "completion turn");
+        expect(params.sessionKey).toBe(sessionKey);
       }
       if (started.details.status !== "running") {
         throw new Error("Expected a background process");
