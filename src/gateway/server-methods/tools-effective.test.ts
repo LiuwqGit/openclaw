@@ -510,47 +510,33 @@ describe("tools.effective handler", () => {
     expect(resolveEffectiveToolInventoryArg(1)?.workspaceDir).toBe("/tmp/workspace-sandbox");
   });
 
-  it("omits core web_search from the returned inventory when the saved session override disables it", async () => {
-    // Real construction: the regression must observe the returned inventory, not
-    // resolver arguments, so a projection that keeps web_search cannot pass.
-    const { resolveEffectiveToolInventory: resolveRealInventory } = await vi.importActual<
-      typeof import("../../agents/tools-effective-inventory.js")
-    >("../../agents/tools-effective-inventory.js");
-    const webSearchCfg = { tools: { web: { search: { enabled: true, provider: "brave" } } } };
+  it("updates returned web_search availability when only the saved override changes", async () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    onTestFinished(() => clock.mockRestore());
+    const { resolveEffectiveToolInventory } = await vi.importActual<InventoryModule>(
+      "../../agents/tools-effective-inventory.js",
+    );
+    runtimeMocks.resolveEffectiveToolInventory.mockImplementation(resolveEffectiveToolInventory);
+    const cfg: OpenClawConfig = {
+      tools: { web: { search: { enabled: true, provider: "brave" } } },
+    };
     const loaded = runtimeMocks.loadSessionEntry("main:abc");
-    const loadWithOverride = (toolOverrides?: { webSearch: boolean }) =>
-      runtimeMocks.loadSessionEntry.mockImplementationOnce(
-        () =>
-          ({
-            ...loaded,
-            cfg: webSearchCfg,
-            entry: { ...loaded.entry, ...(toolOverrides ? { toolOverrides } : {}) },
-          }) as never,
-      );
+    const entry = expectDefined(loaded.entry, "session fixture");
 
-    loadWithOverride({ webSearch: false });
-    runtimeMocks.resolveEffectiveToolInventory.mockImplementationOnce(
-      (params) => resolveRealInventory(params as never) as never,
-    );
-    const restricted = createInvokeParams({ sessionKey: "main:abc" });
-    await restricted.invoke();
-    const restrictedPayload = firstRespondCall(restricted.respond)?.[1] as ToolsEffectivePayload;
-    const restrictedToolIds = (restrictedPayload.groups ?? []).flatMap((group) =>
-      (group.tools ?? []).map((tool) => tool.id),
-    );
-    expect(restrictedToolIds).not.toContain("web_search");
-
-    loadWithOverride(undefined);
-    runtimeMocks.resolveEffectiveToolInventory.mockImplementationOnce(
-      (params) => resolveRealInventory(params as never) as never,
-    );
-    const unset = createInvokeParams({ sessionKey: "main:abc" });
-    await unset.invoke();
-    const unsetPayload = firstRespondCall(unset.respond)?.[1] as ToolsEffectivePayload;
-    const unsetToolIds = (unsetPayload.groups ?? []).flatMap((group) =>
-      (group.tools ?? []).map((tool) => tool.id),
-    );
-    expect(unsetToolIds).toContain("web_search");
+    // Keep all other cache inputs and time fixed across both override transitions.
+    for (const webSearch of [undefined, false, true, undefined]) {
+      runtimeMocks.loadSessionEntry.mockReturnValueOnce({
+        ...loaded,
+        cfg,
+        entry: { ...entry, toolOverrides: { webSearch } },
+      });
+      const { respond, invoke } = createInvokeParams({ sessionKey: "main:abc" }, cfg);
+      await invoke();
+      expectResponsesOk(respond);
+      const payload = firstRespondCall(respond)?.[1] as ToolsEffectivePayload;
+      const toolIds = payload.groups?.flatMap((group) => group.tools?.map((tool) => tool.id) ?? []);
+      expect(toolIds?.includes("web_search")).toBe(webSearch !== false);
+    }
   });
 
   it("coalesces identical base inventory cache misses while inventory resolution is pending", async () => {

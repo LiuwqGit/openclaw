@@ -43,10 +43,6 @@ export type ResolveEffectiveToolInventoryParams = {
   groupChannel?: string | null;
   groupSpace?: string | null;
   replyToMode?: "off" | "first" | "all" | "batched";
-  /**
-   * Session-scoped web-search gate mirrored from saved SessionToolOverrides.
-   * `false` omits the managed core web_search tool; undefined keeps defaults.
-   */
   webSearchEnabled?: boolean;
   modelHasVision?: boolean;
   requireExplicitMessageTarget?: boolean;
