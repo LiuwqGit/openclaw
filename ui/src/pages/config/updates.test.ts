@@ -148,6 +148,38 @@ describe("renderUpdates", () => {
       title: "",
     },
     {
+      name: "up to date without install details",
+      props: {
+        update: {
+          updateSchedule: { channel: "stable", autoEnabled: false },
+          updateAvailable: null,
+        },
+      },
+      status: "Up to date",
+      tone: "ok",
+      label: "Update now",
+      disabled: false,
+      title: "",
+    },
+    {
+      name: "unknown install kind without a pending update",
+      props: {
+        update: {
+          updateSchedule: {
+            channel: "stable",
+            autoEnabled: false,
+            install: { kind: "unknown" },
+          },
+          updateAvailable: null,
+        },
+      },
+      status: "Update status unavailable",
+      tone: "muted",
+      label: "Update now",
+      disabled: false,
+      title: "",
+    },
+    {
       name: "update available",
       props: {},
       status: "Update available v2026.8.2",

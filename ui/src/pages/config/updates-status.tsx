@@ -79,10 +79,20 @@ export function UpdatesStatus(props: UpdatesViewProps) {
     } else if (target) {
       kind = "accent";
       label = t("updates.page.available", { target });
-    } else if (props.update.updateSchedule?.install?.kind === "package") {
+    } else if (
+      props.update.updateSchedule?.install?.kind === "package" ||
+      (props.update.updateSchedule && !props.update.updateSchedule.install)
+    ) {
+      // A schedule without install details is the ordinary shape for manual-update
+      // installs with no pending update (and for host-managed installs): the
+      // producer only attaches install facts for discovery failures or immutable
+      // checkouts. With no error banner surfaced by the earlier branches, no known
+      // update means up to date, matching `openclaw update status`.
       kind = "ok";
       label = t("updates.page.upToDate");
     } else {
+      // Genuinely indeterminate states keep the unavailable label: no schedule at
+      // all, or explicit install facts whose kind is unknown/immutable.
       label = t("updates.page.statusUnavailable");
     }
     return {
