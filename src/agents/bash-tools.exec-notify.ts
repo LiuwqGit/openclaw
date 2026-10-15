@@ -24,13 +24,6 @@ import {
 
 const DEFAULT_NOTIFY_TAIL_CHARS = 400;
 
-/** A cron-run completion belongs to its own run, never to the agent main session. */
-function isLiveCronRunSession(sessionKey: string): boolean {
-  return listAgentRunsForSession({ sessionKey }).some((run) =>
-    hasAgentRunContextExecutionOwner(run.runId),
-  );
-}
-
 /** Capture the original session before spawning work that may outlive its turn. */
 export function prepareExecExitNotification(
   session: ProcessSession,
@@ -44,10 +37,7 @@ export function prepareExecExitNotification(
   ) {
     return undefined;
   }
-  // Exec completions from an isolated cron run must stay bound to the run that
-  // started them. The generic cron-run remap to agent-main exists for queue
-  // consumers (heartbeat drain) that only peek main/global; routing an exec
-  // completion there wakes an unrelated main-session turn instead (#172651).
+  // Ordinary event admission can address the cron run directly, unlike heartbeat drains.
   const targetKey = isCronRunSessionKey(session.sessionKey)
     ? session.sessionKey
     : resolveEventSessionKeyForPolicy(session.sessionKey, session.eventRouting ?? {});
@@ -57,6 +47,18 @@ export function prepareExecExitNotification(
   }
   return captureSessionEventTarget(owner, targetKey).then(
     (target) => {
+      if (isCronRunSessionKey(targetKey)) {
+        const runs = listAgentRunsForSession({
+          sessionKey: targetKey,
+          sessionId: target.sessionId,
+        });
+        // Retain the originating runs, so a completion turn cannot extend its own lifetime.
+        target.assertCurrent = () => {
+          if (!runs.some((run) => hasAgentRunContextExecutionOwner(run.runId))) {
+            throw new Error("Originating cron run ended; inspect the result with process log");
+          }
+        };
+      }
       session.notifySessionTarget = target;
     },
     (error: unknown) => {
@@ -108,19 +110,9 @@ export function maybeNotifyOnExit(
     ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}`
     : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
   const eventText = appendExecTimeoutRetryGuidance(summary, session.exitReason);
-  const eventRouting = session.eventRouting ?? {};
-  const cronRunSession = isCronRunSessionKey(sessionKey);
-  // Once the originating cron run has ended, nobody consumes the completion;
-  // the output stays available through `process log` instead of waking main.
-  if (cronRunSession && !isLiveCronRunSession(sessionKey)) {
-    logWarn(
-      `exec: completion ${session.id} arrived after its cron run ended; inspect its process result.`,
-    );
-    return;
-  }
-  const eventSessionKey = cronRunSession
-    ? sessionKey
-    : resolveEventSessionKeyForPolicy(sessionKey, eventRouting);
+  const eventSessionKey =
+    session.notifySessionTarget?.sessionKey ??
+    resolveEventSessionKeyForPolicy(sessionKey, session.eventRouting);
   const eventOptions = withExecRequestOwners(
     {
       sessionKey: eventSessionKey,
