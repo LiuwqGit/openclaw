@@ -16,6 +16,7 @@ export const TAB_SCOPED_COMMANDS = new Set([
   "Fetch.fulfillRequest",
   "Network.enable",
   "Network.setAttachDebugStack",
+  "Network.setCacheDisabled",
   "Runtime.enable",
   "Runtime.runIfWaitingForDebugger",
   "Target.setAutoAttach",
