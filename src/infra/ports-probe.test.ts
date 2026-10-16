@@ -209,3 +209,56 @@ describe("probePortUsage", () => {
     },
   );
 });
+
+describe("probePortUsage confirm budget", () => {
+  // Windows hosts can return ECONNREFUSED for a closed LAN IPv4 address only after
+  // seconds; a fixed 250ms confirm cutoff keeps reporting unknown forever (#174563).
+  function delayedRefusalSocket(delayMs: number): net.Socket {
+    const socket = new net.Socket();
+    const error = Object.assign(new Error("connect ECONNREFUSED"), {
+      code: "ECONNREFUSED",
+    });
+    setTimeout(() => socket.destroy(error), delayMs);
+    return socket;
+  }
+
+  it("confirms a slowly refusing host within an extended probe budget", async () => {
+    const claim = await acquireTestPortBlock({ offsets: [0] });
+    const connect = vi.spyOn(net, "connect");
+    try {
+      connect.mockImplementation(() => delayedRefusalSocket(400));
+      await expect(probePortUsage(claim.port, ["127.0.0.1"], undefined, 1_000)).resolves.toBe(
+        "free",
+      );
+      // Without an extended budget the historical per-probe cutoff keeps the result unknown.
+      await expect(probePortUsage(claim.port, ["127.0.0.1"])).resolves.toBe("unknown");
+    } finally {
+      connect.mockRestore();
+      await claim.release();
+    }
+  });
+
+  it("shares one budget across hosts instead of renewing it per host", async () => {
+    const claim = await acquireTestPortBlock({ offsets: [0] });
+    const connect = vi.spyOn(net, "connect");
+    let probes = 0;
+    try {
+      connect.mockImplementation(() => {
+        probes += 1;
+        // The first host never answers and consumes the whole budget; a second
+        // full-budget probe would let the fast-refusing second host report free.
+        return probes === 1 ? new net.Socket() : delayedRefusalSocket(50);
+      });
+      const began = Date.now();
+      await expect(
+        probePortUsage(claim.port, ["127.0.0.1", "127.0.0.2"], undefined, 400),
+      ).resolves.toBe("unknown");
+      // The first host's confirm must be able to span the full shared budget.
+      expect(Date.now() - began).toBeGreaterThanOrEqual(390);
+      expect(connect).toHaveBeenCalledTimes(2);
+    } finally {
+      connect.mockRestore();
+      await claim.release();
+    }
+  });
+});

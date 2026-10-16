@@ -464,7 +464,7 @@ async function readWindowsNetstatEntries<T extends PortListener>(
 
 export async function inspectPortUsage(
   port: number,
-  options?: { probeHosts?: readonly string[]; signal?: AbortSignal },
+  options?: { probeHosts?: readonly string[]; probeBudgetMs?: number; signal?: AbortSignal },
 ): Promise<PortUsage> {
   const signal = options?.signal;
   signal?.throwIfAborted();
@@ -475,7 +475,7 @@ export async function inspectPortUsage(
   if (process.platform !== "win32") {
     await enrichUnixListenerProcessInfo(result.entries, signal);
   }
-  return buildPortUsage(port, result, options?.probeHosts, signal);
+  return buildPortUsage(port, result, options?.probeHosts, signal, options?.probeBudgetMs);
 }
 
 async function buildPortUsage(
@@ -483,14 +483,15 @@ async function buildPortUsage(
   result: SocketReadResult<PortListener>,
   probeHosts?: readonly string[],
   signal?: AbortSignal,
+  probeBudgetMs?: number,
 ): Promise<PortUsage> {
   signal?.throwIfAborted();
   let listeners = result.entries;
   const status: PortUsageStatus = probeHosts
-    ? await probePortUsage(port, probeHosts, signal)
+    ? await probePortUsage(port, probeHosts, signal, probeBudgetMs)
     : listeners.length > 0
       ? "busy"
-      : await probePortUsage(port, undefined, signal);
+      : await probePortUsage(port, undefined, signal, probeBudgetMs);
   signal?.throwIfAborted();
   if (status !== "busy") {
     listeners = [];

@@ -68,6 +68,7 @@ export async function probeTcpListener(
   port: number,
   host: string,
   signal?: AbortSignal,
+  timeoutMs = 250,
 ): Promise<PortUsageStatus> {
   signal?.throwIfAborted();
   return await new Promise<PortUsageStatus>((resolve) => {
@@ -83,7 +84,7 @@ export async function probeTcpListener(
       result = isErrno(error) && error.code === "ECONNREFUSED" ? "free" : "unknown";
       destroy();
     });
-    socket.setTimeout(250, destroy);
+    socket.setTimeout(timeoutMs, destroy);
     // Closing, not just requesting destruction, releases the probe's I/O and timer.
     socket.once("close", () => {
       signal?.removeEventListener("abort", destroy);
@@ -105,12 +106,13 @@ async function probePortOnHost(
   port: number,
   host: string,
   signal?: AbortSignal,
+  timeoutMs?: number,
 ): Promise<PortUsageStatus | "skip"> {
   try {
     await tryListenOnPort({ port, host, exclusive: true, ...(signal ? { signal } : {}) });
     // A successful scoped bind can coexist with a wildcard listener on macOS.
     // Confirm the endpoint before declaring it free, even without lsof or ss.
-    const confirmed = await probeTcpListener(port, host, signal);
+    const confirmed = await probeTcpListener(port, host, signal, timeoutMs);
     // With IPv6 disabled on Linux, `::` still binds but its confirming connect targets the
     // missing `::1` and cannot be answered. The successful wildcard bind is then conclusive.
     if (confirmed === "unknown" && host === "::" && (await isIpv6LoopbackUnavailable(signal))) {
@@ -134,11 +136,17 @@ export async function probePortUsage(
   port: number,
   probeHosts: readonly string[] = PORT_PROBE_HOSTS,
   signal?: AbortSignal,
+  probeBudgetMs?: number,
 ): Promise<PortUsageStatus> {
   signal?.throwIfAborted();
+  // A shared budget coordinates per-host confirm deadlines with a caller's overall
+  // wait window: one slow host cannot renew the deadline for the hosts after it.
+  const budgetDeadline = probeBudgetMs === undefined ? null : Date.now() + probeBudgetMs;
   let sawUnknown = false;
   for (const host of probeHosts) {
-    const result = await probePortOnHost(port, host, signal);
+    const hostTimeoutMs =
+      budgetDeadline === null ? undefined : Math.max(budgetDeadline - Date.now(), 1);
+    const result = await probePortOnHost(port, host, signal, hostTimeoutMs);
     signal?.throwIfAborted();
     if (result === "busy") {
       return "busy";

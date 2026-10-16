@@ -266,9 +266,10 @@ describe("Scheduled Task stop/restart cleanup", () => {
       expect(findVerifiedGatewayListenerPidsOnPortSync).not.toHaveBeenCalled();
       expectGatewayTermination(4242);
       expectTaskkill(4242);
-      expect(inspectPortUsageMock).toHaveBeenCalledWith(GATEWAY_PORT, {
-        probeHosts: ["127.0.0.1"],
-      });
+      expect(inspectPortUsageMock).toHaveBeenCalledWith(
+        GATEWAY_PORT,
+        expect.objectContaining({ probeHosts: ["127.0.0.1"] }),
+      );
       expect(onMutation).toHaveBeenCalledWith({ mode: "schtasks-stop" });
     }, '< NUL >> "gateway output.log" 2>&1');
   });
@@ -655,4 +656,68 @@ describe("Scheduled Task stop/restart cleanup", () => {
     );
     expect(killProcessTreeMock).not.toHaveBeenCalled();
   });
+
+  taskTest("grants port release probes the remaining stop budget", async ({ env, stdout }) => {
+    pushSuccessfulSchtasksResponses(3);
+    mockWindowsTaskkillSuccess();
+    mockLingeringGatewayListener(4242);
+
+    await stopScheduledTask({ env, stdout });
+
+    // Deadline-aware confirmation: a closed Windows LAN host can take seconds to
+    // refuse, so a settlement probe may spend the remaining release budget
+    // instead of being cut off after the historical 250ms.
+    const releaseProbes = inspectPortUsageMock.mock.calls.filter(
+      (call) => typeof call[1]?.probeBudgetMs === "number",
+    );
+    expect(releaseProbes.length).toBeGreaterThan(0);
+    for (const call of releaseProbes) {
+      expect(call[1]?.probeBudgetMs).toBeGreaterThan(250);
+      expect(call[1]?.probeBudgetMs).toBeLessThanOrEqual(5_000);
+    }
+  });
+
+  taskTest("waits for a delayed refusal within the stop budget", async ({ env, stdout }) => {
+    pushSuccessfulSchtasksResponses(3);
+    mockWindowsTaskkillSuccess();
+    // The affected Windows host observes ECONNREFUSED roughly two seconds after
+    // close; the settlement wait must confirm that instead of timing out at 250ms.
+    const terminated = () =>
+      process.platform === "win32"
+        ? taskkillPids().includes(4242)
+        : killProcessTreeMock.mock.calls.some(([candidate]) => candidate === 4242);
+    inspectPortUsageMock.mockImplementation(async () => {
+      if (!terminated()) {
+        return busyPortUsage(4242, { commandLine: INSTALLED_GATEWAY_COMMAND_LINE });
+      }
+      return Date.now() < 2_000
+        ? { port: GATEWAY_PORT, status: "unknown" as const, listeners: [], hints: [] }
+        : freePortUsage();
+    });
+
+    await stopScheduledTask({ env, stdout });
+  });
+
+  taskTest(
+    "reports an inconclusive settlement without claiming a busy listener",
+    async ({ env, stdout }) => {
+      pushSuccessfulSchtasksResponses(3);
+      mockWindowsTaskkillSuccess();
+      // Every confirm probe times out: no listener is observed, but freedom is
+      // never positively confirmed. This must not surface as a busy port error.
+      mockLingeringGatewayListener(4242, {
+        port: GATEWAY_PORT,
+        status: "unknown" as const,
+        listeners: [],
+        hints: [],
+      });
+
+      const failure = await stopScheduledTask({ env, stdout }).catch((err: unknown) => err);
+
+      expect(String(failure)).toContain("gateway port 18789");
+      expect(String(failure)).toContain("could not be confirmed");
+      expect(String(failure)).not.toContain("is still busy");
+      expect(String(failure)).not.toContain("remaining listener");
+    },
+  );
 });

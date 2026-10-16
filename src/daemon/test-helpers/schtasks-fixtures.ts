@@ -20,7 +20,10 @@ export const schtasksRegistration: {
 } = {};
 
 export const inspectPortUsageMock: MockFn<
-  (port: number, options?: { probeHosts?: readonly string[] }) => Promise<PortUsage>
+  (
+    port: number,
+    options?: { probeHosts?: readonly string[]; probeBudgetMs?: number },
+  ) => Promise<PortUsage>
 > = vi.fn();
 export const gatewayServiceProbeHostsMock: MockFn<() => Promise<readonly string[]>> = vi.fn();
 export const killProcessTreeMock: MockFn<typeof killProcessTreeImpl> = vi.fn();

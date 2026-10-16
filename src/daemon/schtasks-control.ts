@@ -15,7 +15,10 @@ import {
   resolveTaskName,
   resolveTaskScriptPath,
 } from "./schtasks-layout.js";
-import { describeUnverifiedPortListeners } from "./schtasks-port-diagnostics.js";
+import {
+  describeUnverifiedPortListeners,
+  waitForGatewayPortRelease,
+} from "./schtasks-port-diagnostics.js";
 import {
   findInstalledProcessPid,
   isNodeHostArgv,
@@ -29,7 +32,6 @@ import {
   terminateGatewayProcessTree,
   terminateScheduledTaskGatewayListeners,
   terminateScheduledTaskNodeHost,
-  waitForGatewayPortRelease,
 } from "./schtasks-process.js";
 import {
   assertSchtasksAvailable,
@@ -469,10 +471,18 @@ export async function stopRegisteredScheduledTask({
   }
   if (terminated !== null && stopPort) {
     const probeHosts = stopContext?.probeHosts ?? [];
-    if (!(await waitForGatewayPortRelease(stopPort, probeHosts))) {
-      const listenerDetails = await describeUnverifiedPortListeners(stopPort, probeHosts);
+    const settlement = await waitForGatewayPortRelease(stopPort, probeHosts);
+    if (settlement?.status !== "free") {
+      if (settlement?.status === "busy") {
+        const listenerDetails = await describeUnverifiedPortListeners(stopPort, probeHosts);
+        throw new Error(
+          `gateway port ${stopPort} is still busy ${restart ? "before restart" : "after stop"}; remaining listener ownership could not be verified.${listenerDetails}`,
+        );
+      }
+      // No listener was observed, but freedom was never positively confirmed; an
+      // inconclusive probe must not be reported as a busy port (#174563).
       throw new Error(
-        `gateway port ${stopPort} is still busy ${restart ? "before restart" : "after stop"}; remaining listener ownership could not be verified.${listenerDetails}`,
+        `gateway port ${stopPort} release could not be confirmed ${restart ? "before restart" : "after stop"}: no busy listener was observed, but the settlement probe returned ${settlement?.status ?? "no result"} without positively confirming the port free within the stop budget.`,
       );
     }
   }
@@ -634,8 +644,15 @@ export async function restartRegisteredScheduledTask(params: {
     if (replacementRuntime.status === "running" && replacementRuntime.pid) {
       await terminateGatewayProcessTree(replacementRuntime.pid, params.assertCurrent);
     }
-    if (port && !(await waitForGatewayPortRelease(port, probeHosts))) {
-      throw new Error(`replacement gateway port ${port} is occupied by an unverified process`);
+    if (port !== null) {
+      const release = await waitForGatewayPortRelease(port, probeHosts);
+      if (release?.status !== "free") {
+        throw new Error(
+          release?.status === "busy"
+            ? `replacement gateway port ${port} is occupied by an unverified process`
+            : `replacement gateway port ${port} release could not be confirmed: no busy listener was observed, but the settlement probe returned ${release?.status ?? "no result"} without positively confirming the port free within the stop budget.`,
+        );
+      }
     }
   }
   const activation = await runScheduledTaskOrThrow({
