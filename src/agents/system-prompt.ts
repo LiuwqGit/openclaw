@@ -540,15 +540,18 @@ export function buildAgentSystemPrompt(params: {
         );
   const docsPath = params.docsPath?.trim();
   const sourcePath = params.sourcePath?.trim();
-  // Sandboxed file tools only bridge the sandbox workspace mount; host package
-  // docs/source roots stay unreadable inside the container. Keep local reference
-  // lines only when the resolved path lives inside the sandbox-accessible host
-  // workspace, and otherwise fall back to the public mirrors.
-  const sandboxHostWorkspace = params.sandboxInfo?.enabled
-    ? params.sandboxInfo.workspaceDir?.trim()
-    : undefined;
+  // Sandboxed file tools only bridge the sandbox mount roots: the sandbox
+  // workspace plus the agent workspace projected through its own mount. Host
+  // package docs/source roots outside those mounts stay unreadable inside the
+  // container, so keep local reference lines only for paths the mount owner
+  // actually projects, and otherwise fall back to the public mirrors.
+  const sandboxWorkspaceRoots = params.sandboxInfo?.enabled
+    ? [params.sandboxInfo.workspaceDir?.trim(), params.sandboxInfo.agentWorkspaceDir?.trim()]
+    : [];
   const isSandboxAccessiblePath = (candidatePath: string) =>
-    sandboxHostWorkspace !== undefined && isPathInside(sandboxHostWorkspace, candidatePath);
+    sandboxWorkspaceRoots.some(
+      (root) => root !== undefined && root.length > 0 && isPathInside(root, candidatePath),
+    );
   const usableDocsPath =
     docsPath && (!sandboxedRuntime || isSandboxAccessiblePath(docsPath)) ? docsPath : undefined;
   const usableSourcePath =
