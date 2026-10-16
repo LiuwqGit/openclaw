@@ -5,6 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import * as directoryDurability from "../infra/directory-durability.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
+import * as sessionSqliteMigrationManifest from "../infra/session-sqlite-migration-manifest.js";
 import {
   createSessionSqliteMigrationRun,
   writeSessionSqliteMigrationManifest,
@@ -137,6 +138,51 @@ describe("runDoctorSessionSqlite", () => {
       }
     },
   );
+
+  it("re-checks each recovery manifest once per run during confirmation, not once per reference", async () => {
+    const { store, imported } = await createVerifiedRecoveryStore();
+    const manifestPath = requireMigrationManifestPath(imported.migrationRun?.manifestPath);
+    const manifest = readMigrationManifest(manifestPath);
+    const transcript = expectDefined(
+      manifest.targets[0]!.completedMoves.find((move) => move.kind === "transcript"),
+      "transcript recovery move",
+    );
+    // Fan out references that all resolve to the same manifest run, as with large legacy
+    // session-SQLite migrations where thousands of moves share a few runs. Every completed
+    // restore move must also be planned for the manifest schema to stay valid.
+    for (const index of Array.from({ length: 24 }, (_, i) => i)) {
+      const fanout = {
+        ...transcript,
+        archivePath: path.join(
+          path.dirname(transcript.archivePath),
+          `fanout-${index}.${path.basename(transcript.archivePath)}`,
+        ),
+      };
+      fs.copyFileSync(transcript.archivePath, fanout.archivePath);
+      manifest.targets[0]!.plannedMoves.push(fanout);
+      manifest.targets[0]!.completedMoves.push(fanout);
+    }
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest)}\n`, { mode: 0o600 });
+    const manifestReads = vi.spyOn(
+      sessionSqliteMigrationManifest,
+      "readSessionSqliteMigrationManifest",
+    );
+    let readsAtConfirmation = 0;
+    const cleanup = await retireSessionSqliteRecovery({
+      env: store.env,
+      preview: inspectSessionSqliteRecovery({ cfg: {}, env: store.env }),
+      readConfig: async () => ({}),
+      confirm: async () => {
+        readsAtConfirmation = manifestReads.mock.calls.length;
+        return true;
+      },
+    });
+    expect(cleanup.status).toBe("blocked");
+    // After confirmation, the re-check re-inventories once and then compares each distinct
+    // manifest run once. Reading and stringifying the whole manifest per reference made the
+    // confirmation re-check cost O(references x manifest size) of CPU with the Gateway stopped.
+    expect(manifestReads.mock.calls.length - readsAtConfirmation).toBe(2);
+  });
 
   it.each([
     { change: "in-place edit", phase: "confirmation" },

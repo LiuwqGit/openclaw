@@ -271,14 +271,21 @@ export async function retireSessionSqliteRecovery(params: {
       ) {
         throw new Error("Recovery selection changed during confirmation; preview again.");
       }
+      // Re-check cost scales with distinct manifests, not references: every reference of a
+      // run shares its manifest, so each run is read and compared once before its references
+      // re-check only their recovery targets.
+      for (const run of new Set(
+        [...references.values()].flatMap((refs) => refs.map((ref) => ref.run)),
+      )) {
+        if (
+          JSON.stringify(readSessionSqliteMigrationManifest(run.manifestPath)) !==
+          JSON.stringify(run.manifest)
+        ) {
+          throw new Error("Recovery manifest changed during confirmation; preview again.");
+        }
+      }
       for (const refs of references.values()) {
         for (const ref of refs) {
-          if (
-            JSON.stringify(readSessionSqliteMigrationManifest(ref.run.manifestPath)) !==
-            JSON.stringify(ref.run.manifest)
-          ) {
-            throw new Error("Recovery manifest changed during confirmation; preview again.");
-          }
           if (
             !(rechecked.references.get(ref.move.archivePath) ?? []).some(
               (current) =>
