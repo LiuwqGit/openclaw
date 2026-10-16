@@ -29,6 +29,7 @@ import {
 } from "../channels/plugins/native-approval-prompt.js";
 import type { SubagentDelegationMode } from "../config/types.agent-defaults.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
+import { isPathInside } from "../infra/fs-safe.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { isOpenClawMainPromptSurface } from "../plugins/agent-prompt-surface-kind.js";
 import {
@@ -539,22 +540,39 @@ export function buildAgentSystemPrompt(params: {
         );
   const docsPath = params.docsPath?.trim();
   const sourcePath = params.sourcePath?.trim();
+  // Sandboxed file tools only bridge the sandbox workspace mount; host package
+  // docs/source roots stay unreadable inside the container. Keep local reference
+  // lines only when the resolved path lives inside the sandbox-accessible host
+  // workspace, and otherwise fall back to the public mirrors.
+  const sandboxHostWorkspace = params.sandboxInfo?.enabled
+    ? params.sandboxInfo.workspaceDir?.trim()
+    : undefined;
+  const isSandboxAccessiblePath = (candidatePath: string) =>
+    sandboxHostWorkspace !== undefined && isPathInside(sandboxHostWorkspace, candidatePath);
+  const usableDocsPath =
+    docsPath && (!sandboxedRuntime || isSandboxAccessiblePath(docsPath)) ? docsPath : undefined;
+  const usableSourcePath =
+    sourcePath && (!sandboxedRuntime || isSandboxAccessiblePath(sourcePath))
+      ? sourcePath
+      : undefined;
   const docsReadTool =
     visibleTools.has("read") || promptSurface === "cli_backend" ? readToolName : undefined;
   const docsSection = isMinimal
     ? []
     : [
         "## Documentation",
-        docsPath ? `Docs: ${docsPath}` : "Docs: https://docs.openclaw.ai",
-        docsPath ? "Mirror: https://docs.openclaw.ai" : undefined,
-        sourcePath ? `Source: ${sourcePath}` : "Source: https://github.com/openclaw/openclaw",
-        docsPath
+        usableDocsPath ? `Docs: ${usableDocsPath}` : "Docs: https://docs.openclaw.ai",
+        usableDocsPath ? "Mirror: https://docs.openclaw.ai" : undefined,
+        usableSourcePath
+          ? `Source: ${usableSourcePath}`
+          : "Source: https://github.com/openclaw/openclaw",
+        usableDocsPath
           ? `OpenClaw behavior questions: docs first${docsReadTool ? ` via \`${docsReadTool}\`/local search` : " using available tools"}. AGENTS/project/workspace/profile/memory = instructions/user memory, not product design truth.`
           : "OpenClaw behavior questions: docs mirror first when web exists. AGENTS/project/workspace/profile/memory = instructions/user memory, not product design truth.",
         hasGateway
           ? "Config field: use `gateway(config.schema.lookup)` with an exact path only when that action is exposed by the tool schema. Otherwise use `docs/gateway/configuration.md` and `docs/gateway/configuration-reference.md`."
           : "Configuration docs: `docs/gateway/configuration.md`, `docs/gateway/configuration-reference.md`.",
-        sourcePath
+        usableSourcePath
           ? "If docs are silent/stale, say so and inspect local source."
           : "If docs are silent/stale, say so and inspect GitHub source.",
         "Diagnosis: run `openclaw status` when possible; ask only if blocked.",

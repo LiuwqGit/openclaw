@@ -141,6 +141,48 @@ describe("buildAgentSystemPrompt", () => {
       ["## Documentation", "Docs: /tmp/openclaw/docs", "Source: /tmp/openclaw"],
     ],
     [
+      "falls back to public mirrors for sandboxed runs with host-only docs paths",
+      {
+        docsPath: "/opt/homebrew/lib/node_modules/openclaw/docs",
+        sourcePath: "/opt/homebrew/lib/node_modules/openclaw",
+        toolNames: ["read"],
+        sandboxInfo: {
+          enabled: true,
+          workspaceDir: "/tmp/openclaw",
+          containerWorkspaceDir: "/workspace",
+          workspaceAccess: "rw",
+        },
+      },
+      [
+        "## Documentation",
+        "Docs: https://docs.openclaw.ai",
+        "Source: https://github.com/openclaw/openclaw",
+        "docs mirror first when web exists",
+        "inspect GitHub source",
+      ],
+      ["/opt/homebrew", "docs first via", "inspect local source"],
+    ],
+    [
+      "keeps local docs guidance for sandboxed runs with workspace-local docs paths",
+      {
+        docsPath: "/tmp/openclaw/docs",
+        sourcePath: "/opt/homebrew/lib/node_modules/openclaw",
+        toolNames: ["read"],
+        sandboxInfo: {
+          enabled: true,
+          workspaceDir: "/tmp/openclaw",
+          containerWorkspaceDir: "/workspace",
+          workspaceAccess: "rw",
+        },
+      },
+      [
+        "Docs: /tmp/openclaw/docs",
+        "docs first via `read`",
+        "Source: https://github.com/openclaw/openclaw",
+      ],
+      ["/opt/homebrew", "inspect local source", "Docs: https://docs.openclaw.ai"],
+    ],
+    [
       "uses limited bootstrap wording for constrained user-facing runs",
       { bootstrapMode: "limited" },
       ["## Bootstrap Pending", "cannot safely finish full BOOTSTRAP.md"],
