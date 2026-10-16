@@ -1,30 +1,32 @@
-import { vi } from "vitest";
+import { onTestFinished, vi } from "vitest";
 /* Shared fixtures for chat pane history pagination suites. */
 import type { SessionCatalogTranscriptItem } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
-import "./chat-pane.ts";
+import {
+  createGatewayHarness,
+  createTestSessionCapability,
+} from "../../lib/sessions/session-capability.test-support.ts";
+import { ChatPaneRuntime } from "./chat-pane-render.ts";
 import {
   createInitializationContext,
   createRenderTestChatPane,
-  createSessionCapabilityFixture,
+  createPaneTestHost,
 } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 
 export function createRefreshChatPane(client?: GatewayBrowserClient) {
-  const context: ApplicationContext = {
-    ...createInitializationContext(),
-    sessions: createSessionCapabilityFixture({
-      state: { result: null, agentId: "main", modelOverrides: {} },
-      think: () => undefined,
-      reconcile: vi.fn(),
-    }),
-  };
+  const baseContext = createInitializationContext();
   if (client) {
-    context.gateway.snapshot.client = client;
-    context.gateway.snapshot.phase = "connected";
+    baseContext.gateway.snapshot.client = client;
+    baseContext.gateway.snapshot.phase = "connected";
   }
+  const sessions = createTestSessionCapability(baseContext.gateway);
+  sessions.reconcile(undefined, undefined, { resultAgentId: "main" });
+  vi.spyOn(sessions, "listBranches").mockResolvedValue([]);
+  const context = { ...baseContext, sessions };
+  onTestFinished(() => sessions.dispose());
   const pane = createRenderTestChatPane();
   const state = pane.initialize(context);
   if (client) {
@@ -44,26 +46,29 @@ export type TestChatPane = HTMLElement & {
   sessionKey: string;
   catalogItemMessage: (item: SessionCatalogTranscriptItem) => Record<string, unknown> | null;
   handleTranscriptScroll: (event: Event) => void;
+  handleTranscriptHistoryIntent: (event: Event) => void;
   historyAutoLoadBlocked: boolean;
   historyObserverArmed: boolean;
   syncHistoryObserver: () => void;
-  prependUniqueNativeMessages: (messages: unknown[], current: unknown[]) => unknown[];
   prependUniqueCatalogMessages: (messages: unknown[]) => unknown[];
   loadOlderMessages: () => Promise<boolean>;
-  stagedOlderPage: unknown;
-  stagedOlderLoad: Promise<void> | null;
-  showEarlierMessages: () => Promise<void>;
-  requestReplyMessage: (messageId: string) => void;
+  stagedOlder: { page: unknown; load: Promise<void> | null };
   readReplyMessage: (messageId: string) => unknown;
+  replyMessageStatus: (messageId: string) => string | undefined;
   openReplyMessage: (messageId: string) => void;
   currentReplyNavigationId: (sessionKey: string) => string | null;
   hasOlderMessages: () => boolean;
   loadingOlder: boolean;
+  presented: boolean;
+  visuallyPresented: boolean;
   resetOlderMessagesViewport: () => void;
   readonly updateComplete: Promise<boolean>;
   transcriptScrollTop: number | null;
   transcript: {
     activeSessionKey: string | null;
+    readonly isPositionSettled: boolean;
+    readonly isProgrammaticScroll: boolean;
+    readonly isMaintenanceScroll: boolean;
     readonly scrollElement: HTMLDivElement | null;
     revealMessage: (messageId: string) => boolean;
     scrollToOffset: (offset: number) => void;
@@ -89,9 +94,19 @@ function createSessionContext(
 
 export function createTestChatPane(params: {
   client: GatewayBrowserClient;
-  sessions: SessionCapability;
+  sessions?: SessionCapability;
 }) {
-  const pane = document.createElement("openclaw-chat-pane") as unknown as TestChatPane;
+  const sessions =
+    params.sessions ?? createTestSessionCapability(createGatewayHarness(params.client).gateway);
+  if (!params.sessions) {
+    vi.spyOn(sessions, "listBranches").mockResolvedValue([]);
+    onTestFinished(() => sessions.dispose());
+  }
+  // SAFETY: The test host forwards the runtime surface declared by this fixture.
+  const pane = createPaneTestHost(
+    "openclaw-chat-runtime-test",
+    ChatPaneRuntime,
+  ) as unknown as TestChatPane;
   Object.defineProperty(pane, "isConnected", {
     configurable: true,
     value: true,
@@ -117,7 +132,7 @@ export function createTestChatPane(params: {
     lastError: null,
     requestUpdate,
     sessionKey: "agent:main:current",
-    sessions: params.sessions,
+    sessions,
     sessionsError: null,
     sessionsLoading: false,
     sidebarContent: null,
@@ -127,14 +142,16 @@ export function createTestChatPane(params: {
     chatHasAutoScrolled: false,
     chatUserNearBottom: true,
     chatFollowLocked: false,
+    chatReadingHistory: false,
     chatNewMessagesBelow: false,
     handleChatScroll: vi.fn(),
     renderLifecycle: { afterCommit: () => () => {}, invalidate: () => {} },
   } as unknown as ChatPageHost;
-  pane.context = createSessionContext(params.client, params.sessions);
+  pane.context = createSessionContext(params.client, sessions);
   pane.state = state;
   pane.connectedClient = params.client;
   pane.connectionGeneration = 4;
+  vi.spyOn(pane.transcript, "isPositionSettled", "get").mockReturnValue(true);
   return { pane, state, requestUpdate };
 }
 
@@ -161,7 +178,10 @@ export function appendChatThread(
   thread.className = "chat-thread";
   thread.scrollTop = options.scrollTop ?? 0;
   Object.defineProperty(thread, "clientHeight", { value: options.clientHeight ?? 500 });
-  Object.defineProperty(thread, "scrollHeight", { value: options.scrollHeight ?? 2_000 });
+  Object.defineProperty(thread, "scrollHeight", {
+    configurable: true,
+    value: options.scrollHeight ?? 2_000,
+  });
   pane.append(thread);
   vi.spyOn(pane.transcript, "scrollElement", "get").mockReturnValue(thread);
   return thread;
@@ -169,7 +189,7 @@ export function appendChatThread(
 
 export function createNativeShowEarlierPane(request: ReturnType<typeof vi.fn>) {
   const client = { request } as unknown as GatewayBrowserClient;
-  const result = createTestChatPane({ client, sessions: {} as SessionCapability });
+  const result = createTestChatPane({ client });
   result.state.chatMessages = [nativeHistoryMessage(3), nativeHistoryMessage(4)];
   result.state.chatHistoryPagination = { hasMore: true, nextOffset: 2, totalMessages: 4 };
   const thread = appendChatThread(result.pane);
@@ -212,7 +232,7 @@ export function stagedPagesRequest(overrides: Record<number, () => unknown> = {}
 
 export function createStagedPrefetchPane(request: ReturnType<typeof vi.fn>) {
   const client = { request } as unknown as GatewayBrowserClient;
-  const result = createTestChatPane({ client, sessions: {} as SessionCapability });
+  const result = createTestChatPane({ client });
   result.state.chatMessages = [nativeHistoryMessage(7), nativeHistoryMessage(8)];
   result.state.chatHistoryPagination = { hasMore: true, nextOffset: 2, totalMessages: 8 };
   return result;

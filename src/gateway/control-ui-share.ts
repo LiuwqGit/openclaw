@@ -3,6 +3,10 @@ import { TLSSocket } from "node:tls";
 import { parseControlUiSessionPath } from "@openclaw/session-url-contract/parse";
 import { escapeHtml } from "../shared/html-escape.js";
 import { isReadHttpMethod, respondNotFound } from "./control-ui-http-utils.js";
+import {
+  getRemoteControlUiIngressContext,
+  assertRemoteControlUiIngressCurrent,
+} from "./ingress-attribution.js";
 
 /** This namespace contains only public preview documents and their static card. */
 export function isControlUiSharePath(pathname: string, basePath: string): boolean {
@@ -24,23 +28,10 @@ export function serveControlUiShareDocument(
     respondNotFound(res);
     return;
   }
-  let origin: string;
-  try {
-    const protocol = req.socket instanceof TLSSocket ? "https" : "http";
-    const address = new URL(publicOrigin ?? `${protocol}://${req.headers.host}`);
-    if (
-      !/^https?:$/u.test(address.protocol) ||
-      address.username ||
-      address.password ||
-      address.pathname !== "/" ||
-      address.search ||
-      address.hash
-    ) {
-      respondNotFound(res);
-      return;
-    }
-    origin = address.origin;
-  } catch {
+  const ingress = getRemoteControlUiIngressContext(req);
+  assertRemoteControlUiIngressCurrent(ingress);
+  const origin = resolveControlUiShareOrigin(req, ingress?.publicOrigin ?? publicOrigin);
+  if (!origin) {
     respondNotFound(res);
     return;
   }
@@ -86,10 +77,30 @@ a:focus-visible{outline:3px solid #fff;outline-offset:5px}
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader(
     "Content-Security-Policy",
-    "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
+    `default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors ${ingress?.frameAncestors.length ? ingress.frameAncestors.join(" ") : "'none'"}; form-action 'none'`,
   );
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("X-Robots-Tag", "noindex, nofollow");
   res.setHeader("Content-Length", Buffer.byteLength(body));
   res.end(req.method === "HEAD" ? undefined : body);
+}
+
+export function resolveControlUiShareOrigin(
+  req: IncomingMessage,
+  publicOrigin?: string,
+): string | null {
+  const protocol = req.socket instanceof TLSSocket ? "https" : "http";
+  const address = URL.parse(publicOrigin ?? `${protocol}://${req.headers.host}`);
+  if (
+    !address ||
+    !/^https?:$/u.test(address.protocol) ||
+    address.username ||
+    address.password ||
+    address.pathname !== "/" ||
+    address.search ||
+    address.hash
+  ) {
+    return null;
+  }
+  return address.origin;
 }

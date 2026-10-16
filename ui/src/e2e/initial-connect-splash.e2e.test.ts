@@ -9,6 +9,7 @@ import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   takeControlUiElementScreenshot,
+  takeControlUiScreenshotFrame,
   takeControlUiViewportScreenshot,
   waitForControlUiProofSurface,
 } from "../test-helpers/control-ui-e2e-screenshot.ts";
@@ -16,10 +17,12 @@ import {
   canRunPlaywrightChromium,
   controlUiE2eWaitTimeoutMs,
   installMockGateway,
+  pauseVirtualClock,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
+import { defineControlUiFrameIdentityTests } from "./control-ui-screenshot-identity.test-support.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
@@ -40,6 +43,7 @@ const openContexts = new Set<BrowserContext>();
 
 async function createPage(): Promise<Page> {
   const context = await browser.newContext({
+    locale: "en-US",
     viewport,
     ...(artifactDir ? { recordVideo: { dir: artifactDir, size: viewport } } : {}),
   });
@@ -59,7 +63,7 @@ function decodeProofPng(png: Buffer) {
 }
 
 async function createPageWithoutRecording(): Promise<Page> {
-  const context = await browser.newContext();
+  const context = await browser.newContext({ locale: "en-US" });
   openContexts.add(context);
   return context.newPage();
 }
@@ -161,6 +165,12 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
 
   it("shows the splash instead of the login gate while a configured token connects", async () => {
     const page = await createPage();
+    await page.addInitScript(() => {
+      localStorage.setItem(
+        `openclaw.control.settings.v1:ws://${location.hostname}:18789`,
+        JSON.stringify({ theme: "rose", themeMode: "dark" }),
+      );
+    });
     const loginGateMounted = await traceLoginGateMounts(page);
     const loginModuleRequests: string[] = [];
     page.on("request", (request) => {
@@ -170,30 +180,90 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     });
     const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
 
-    await page.goto(`${server.baseUrl}#token=e2e-shared-token`);
+    await page.goto(`${server.baseUrl}#token=e2e-shared-token`, {
+      waitUntil: "domcontentloaded",
+    });
     await gateway.waitForRequest("connect");
     const splash = page.locator(".connect-splash");
     await splash.waitFor();
-    const mascot = splash.locator('openclaw-mascot[mood="thinking"]');
-    await mascot.waitFor();
-    const mascotBounds = await mascot.boundingBox();
-    expect(mascotBounds).not.toBeNull();
-    expect(
-      Math.abs((mascotBounds?.x ?? 0) + (mascotBounds?.width ?? 0) / 2 - viewport.width / 2),
-    ).toBeLessThanOrEqual(1);
-    expect(
-      Math.abs((mascotBounds?.y ?? 0) + (mascotBounds?.height ?? 0) / 2 - viewport.height / 2),
-    ).toBeLessThanOrEqual(1);
+    const skeleton = splash.locator(".loading-skeleton");
+    await skeleton.waitFor();
+    expect(await splash.getAttribute("aria-busy")).toBeNull();
+    expect(await splash.locator("openclaw-mascot").count()).toBe(0);
     expect(await page.getByText("Loading panel", { exact: true }).count()).toBe(0);
     expect(await page.locator("openclaw-app-sidebar").count()).toBe(0);
     expect(await page.locator("openclaw-login-gate").count()).toBe(0);
-    // Inspect the compositor output, not the mascot's already-painted backing canvas.
-    // This regression runs in memory even when optional artifact retention is off.
-    const proof = await takeProofScreenshot(page, "01-centered-connecting-mascot", [
-      mascot.locator("canvas"),
+    const proof = await takeProofScreenshot(page, "01-connecting-shimmer", [
+      skeleton.locator(".loading-skeleton__composer"),
     ]);
-    const painted = await proofContentPainted(page, proof, mascot);
-    expect(painted, "connecting proof must contain the centered mascot").toBe(true);
+    const painted = await proofContentPainted(page, proof, skeleton);
+    expect(painted, "connecting proof must contain the skeleton").toBe(true);
+    const highlight = skeleton.locator(".loading-skeleton__composer");
+    expect(await page.locator("html").getAttribute("data-theme")).toBe("rose");
+    const bounds = (await highlight.boundingBox())!;
+    const duration = await highlight.evaluate(
+      (element) => getComputedStyle(element, "::after").animationDuration,
+    );
+    const frames: number[][] = [];
+    const pose = await page.addStyleTag({
+      content: ".connect-splash .loading-skeleton__composer::after { animation-name: none; }",
+    });
+    try {
+      for (const progress of [0, 0.5]) {
+        await pose.evaluate(
+          (style, { duration: sweepDuration, fraction }) => {
+            const selector = ".connect-splash .loading-skeleton__composer::after";
+            // Restart through CSS so the sampled animation keeps its CSS-owned lifecycle.
+            style.textContent = `${selector} { animation-name: none; }`;
+            getComputedStyle(
+              document.querySelector(".loading-skeleton__composer")!,
+              "::after",
+            ).getPropertyValue("animation-name");
+            style.textContent = `${selector} {
+            animation-play-state: paused;
+            animation-delay: calc(-1 * ${sweepDuration} * ${fraction});
+          }`;
+          },
+          { duration, fraction: progress },
+        );
+        const frame = decodeProofPng(await page.screenshot());
+        const center =
+          (Math.floor(bounds.y + bounds.height / 2) * frame.width +
+            Math.floor(bounds.x + bounds.width / 2)) *
+          4;
+        frames.push([...frame.data.subarray(center, center + 3)]);
+      }
+    } finally {
+      await pose.evaluate((style) => style.parentNode?.removeChild(style));
+    }
+    // An animation name alone passed even when highlight and fill were identical.
+    expect(
+      Math.max(...frames[0]!.map((value, channel) => Math.abs(value - frames[1]![channel]!))),
+    ).toBeGreaterThan(12);
+    expect(
+      await highlight.evaluate((element) =>
+        element
+          .getAnimations({ subtree: true })
+          .some((animation) => animation.playState === "running"),
+      ),
+    ).toBe(true);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    expect(await splash.locator(".connect-splash__sidebar").isVisible()).toBe(false);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+      true,
+    );
+    expect(
+      await highlight.evaluate((element) =>
+        Number.parseFloat(getComputedStyle(element, "::after").animationDuration),
+      ),
+    ).toBeLessThanOrEqual(0.00001);
+    expect(
+      await highlight.evaluate((element) => element.getAnimations({ subtree: true }).length),
+    ).toBe(0);
+    await captureProof(page, "01-mobile-reduced-motion", [highlight]);
+    await page.setViewportSize(viewport);
+    await page.emulateMedia({ reducedMotion: "no-preference" });
 
     await gateway.resolveDeferred("connect");
     await page.locator("openclaw-app-shell").waitFor();
@@ -201,12 +271,12 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     expect(await loginGateMounted()).toBe(false);
     expect(loginModuleRequests).toEqual([]);
     await captureProof(page, "02-connected-content", [
-      page.locator(".sidebar-brand"),
+      page.locator(".sidebar-rail"),
       page.locator(".agent-chat__composer-combobox textarea"),
     ]);
   });
 
-  it("centers the animated mascot until the chat route finishes loading", async () => {
+  it("shows a shimmer skeleton until the chat route finishes loading", async () => {
     const page = await createPage();
     let chatModuleRequested = false;
     let releaseChatModule!: () => void;
@@ -220,7 +290,8 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
       }
       await route.continue();
     });
-    await installMockGateway(page);
+    // The held chat module cannot publish the foreground readiness that releases the roster.
+    await installMockGateway(page, { awaitInitialRoster: false });
 
     try {
       await page.goto(`${server.baseUrl}chat?session=main`, {
@@ -236,35 +307,66 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
       expect((await loadingState.textContent())?.trim()).toBe("");
       expect(await page.getByText("Loading panel", { exact: true }).count()).toBe(0);
 
-      const mascot = loadingState.locator('openclaw-mascot[mood="thinking"]');
-      await mascot.waitFor();
-      const [loadingBounds, mascotBounds] = await Promise.all([
-        loadingState.boundingBox(),
-        mascot.boundingBox(),
+      const skeleton = loadingState.locator(".loading-skeleton");
+      await skeleton.waitFor();
+      expect(await loadingState.getAttribute("aria-busy")).toBeNull();
+      expect(await loadingState.locator("openclaw-mascot").count()).toBe(0);
+      await captureProof(page, "03-pending-chat-shimmer", [
+        skeleton.locator(".loading-skeleton__composer"),
       ]);
-      expect(loadingBounds).not.toBeNull();
-      expect(mascotBounds).not.toBeNull();
-      expect(
-        Math.abs(
-          (mascotBounds?.x ?? 0) +
-            (mascotBounds?.width ?? 0) / 2 -
-            ((loadingBounds?.x ?? 0) + (loadingBounds?.width ?? 0) / 2),
-        ),
-      ).toBeLessThanOrEqual(1);
-      expect(
-        Math.abs(
-          (mascotBounds?.y ?? 0) +
-            (mascotBounds?.height ?? 0) / 2 -
-            ((loadingBounds?.y ?? 0) + (loadingBounds?.height ?? 0) / 2),
-        ),
-      ).toBeLessThanOrEqual(1);
-      await captureProof(page, "03-centered-pending-chat-mascot", [mascot.locator("canvas")]);
+
+      for (const size of [viewport, { width: 1440, height: 1440 }, { width: 390, height: 844 }]) {
+        await page.setViewportSize(size);
+        const { content, header, composer } = await page
+          .locator(".content--chat")
+          .evaluate(async (root, viewportHeight) => {
+            // setViewportSize resolves before the rendering update in which the shell viewport
+            // owner publishes the new canvas height; until then a grown viewport keeps the old one.
+            const canvas = document.querySelector("openclaw-app")!;
+            await new Promise<void>((resolve) => {
+              const observer = new ResizeObserver(() => {
+                if (canvas.getBoundingClientRect().height === viewportHeight) {
+                  observer.disconnect();
+                  resolve();
+                }
+              });
+              observer.observe(canvas);
+            });
+            const bounds = (element: Element | null) => {
+              if (!element?.checkVisibility({ visibilityProperty: true })) {
+                return null;
+              }
+              const { x, y, width, height } = element.getBoundingClientRect();
+              return width > 0 && height > 0 ? { x, y, width, height } : null;
+            };
+            return {
+              content: bounds(root),
+              header: bounds(root.querySelector(".loading-skeleton__header")),
+              composer: bounds(root.querySelector(".loading-skeleton__composer")),
+            };
+          }, size.height);
+        expect(content).not.toBeNull();
+        expect(header).not.toBeNull();
+        expect(composer).not.toBeNull();
+        expect(header!.y - content!.y, "loading header stays at the top").toBeGreaterThanOrEqual(0);
+        expect(header!.y - content!.y, "loading header stays at the top").toBeLessThan(48);
+        const bottomGap = content!.y + content!.height - composer!.y - composer!.height;
+        expect(bottomGap, "loading composer stays inside the content area").toBeGreaterThanOrEqual(
+          0,
+        );
+        expect(bottomGap, "loading composer stays near the bottom").toBeLessThan(64);
+        await captureProof(page, `03-pending-chat-${size.width}x${size.height}`, [
+          skeleton.locator(".loading-skeleton__header"),
+          skeleton.locator(".loading-skeleton__composer"),
+        ]);
+      }
+      await page.setViewportSize(viewport);
 
       releaseChatModule();
       await page.locator("openclaw-chat-page").waitFor();
       expect(await loadingState.count()).toBe(0);
       await captureProof(page, "04-loaded-chat-content", [
-        page.locator(".sidebar-brand"),
+        page.locator(".sidebar-rail"),
         page.locator(".agent-chat__composer-combobox textarea"),
       ]);
     } finally {
@@ -277,13 +379,13 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     const loginGateMounted = await traceLoginGateMounts(page);
     const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
 
-    await page.goto(server.baseUrl);
+    await page.goto(server.baseUrl, { waitUntil: "domcontentloaded" });
     await gateway.waitForRequest("connect");
     await page.locator(".connect-splash").waitFor();
     expect(await page.locator("openclaw-login-gate").count()).toBe(0);
     expect(await loginGateMounted()).toBe(false);
-    await captureProof(page, "05-credentialless-connecting-mascot", [
-      page.locator(".connect-splash openclaw-mascot canvas"),
+    await captureProof(page, "05-credentialless-connecting-shimmer", [
+      page.locator(".connect-splash .loading-skeleton__composer"),
     ]);
 
     await gateway.resolveDeferred("connect");
@@ -296,9 +398,10 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     const page = await createPage();
     await page.emulateMedia({ colorScheme: "dark" });
     const workspaceModules = new Set([
-      "/src/components/app-sidebar.ts",
+      "/src/components/app-sidebar.tsx",
       "/src/components/browser/browser-panel.ts",
-      "/src/components/assistant-panel.ts",
+      "/src/components/assistant-panel-content.ts",
+      "/src/pages/debug/debug-overlay-content.ts",
       "/src/components/desktop/desktop-panel.ts",
       "/src/components/terminal/terminal-panel-registration.ts",
       "/src/pages/chat/chat-page.ts",
@@ -335,25 +438,34 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     await loading.waitFor();
     const loadingSections = page.locator('.model-setup__loading[role="status"][aria-busy="true"]');
     await loadingSections.locator(".model-setup__loading-sections").waitFor();
-    expect(await loadingSections.locator(".settings-section").count()).toBe(4);
+    expect(await loadingSections.locator(".settings-section").count()).toBe(5);
     expect(await loadingSections.locator(".model-setup__loading-row").count()).toBe(5);
     expect(await loadingSections.locator("button, input, wa-dropdown").count()).toBe(0);
     await page.evaluate(() => document.fonts.ready);
     // Compare section layouts at rest, not the shell's translated entrance frame.
     await waitForControlUiProofSurface(page.locator(".shell"), [loadingSections]);
     const sectionTitles = [
+      "Use an installed agent",
       "Found on this Gateway",
       "Run a model locally",
-      "Sign in with a provider",
+      "Set up and verify a model",
       "Connect with an API key or token",
     ];
-    const loadingSectionTops = await Promise.all(
-      sectionTitles.map(
-        async (name) =>
-          (await page.locator(".model-setup__loading-sections h2").getByText(name).boundingBox())!
-            .y,
-      ),
-    );
+    const loadingGeometry = await page.evaluate(() => {
+      const root = document.querySelector<HTMLElement>(
+        '.model-setup__loading[role="status"][aria-busy="true"]',
+      );
+      if (!root?.checkVisibility()) {
+        throw new Error("Expected the model-setup loading sections to remain visible.");
+      }
+      return Array.from(root.querySelectorAll(".model-setup__loading-sections h2"), (heading) => {
+        const { top, height } = heading.getBoundingClientRect();
+        return { title: heading.textContent, top, height };
+      });
+    });
+    expect(loadingGeometry.map((heading) => heading.title)).toEqual(sectionTitles);
+    expect(loadingGeometry.every((heading) => heading.height > 0)).toBe(true);
+    const loadingSectionTops = loadingGeometry.map((heading) => heading.top);
     expect(await page.locator(".connect-splash").count()).toBe(0);
     expect([...requestedWorkspaceModules]).toEqual([]);
     await captureProof(page, "06-first-run-routed-before-detection", [loadingSections]);
@@ -546,7 +658,7 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
       @keyframes pulse { to { opacity: .2; } }
       </style><div id="scene"></div><div id="presentation"></div>`);
     await page.locator("#presentation").evaluate((host) => {
-      // Capture consumers also select Web Awesome shadow parts. Their host's
+      // Capture consumers also select shadow content. Its host's
       // presentation affects the pixels even though parentElement stops at the root.
       const root = host.attachShadow({ mode: "open" });
       root.innerHTML = '<div id="row"><div id="pulse"></div></div>';
@@ -734,6 +846,7 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     });
     openContexts.add(context);
     const page = await context.newPage();
+    await page.clock.install();
     await page.setContent(`<!doctype html><style>body { margin: 0; height: 1800px; }
       #row { position: absolute; left: 48.25px; top: 940.25px; width: 302.5px; height: 29.5px; background: #a030b0; }
       #wide { width: 801px; height: 20px; } #tall { width: 20px; height: 601px; }
@@ -756,13 +869,120 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     ]).toEqual([303, 30]);
     const center = (Math.floor(info.height / 2) * info.width + Math.floor(info.width / 2)) * 4;
     expect([...data.subarray(center, center + 3)]).toEqual([160, 48, 176]);
+
+    await page.setContent('<body style="margin:0;width:1600px;height:1200px"></body>');
+    await expect(
+      takeControlUiScreenshotFrame(page, page.locator("body"), [], { fullPage: true }),
+    ).rejects.toThrow("Full-page proof must fit the viewport-frame dimensions");
+
+    await page.setContent(`<style>body { margin: 0; min-height: 100vh; } .stamp { position: absolute; background: var(--stamp); }
+      #first { top: 90.25px; width: 302.5px; height: 29.5px; animation: enter .1s 60s both; }
+      @keyframes enter { from { left: 68.25px; height: 0; } to { left: 88.25px; height: 29.5px; } }
+      #second { left: 411.5px; top: 311.25px; width: 126.25px; height: 61.5px; animation: pulse 1s infinite; }
+      @keyframes pulse { to { opacity: .2; } }
+      </style><div id="first" class="stamp"></div><div id="second" class="stamp"></div>`);
+    await page.evaluate(() => {
+      let stamp = 0;
+      const paint = () => {
+        stamp += 1;
+        document.documentElement.style.setProperty(
+          "--stamp",
+          `rgb(${stamp & 255}, ${(stamp >>> 8) & 255}, 128)`,
+        );
+        requestAnimationFrame(paint);
+      };
+      paint();
+    });
+    const regions = [page.locator("#first"), page.locator("#second")];
+    const frame = await takeControlUiScreenshotFrame(page, page.locator("body"), regions, {
+      elements: regions,
+      animations: "disabled",
+    });
+    expect(await regions[1]!.evaluate((element) => element.getAnimations()[0]?.playState)).toBe(
+      "running",
+    );
+    const whole = decodeProofPng(frame.png);
+    const scale = whole.width / 800;
+    // Static preparation finishes the delayed entrance before measuring bounds.
+    // Pixels still change each rAF; both crops must come from the retained frame.
+    for (const [index, [x, y, width, height]] of [
+      [88.25, 90.25, 302.5, 29.5],
+      [411.5, 311.25, 126.25, 61.5],
+    ].entries()) {
+      const left = Math.floor(x! * scale);
+      const top = Math.floor(y! * scale);
+      const right = Math.ceil((x! + width!) * scale);
+      const bottom = Math.ceil((y! + height!) * scale);
+      const region = decodeProofPng(frame.elements[index]!.png);
+      expect([region.width, region.height]).toEqual([right - left, bottom - top]);
+      const rows = [];
+      for (let pixelRow = top; pixelRow < bottom; pixelRow += 1) {
+        rows.push(
+          whole.data.subarray(
+            (pixelRow * whole.width + left) * 4,
+            (pixelRow * whole.width + right) * 4,
+          ),
+        );
+      }
+      expect(
+        Buffer.from(region.data).equals(Buffer.concat(rows)),
+        `region ${index} uses the same frame`,
+      ).toBe(true);
+    }
+
+    await regions[1]!.evaluate((element) => element.setAttribute("style", "visibility: hidden"));
+    await expect(
+      takeControlUiScreenshotFrame(page, page.locator("body"), [regions[0]!], {
+        elements: [regions[1]!],
+        animations: "disabled",
+      }),
+    ).rejects.toThrow("Proof frame did not reach visible, settled targets");
+
+    await pauseVirtualClock(page);
+    const captureTime = await page.evaluate(() => Date.now());
+    await page.setContent(`<style>html, body { margin: 0; height: 100%; overflow: hidden; }
+      #scroller { position: absolute; top: 40px; left: 10px; width: 300px; height: 200px; overflow: auto; }
+      #spacer { position: relative; height: 1000px; }
+      #target { position: absolute; top: 500px; width: 100px; height: 40px; background: #123456; }
+      </style><div id="scroller" data-resets="0"><div id="spacer"><div id="target">Saved</div></div></div>`);
+    await page.locator("#scroller").evaluate((element) => {
+      let resets = 0;
+      element.addEventListener("scroll", () => {
+        // Deferred renders can undo centering while leaving the target visible.
+        if (element.scrollTop === 420 && resets < 2) {
+          resets += 1;
+          element.setAttribute("data-resets", String(resets));
+          element.scrollTop = 350;
+        }
+      });
+    });
+    const target = page.locator("#target");
+    await target.evaluate((element) => {
+      setTimeout(() => {
+        element.textContent = "";
+      }, 2_000);
+    });
+    const scrolled = await takeControlUiScreenshotFrame(page, page.locator("body"), [target], {
+      elements: [target],
+      scrollTo: target,
+      animations: "disabled",
+    });
+    expect(await page.locator("#scroller").getAttribute("data-resets")).toBe("2");
+    expect((await target.boundingBox())?.y).toBe(120);
+    expect(scrolled.elements[0]!.bounds.y).toBe(120);
+    expect(await target.textContent()).toBe("Saved");
+    expect(await page.evaluate(() => Date.now())).toBe(captureTime);
+    await page.clock.runFor(2_000);
+    expect(await target.textContent()).toBe("");
   });
+
+  defineControlUiFrameIdentityTests(createPageWithoutRecording);
 
   it("falls back to the login gate when stored credentials are rejected", async () => {
     const page = await createPage();
     const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
 
-    await page.goto(`${server.baseUrl}#token=stale-token`);
+    await page.goto(`${server.baseUrl}#token=stale-token`, { waitUntil: "domcontentloaded" });
     await gateway.waitForRequest("connect");
     await page.locator(".connect-splash").waitFor();
 
@@ -780,7 +1000,9 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     const loginGateMounted = await traceLoginGateMounts(page);
     const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
 
-    await page.goto(`${server.baseUrl}#token=e2e-shared-token`);
+    await page.goto(`${server.baseUrl}#token=e2e-shared-token`, {
+      waitUntil: "domcontentloaded",
+    });
     await gateway.waitForRequest("connect");
     const initialConnectCount = (await gateway.getRequests("connect")).length;
     await gateway.deferNext("connect");
@@ -799,7 +1021,7 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
       .poll(async () => await splash.evaluate((element) => getComputedStyle(element).opacity))
       .toBe("1");
     await captureProof(page, "06-gateway-starting-progress", [
-      splash.locator("openclaw-mascot canvas"),
+      splash.locator(".loading-skeleton__composer"),
     ]);
 
     await expect
@@ -814,7 +1036,7 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
 
     // First visit has no credentials, but the Gateway still owns the pending attempt.
-    await page.goto(server.baseUrl);
+    await page.goto(server.baseUrl, { waitUntil: "domcontentloaded" });
     await gateway.waitForRequest("connect");
     await page.locator(".connect-splash").waitFor();
     await gateway.resolveDeferred("connect");
@@ -822,7 +1044,7 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
 
     // The hello stored a device token, so the reload connect is authenticated
     // and must paint the splash instead of flashing the gate.
-    await page.reload();
+    await page.reload({ waitUntil: "domcontentloaded" });
     await gateway.waitForRequest("connect");
     await page.locator(".connect-splash").waitFor();
     expect(await page.locator("openclaw-login-gate").count()).toBe(0);

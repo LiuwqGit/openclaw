@@ -8,6 +8,7 @@ import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-
 import {
   controlUiBundledGatewayUrl,
   installMockGateway,
+  pauseVirtualClock,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -32,6 +33,7 @@ const proofBuildId = proofIdentity.expectedRevisionSha
   : "phone-proof-local-artifact";
 const suite = createControlUiE2eSuite({
   name: "Control UI phone stale-build recovery E2E",
+  startServer: () => startPhoneProofServer(proofBuildId),
   startServerBeforeBrowser: true,
   unavailableMessage: (executablePath) =>
     `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
@@ -52,9 +54,7 @@ suite.define(() => {
   ] as const)(
     "rearms one bounded build recovery after the visible refresh action with $serviceWorker service-worker state",
     async ({ serviceWorker, serviceWorkers }) => {
-      const proofServer = await startPhoneProofServer(proofBuildId);
-      await using proofServerCleanup = phoneProofCleanup(() => proofServer.close());
-      void proofServerCleanup;
+      const proofServer = suite.server;
       const context = await suite.browser.newContext({
         hasTouch: true,
         isMobile: true,
@@ -104,7 +104,8 @@ suite.define(() => {
       );
       const retainedImageRequestUrls: string[] = [];
       let blockedUnticketedRequestCount = 0;
-      await page.route("**/api/chat/media/outgoing/**", async (route) => {
+      // The service worker owns the network request when it controls the page.
+      await context.route("**/api/chat/media/outgoing/**", async (route) => {
         const requestUrl = new URL(route.request().url());
         if (requestUrl.searchParams.get("mediaTicket") !== "phone-proof") {
           blockedUnticketedRequestCount += 1;
@@ -366,8 +367,9 @@ suite.define(() => {
         await gateway.rejectDeferred("connect", mismatch);
         await page.waitForFunction(
           () =>
-            sessionStorage.getItem("openclaw.controlUi.staleChunkReloadBuildId") ===
-              "replacement-build" &&
+            JSON.parse(
+              sessionStorage.getItem("openclaw.controlUi.staleChunkReloadBuildId") ?? "null",
+            )?.buildId === "replacement-build" &&
             sessionStorage.getItem("openclaw.control-ui-e2e.build-rejection-loads") === "2",
         );
 
@@ -462,8 +464,23 @@ suite.define(() => {
         ]);
 
         await waitForConnect();
+        await page.clock.install();
+        await pauseVirtualClock(page);
+        // Manual refresh preserves the shared build target, so this document
+        // defers its automatic reload until that target's 30-second guard expires.
+        const guardRemainingMs = await page.evaluate(() => {
+          const guard = JSON.parse(
+            sessionStorage.getItem("openclaw.controlUi.staleChunkReloadBuildId")!,
+          ) as { at: number };
+          return guard.at + 30_000 - Date.now();
+        });
+        expect(guardRemainingMs).toBeGreaterThan(0);
         await gateway.rejectDeferred("connect", mismatch);
+        await page.clock.runFor(guardRemainingMs - 1);
+        expect(documentRequests).toHaveLength(3);
+        await page.clock.runFor(1);
         await expect.poll(() => documentRequests.length).toBe(4);
+        await page.clock.resume();
         await waitForConnect();
         await gateway.resolveDeferred("connect");
 

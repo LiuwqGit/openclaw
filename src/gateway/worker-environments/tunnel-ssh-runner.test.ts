@@ -47,17 +47,6 @@ describe("worker SSH process runner", () => {
     vi.useRealTimers();
   });
 
-  it("settles readiness and exit when spawn emits an error without close", async () => {
-    const child = createChild();
-    spawnMock.mockReturnValue(child);
-    const process = createWorkerSshRunner().start(["missing-ssh"], { timeoutMs: 10_000 });
-
-    child.emit("error", new Error("spawn failed"));
-
-    await expect(process.ready).rejects.toThrow("Worker SSH tunnel failed");
-    await expect(process.exited).resolves.toEqual({ code: null, signal: null });
-  });
-
   it("settles with the real exit when close lags after SIGKILL", async () => {
     vi.useFakeTimers();
     const child = createChild();
@@ -153,6 +142,10 @@ describe("worker SSH process runner", () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(exitedSettled).toBe(false);
+
+    child.emit("close", null, "SIGKILL");
+    await expect(process.exited).resolves.toEqual({ code: null, signal: "SIGKILL" });
+    await expect(process.stop()).resolves.toBeUndefined();
   });
 
   it("keeps exited pending when a live child emits error without close", async () => {

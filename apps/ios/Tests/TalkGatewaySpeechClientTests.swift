@@ -4,6 +4,10 @@ import OpenClawProtocol
 import Testing
 @testable import OpenClaw
 
+extension TalkBufferedAudioPlaying {
+    func setLevelHandler(_: (@MainActor (Double?) -> Void)?) {}
+}
+
 @MainActor
 private final class RecordingGatewaySpeechSynthesizer: TalkGatewaySpeechSynthesizing {
     let audio: TalkGatewaySpeechAudio
@@ -168,14 +172,8 @@ struct TalkGatewaySpeechClientTests {
 
     @Test func `gateway speech provider stays native and uses talk speak`() async {
         let parsed = Self.parseSpeechProvider("xiaomi")
-        let routing = TalkModeRoutingResolver.resolve(
-            parsed: parsed,
-            providerSelection: .gatewayDefault,
-            defaultProvider: "elevenlabs",
-            defaultRealtimeModelId: "gpt-realtime-2")
-        #expect(routing.activeProvider == "xiaomi")
-        #expect(routing.executionMode == .native)
-        #expect(routing.route == .gatewayTalkSpeak)
+        #expect(parsed.snapshot.activeProvider == "xiaomi")
+        #expect(parsed.route == .gatewayTalkSpeak)
 
         let expectedAudio = Data([4, 5, 6])
         let synthesizer = RecordingGatewaySpeechSynthesizer(audio: TalkGatewaySpeechAudio(
@@ -187,11 +185,9 @@ struct TalkGatewaySpeechClientTests {
             allowSimulatorCapture: true,
             gatewaySpeechSynthesizer: synthesizer)
         manager.bufferedPlayer = audioPlayer
-        manager._test_applyLoadedTalkConfig(parsed, providerSelection: .gatewayDefault)
+        manager._test_applyLoadedTalkConfig(parsed)
 
         #expect(manager._test_runtimeRoute() == .gatewayTalkSpeak)
-        #expect(manager._test_executionMode() == .native)
-        #expect(!manager.gatewayTalkUsesRealtime)
         #expect(manager.gatewayTalkTransportLabel == "Native")
 
         await manager._test_playAssistant(text: "Gateway voice")
@@ -210,7 +206,7 @@ struct TalkGatewaySpeechClientTests {
             allowSimulatorCapture: true,
             gatewaySpeechSynthesizer: synthesizer)
         manager.bufferedPlayer = RecordingBufferedAudioPlayer()
-        manager._test_applyLoadedTalkConfig(parsed, providerSelection: .gatewayDefault)
+        manager._test_applyLoadedTalkConfig(parsed)
 
         await manager._test_playAssistant(text: "{\"voice\":\"alloy\",\"model\":\"expressive\"}\nFirst")
         await manager._test_playAssistant(text: "Second")
@@ -230,13 +226,12 @@ struct TalkGatewaySpeechClientTests {
             allowSimulatorCapture: true,
             gatewaySpeechSynthesizer: synthesizer)
         manager.bufferedPlayer = RecordingBufferedAudioPlayer()
-        manager._test_applyLoadedTalkConfig(parsed, providerSelection: .gatewayDefault)
+        manager._test_applyLoadedTalkConfig(parsed)
 
         await manager._test_playAssistant(text: "No model override")
 
         #expect(synthesizer.requests.count == 1)
         #expect(synthesizer.requests[0].modelId == nil)
-        #expect(manager.gatewayTalkDefaultModelId == nil)
     }
 
     @Test func `stopped talk does not play completed gateway synthesis`() async {
@@ -247,7 +242,7 @@ struct TalkGatewaySpeechClientTests {
             allowSimulatorCapture: true,
             gatewaySpeechSynthesizer: synthesizer)
         manager.bufferedPlayer = audioPlayer
-        manager._test_applyLoadedTalkConfig(parsed, providerSelection: .gatewayDefault)
+        manager._test_applyLoadedTalkConfig(parsed)
 
         let playback = Task { await manager._test_playAssistant(text: "Delayed voice") }
         while !synthesizer.hasPendingRequest {
@@ -271,7 +266,7 @@ struct TalkGatewaySpeechClientTests {
             allowSimulatorCapture: true,
             gatewaySpeechSynthesizer: synthesizer)
         manager.bufferedPlayer = audioPlayer
-        manager._test_applyLoadedTalkConfig(parsed, providerSelection: .gatewayDefault)
+        manager._test_applyLoadedTalkConfig(parsed)
 
         let playback = Task { await manager._test_playAssistant(text: "Interrupt me") }
         while !audioPlayer.isPlaying {
@@ -289,35 +284,23 @@ struct TalkGatewaySpeechClientTests {
     @Test func `open AI speech provider without realtime config uses talk speak`() {
         let parsed = Self.parseSpeechProvider("openai")
 
-        let routing = TalkModeRoutingResolver.resolve(
-            parsed: parsed,
-            providerSelection: .gatewayDefault,
-            defaultProvider: "elevenlabs",
-            defaultRealtimeModelId: "gpt-realtime-2")
-
-        #expect(routing.activeProvider == "openai")
-        #expect(routing.executionMode == .native)
-        #expect(routing.route == .gatewayTalkSpeak)
+        #expect(parsed.snapshot.activeProvider == "openai")
+        #expect(parsed.route == .gatewayTalkSpeak)
     }
 
     @Test func `system voice keeps BCP 47 locale separate from provider language`() {
         let manager = TalkModeManager(allowSimulatorCapture: true)
         manager._test_applyLoadedTalkConfig(
-            Self.parseSpeechProvider("elevenlabs", speechLocale: "tr_TR"),
-            providerSelection: .gatewayDefault)
+            Self.parseSpeechProvider("elevenlabs", speechLocale: "tr_TR"))
 
         let configured = manager._test_resolvedSpeechLanguages(
-            directiveLanguage: nil,
-            localSelection: TalkSpeechLocale.automaticID)
+            directiveLanguage: nil)
         let directive = manager._test_resolvedSpeechLanguages(
-            directiveLanguage: "de_DE",
-            localSelection: "fr-FR")
+            directiveLanguage: "de_DE")
         let providerCompatible = manager._test_resolvedSpeechLanguages(
-            directiveLanguage: "tr",
-            localSelection: TalkSpeechLocale.automaticID)
+            directiveLanguage: "tr")
         let unavailableDirective = manager._test_resolvedSpeechLanguages(
             directiveLanguage: "zz-ZZ",
-            localSelection: TalkSpeechLocale.automaticID,
             isSystemVoiceAvailable: { $0 == "tr-TR" })
 
         #expect(configured.provider == nil)
@@ -360,16 +343,9 @@ struct TalkGatewaySpeechClientTests {
             defaultRealtimeModelIdFallback: "gpt-realtime-2",
             defaultSilenceTimeoutMs: 900)
 
-        let routing = TalkModeRoutingResolver.resolve(
-            parsed: parsed,
-            providerSelection: .gatewayDefault,
-            defaultProvider: "elevenlabs",
-            defaultRealtimeModelId: "gpt-realtime-2")
-
-        #expect(routing.executionMode == .realtimeRelay)
-        #expect(routing.route == .realtimeRelay)
-        #expect(!routing.route.usesGatewayTalkSpeak)
-        #expect(routing.route.gatewayOwnsCredentials)
+        #expect(parsed.route == .realtimeRelay)
+        #expect(!parsed.route.usesGatewayTalkSpeak)
+        #expect(parsed.route.gatewayOwnsCredentials)
     }
 
     private static func parseSpeechProvider(

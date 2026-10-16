@@ -20,12 +20,13 @@ import {
 const gatewayTestHoisted = getGatewayTestHoistedState();
 
 function createEmbeddedRunMockExports() {
-  return {
+  const runtime = {
     compactEmbeddedAgentSession: (...args: unknown[]) =>
       embeddedRunMock.compactEmbeddedAgentSession(...args),
     isEmbeddedAgentRunActive: (sessionId: string) => embeddedRunMock.activeIds.has(sessionId),
-    isEmbeddedAgentRunInProgress: (sessionId: string) => embeddedRunMock.activeIds.has(sessionId),
     resolveEmbeddedAgentRunProgressState: (sessionId: string) =>
+      embeddedRunMock.activeIds.has(sessionId) ? "running" : undefined,
+    resolveEmbeddedAgentSessionProgressState: (sessionId: string) =>
       embeddedRunMock.activeIds.has(sessionId) ? "running" : undefined,
     abortEmbeddedAgentRun: (sessionId: string) => {
       embeddedRunMock.abortCalls.push(sessionId);
@@ -48,6 +49,27 @@ function createEmbeddedRunMockExports() {
       }
       return ended;
     },
+  };
+  return {
+    ...runtime,
+    captureEmbeddedRunDrainTarget: (
+      sessionId: string,
+      owner: Parameters<
+        typeof import("../agents/embedded-agent-runner/runs.js").captureEmbeddedRunDrainTarget
+      >[1],
+    ) =>
+      embeddedRunMock.activeIds.has(sessionId)
+        ? {
+            sessionId,
+            agentId: owner.agentId,
+            sessionKey: undefined,
+            isActive: () => runtime.isEmbeddedAgentRunActive(sessionId),
+            abort: () => runtime.abortEmbeddedAgentRun(sessionId),
+            waitForEnd: (timeoutMs: number | null) =>
+              runtime.waitForEmbeddedAgentRunEnd(sessionId, timeoutMs),
+            release: () => {},
+          }
+        : undefined,
   };
 }
 
@@ -105,7 +127,7 @@ vi.mock("../agents/agent-model-discovery.js", async () => {
     "../agents/sessions/index.js",
   );
 
-  const createActualRegistry = (...args: Parameters<typeof actual.discoverModels>) => {
+  const createActualRegistry = (...args: Parameters<typeof actual.discoverModelsAsync>) => {
     const modelsFile = path.join(args[1], "models.json");
     const Registry = modelSessions.ModelRegistry as unknown as {
       create?: (
@@ -167,8 +189,10 @@ vi.mock("../agents/agent-model-discovery.js", async () => {
 
   return {
     ...actual,
-    discoverModels: (authStorage: Parameters<typeof actual.discoverModels>[0], agentDir: string) =>
-      new MockModelRegistry(authStorage, path.join(agentDir, "models.json")),
+    discoverModelsAsync: async (
+      authStorage: Parameters<typeof actual.discoverModelsAsync>[0],
+      agentDir: string,
+    ) => new MockModelRegistry(authStorage, path.join(agentDir, "models.json")),
     ModelRegistry: MockModelRegistry,
   };
 });
@@ -261,6 +285,7 @@ vi.mock("../agents/embedded-agent-runner/active-run-projections.js", async (impo
     typeof import("../agents/embedded-agent-runner/active-run-projections.js")
   >()),
   getActiveEmbeddedRunCount: () => embeddedRunMock.activeIds.size,
+  isEmbeddedAgentRunActive: (sessionId: string) => embeddedRunMock.activeIds.has(sessionId),
 }));
 
 vi.mock("/src/agents/embedded-agent-runner/active-run-projections.js", async (importOriginal) => ({
@@ -268,6 +293,7 @@ vi.mock("/src/agents/embedded-agent-runner/active-run-projections.js", async (im
     typeof import("../agents/embedded-agent-runner/active-run-projections.js")
   >()),
   getActiveEmbeddedRunCount: () => embeddedRunMock.activeIds.size,
+  isEmbeddedAgentRunActive: (sessionId: string) => embeddedRunMock.activeIds.has(sessionId),
 }));
 
 vi.mock("./health/collector.js", () => ({
@@ -279,7 +305,8 @@ vi.mock("../status/summary.js", () => ({
 vi.mock("../commands/agent.js", () => ({
   agentCommand: agentCommandMock,
   agentCommandFromGatewayIngress: agentCommandMock,
-  agentCommandFromIngress: agentCommandMock,
+  agentCommandFromIngress: (...args: Parameters<typeof agentCommandMock>) =>
+    agentCommandMock(...args),
 }));
 vi.mock("../agents/btw.js", () => ({
   runBtwSideQuestion: (...args: Parameters<RunBtwSideQuestionFn>) =>
@@ -301,15 +328,6 @@ vi.mock("/src/auto-reply/dispatch.js", async () => {
   );
   return createDispatchInboundMessageMockExports(actual);
 });
-vi.mock("../auto-reply/reply.js", () => ({
-  getReplyFromConfig: (...args: Parameters<GetReplyFromConfigFn>) =>
-    gatewayTestHoisted.getReplyFromConfig(...args),
-}));
-
-vi.mock("/src/auto-reply/reply.js", () => ({
-  getReplyFromConfig: (...args: Parameters<GetReplyFromConfigFn>) =>
-    gatewayTestHoisted.getReplyFromConfig(...args),
-}));
 vi.mock("../auto-reply/reply/get-reply-from-config.runtime.js", () => ({
   getReplyFromConfig: (...args: Parameters<GetReplyFromConfigFn>) =>
     gatewayTestHoisted.getReplyFromConfig(...args),
@@ -327,7 +345,7 @@ vi.mock("../cli/deps.js", async () => {
     ...actual,
     createDefaultDeps: () => ({
       ...base,
-      sendMessageWhatsApp: (...args: unknown[]) =>
+      whatsapp: (...args: unknown[]) =>
         (gatewayTestHoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
     }),
   };

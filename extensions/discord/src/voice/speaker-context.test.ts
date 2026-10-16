@@ -44,7 +44,7 @@ describe("DiscordVoiceSpeakerContextResolver", () => {
     await expect(resolver.resolveContext("g1", id)).resolves.toMatchObject({ senderIsOwner });
   });
 
-  it("reuses cached speaker context for repeated speaker lookups", async () => {
+  it("preserves complete speaker context across cached lookups", async () => {
     const fetchMember = vi.fn().mockResolvedValue({
       nickname: "Ada",
       roles: [],
@@ -54,15 +54,22 @@ describe("DiscordVoiceSpeakerContextResolver", () => {
       client: createClient(fetchMember),
     });
 
-    await expect(resolver.resolveContext("g1", "u1")).resolves.toMatchObject({ label: "Ada" });
-    await expect(resolver.resolveContext("g1", "u1")).resolves.toMatchObject({ label: "Ada" });
+    const expected = {
+      id: "u1",
+      label: "Ada",
+      name: "ada",
+      tag: "ada",
+      senderIsOwner: false,
+    };
+    await expect(resolver.resolveContext("g1", "u1")).resolves.toEqual(expected);
+    await expect(resolver.resolveContext("g1", "u1")).resolves.toEqual(expected);
 
     expect(fetchMember).toHaveBeenCalledTimes(1);
   });
 
-  it("does not cache speaker context when the cache expiry would exceed Date range", async () => {
+  it("refreshes speaker context after the 60-second cache lifetime", async () => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date(8_640_000_000_000_000));
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
     const fetchMember = vi
       .fn()
       .mockResolvedValueOnce({
@@ -80,6 +87,9 @@ describe("DiscordVoiceSpeakerContextResolver", () => {
     });
 
     await expect(resolver.resolveContext("g1", "u1")).resolves.toMatchObject({ label: "Ada" });
+    vi.advanceTimersByTime(59_999);
+    await expect(resolver.resolveContext("g1", "u1")).resolves.toMatchObject({ label: "Ada" });
+    vi.advanceTimersByTime(1);
     await expect(resolver.resolveContext("g1", "u1")).resolves.toMatchObject({ label: "Grace" });
 
     expect(fetchMember).toHaveBeenCalledTimes(2);

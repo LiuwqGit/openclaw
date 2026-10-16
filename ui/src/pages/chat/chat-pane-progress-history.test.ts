@@ -5,15 +5,21 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { SessionProgressCardController } from "../../components/session-progress-card-controller.ts";
-import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
+import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
+import type { GatewayRequestHandler } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { resetChatHistoryProjection } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
-import { createTestChatPane, type TestChatPane } from "./chat-pane.test-support.ts";
+import {
+  createGatewayBrowserClientFixture,
+  createTestChatPane,
+  type TestChatPane,
+} from "./chat-pane.test-support.ts";
 
 const history: ChatHistoryResult = {
   sessionId: "research-notes",
@@ -36,10 +42,10 @@ function progressCard(revision = 1): ProgressCard {
   };
 }
 
-function createHistoryProgressPane(request: ReturnType<typeof vi.fn>) {
-  const client = { request } as unknown as GatewayBrowserClient;
-  const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
-  const hello = gatewayHelloForMethods(["chat.history", "progressCard.get", "progressCard.put"]);
+function createHistoryProgressPane(request: GatewayRequestHandler) {
+  const client = createGatewayBrowserClientFixture({ request });
+  const { pane, state, sessions } = createTestChatPane({ client });
+  const hello = gatewayHelloForMethods(["chat.history", "progressCard.get"]);
   pane.context.gateway.snapshot.hello = hello;
   state.hello = hello;
   state.agentsList = {
@@ -52,9 +58,15 @@ function createHistoryProgressPane(request: ReturnType<typeof vi.fn>) {
   pane.sessionKey = "notes";
   state.sessionKey = "notes";
   state.settings = { sessionKey: "notes", lastActiveSessionKey: "notes" } as typeof state.settings;
-  const progress = (pane as TestChatPane & { progressCard: SessionProgressCardController })
-    .progressCard;
+  const presentation = pane as TestChatPane & {
+    progressCard: SessionProgressCardController;
+    readonly progressCardPresentation: { card: ProgressCard; identity: string } | null;
+    readonly progressCardInitialLoading: boolean;
+    hideProgressCard: (card: ProgressCard) => void;
+  };
+  const progress = presentation.progressCard;
   onTestFinished(() => progress.hostDisconnected());
+  progress.hostConnected();
   const emit = (card: ProgressCard) => {
     const gateway = pane.context.gateway as ApplicationContext["gateway"] & {
       emitTestEvent: (event: GatewayEventFrame) => void;
@@ -65,32 +77,37 @@ function createHistoryProgressPane(request: ReturnType<typeof vi.fn>) {
       payload: { sessionKey: card.sessionKey, revision: card.revision },
     });
   };
-  return { pane, state, progress, emit };
+  return { pane, state, sessions, progress, emit, presentation };
 }
 
 describe("retained bare pane progress follows accepted history ownership", () => {
-  it("loads, refreshes and dismisses the history owner's card without rekeying the composer", async () => {
-    let card: ProgressCard | null = progressCard();
+  it("hides the history owner's card only in this pane without rekeying the composer", async () => {
+    let card: ProgressCard = progressCard();
     const request = vi.fn(async (method: string) => {
       if (method === "chat.history") {
         return history;
       }
-      if (method === "progressCard.put") {
-        card = null;
+      if (method !== "progressCard.get") {
+        throw new Error(`Unexpected progress-card write: ${method}`);
       }
       return { card };
     });
-    const { state, progress, emit } = createHistoryProgressPane(request);
+    const { state, progress, emit, presentation } = createHistoryProgressPane(request);
     state.chatMessage = "Retained draft";
     progress.hostUpdate();
     expect(request).not.toHaveBeenCalled();
 
     await loadChatHistory(state, { deferBranches: true });
-    expect(request).toHaveBeenCalledWith("chat.history", {
-      sessionKey: "notes",
-      limit: 80,
-      maxBytes: 256 * 1024,
-    });
+    expect(request).toHaveBeenCalledWith(
+      "chat.history",
+      {
+        sessionKey: "notes",
+        limit: 80,
+        maxBytes: 256 * 1024,
+        toolResultMaxChars: 2_000,
+      },
+      { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
+    );
     progress.hostUpdate();
     await vi.waitFor(() => expect(progress.card).toEqual(card));
     expect(request).toHaveBeenLastCalledWith("progressCard.get", {
@@ -104,14 +121,101 @@ describe("retained bare pane progress follows accepted history ownership", () =>
     emit(card);
     await vi.waitFor(() => expect(progress.card).toEqual(card));
     expect(request.mock.calls.filter(([method]) => method === "progressCard.get")).toHaveLength(2);
-    expect(await progress.dismiss(expectDefined(progress.card, "displayed progress card"))).toBe(
-      true,
+    presentation.hideProgressCard(
+      expectDefined(presentation.progressCardPresentation?.card, "displayed progress card"),
     );
-    expect(request).toHaveBeenLastCalledWith("progressCard.put", {
-      sessionKey: "agent:research:notes",
-      expectedRevision: 2,
-    });
-    expect(progress.card).toBeNull();
+    expect(presentation.progressCardPresentation).toBeNull();
+    expect(progress.card).toEqual(card);
+    expect(request.mock.calls.every(([method]) => method !== "progressCard.put")).toBe(true);
+    expect(state.chatMessage).toBe("Retained draft");
+
+    card = progressCard(3);
+    emit(card);
+    await vi.waitFor(() => expect(progress.card).toEqual(card));
+    expect(presentation.progressCardPresentation).toBeNull();
+  });
+
+  it("hides progress and its loading slot without clearing saved progress, then restores updates", async () => {
+    let card = progressCard();
+    const request = vi.fn(async (method: string) =>
+      method === "chat.history" ? history : { card },
+    );
+    const { state, progress, emit, presentation } = createHistoryProgressPane(request);
+    state.settings.chatShowTaskProgress = false;
+    expect(presentation.progressCardInitialLoading).toBe(false);
+    await loadChatHistory(state, { deferBranches: true });
+    progress.hostUpdate();
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["chat.history"]);
+    expect(presentation.progressCardPresentation).toBeNull();
+
+    state.settings.chatShowTaskProgress = true;
+    progress.hostUpdate();
+    await vi.waitFor(() => expect(presentation.progressCardPresentation?.card).toEqual(card));
+
+    state.settings.chatShowTaskProgress = false;
+    progress.hostUpdate();
+    expect(presentation.progressCardPresentation).toBeNull();
+    expect(presentation.progressCardInitialLoading).toBe(false);
+    card = progressCard(2);
+    emit(card);
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "chat.history",
+      "progressCard.get",
+    ]);
+
+    state.settings.chatShowTaskProgress = true;
+    progress.hostUpdate();
+    await vi.waitFor(() => expect(presentation.progressCardPresentation?.card).toEqual(card));
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "chat.history",
+      "progressCard.get",
+      "progressCard.get",
+    ]);
+  });
+
+  it.each([
+    { raw: "notes", canonical: "agent:research:notes", request: { key: "agent:research:notes" } },
+    { raw: "unknown", canonical: "unknown", request: { key: "unknown", agentId: "research" } },
+  ])("binds Swarm parent reads to accepted $raw history", async (target) => {
+    const session: GatewaySessionRow = {
+      ...expectDefined(history.sessionInfo, "accepted history session"),
+      key: target.canonical,
+      agentId: "research",
+      kind: "direct",
+    };
+    const request = vi.fn(async (method: string) =>
+      method === "chat.history"
+        ? { ...history, sessionInfo: session }
+        : method === "sessions.describe"
+          ? { session }
+          : { card: null },
+    );
+    const { pane, state, sessions } = createHistoryProgressPane(request);
+    vi.spyOn(sessions, "canonicalListRevision", "get").mockReturnValue(1);
+    vi.spyOn(sessions, "list").mockResolvedValue(
+      createSessionsListResult({ omitSessionFromList: true }),
+    );
+    pane.sessionKey = target.raw;
+    state.sessionKey = target.raw;
+    state.settings = {
+      ...state.settings,
+      sessionKey: target.raw,
+      lastActiveSessionKey: target.raw,
+    };
+    const swarmPane = pane as TestChatPane & {
+      refreshSwarmRoster: () => void;
+      swarmHydrator?: { dispose: () => void; rows: GatewaySessionRow[] };
+    };
+    onTestFinished(() => swarmPane.swarmHydrator?.dispose());
+    swarmPane.refreshSwarmRoster();
+    expect(request).not.toHaveBeenCalled();
+    await loadChatHistory(state, { deferBranches: true });
+    swarmPane.refreshSwarmRoster();
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("sessions.describe", target.request),
+    );
+    await vi.waitFor(() => expect(swarmPane.swarmHydrator?.rows).toContainEqual(session));
+    expect(state.sessionKey).toBe(target.raw);
   });
 
   it.each([
@@ -121,15 +225,19 @@ describe("retained bare pane progress follows accepted history ownership", () =>
     "disconnect",
     "session replacement",
     "history reset",
+    "archive",
   ] as const)("retires the accepted progress identity after %s", async (transition) => {
     const card = progressCard();
     const request = vi.fn(async (method: string) =>
       method === "chat.history" ? history : { card },
     );
-    const { pane, state, progress } = createHistoryProgressPane(request);
+    const { pane, state, progress, presentation } = createHistoryProgressPane(request);
     await loadChatHistory(state, { deferBranches: true });
     progress.hostUpdate();
     await vi.waitFor(() => expect(progress.card).toEqual(card));
+
+    const presented = presentation.progressCardPresentation;
+    expect(presented?.card).toEqual(card);
 
     if (transition === "navigation") {
       state.sessionKey = "scratch";
@@ -142,11 +250,16 @@ describe("retained bare pane progress follows accepted history ownership", () =>
       state.connected = false;
     } else if (transition === "session replacement") {
       state.currentSessionId = "replacement-notes";
+    } else if (transition === "archive") {
+      state.selectedChatSessionArchived = true;
     } else {
       resetChatHistoryProjection(state);
     }
     progress.hostUpdate();
     expect(progress.card).toBeNull();
+    expect(presentation.progressCardPresentation).toEqual(
+      transition === "reconnect" || transition === "disconnect" ? presented : null,
+    );
     expect(request.mock.calls.filter(([method]) => method === "progressCard.get")).toHaveLength(1);
   });
 
