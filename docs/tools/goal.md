@@ -265,9 +265,12 @@ target the displayed Goal ID, so a stale button cannot change a replacement
 Goal. If a request is interrupted or its acknowledgment does not arrive within
 30 seconds, the UI reports an unconfirmed outcome. Resume keeps **Resuming goal…**
 in the pill while waiting and retries once after a timeout or unavailable response,
-using the same saved request. If it remains unconfirmed, use **Retry resume** in
-the pill. Other actions, or requests whose goal changed or was cleared, use
-**Check outcome** in the recovery notice. These controls retry the saved action
+using the same saved request. A busy-session rejection is different: the Gateway
+refused the request before admitting it, so the UI reports that the session still
+has active or queued work without retrying in place or retaining an unconfirmed
+operation, and other Goal controls stay available. If Resume remains unconfirmed, use
+**Retry resume** in the pill. Other actions, or requests whose goal changed or was
+cleared, use **Check outcome** in the recovery notice. These controls retry the saved action
 unchanged to reconcile it with the Gateway receipt. The original request stays
 in this browser tab across reconnects and reloads; restoring it never sends it
 automatically. The UI does not send goal controls if the connection has no

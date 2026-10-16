@@ -621,6 +621,35 @@ describe("Goal control requests", () => {
     expect(host.request).toHaveBeenCalledTimes(2);
   });
 
+  it("retires a busy-session rejection without retrying it or blocking other Goal actions", async () => {
+    vi.useFakeTimers();
+    let requests = 0;
+    const host = goalHost({
+      "sessions.goal.update": () => {
+        requests += 1;
+        throw new GatewayRequestError({
+          code: "UNAVAILABLE",
+          message:
+            "This session still has active or queued work. Wait for it to finish, then retry the Goal.",
+          details: { reason: "goal-session-busy" },
+        });
+      },
+    });
+    const submitted = mutateChatGoal(host, { action: "resume", goalId: goal.id });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(await submitted).toBe(false);
+    // The typed pre-admission rejection is definitive: no automatic retry is armed.
+    expect(requests).toBe(1);
+    expect(host.chatError).toContain("Wait for it to finish, then retry the Goal.");
+    expect(host.chatError).not.toContain("Goal update not confirmed");
+    // No unknown-outcome fence survives the known refusal: recovery is retired...
+    expect(chatGoalRecovery(host)).toBeUndefined();
+    expect(sessionStorage.length).toBe(0);
+    // ...so a different Goal decision can be sent once the session is available.
+    expect(await mutateChatGoal(host, { action: "pause", goalId: goal.id })).toBe(false);
+    expect(requests).toBe(2);
+  });
+
   it.each(["goal-invalid"])(
     "retires definitive %s rejection instead of arming a future mutation",
     async (reason) => {

@@ -57,9 +57,21 @@ const rejectedGoalReasons = new Set([
   "operation-conflict",
   "session-rebound",
   "goal-rebound",
+  // The Gateway's exclusive-admission guard rejects before a turn is reserved, so a
+  // busy session is a definitive pre-admission refusal, not an unknown outcome.
+  "session-busy",
   "capacity",
   "invalid",
 ]);
+
+/** A typed busy rejection is definitive pre-admission: this request was never applied. */
+function isGoalSessionBusyRejection(error: unknown): boolean {
+  return (
+    error instanceof GatewayRequestError &&
+    isRecord(error.details) &&
+    error.details.reason === "goal-session-busy"
+  );
+}
 
 function rejectGoalOperation(host: ChatHost, message: string): false {
   setChatError(host, message, true);
@@ -413,6 +425,9 @@ async function runGoalOperation(
       result = await request();
     } catch (error) {
       if (
+        // A busy rejection is a known refusal, not a lost ACK: an in-place retry
+        // cannot reconcile it and only stacks refusals while work is still active.
+        isGoalSessionBusyRejection(error) ||
         !("action" in params && params.action === "resume") ||
         !targetIsCurrent() ||
         !(
