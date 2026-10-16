@@ -1,5 +1,5 @@
 import type { StatementSync } from "node:sqlite";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
 import { createNestedToolActivity } from "../../sessions/nested-tool-activity.js";
@@ -13,13 +13,15 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   appendTranscriptEvent,
   persistSessionTranscriptTurn,
   waitForSessionTranscriptProjection,
   type SessionTranscriptReadScope,
 } from "./session-accessor.js";
-import { readRecentSessionTranscriptHistoryEvents } from "./session-accessor.sqlite-history-events.js";
+import { readRecentSessionTranscriptHistoryEvents } from "./session-accessor.sqlite-history-events.test-support.js";
 import {
   insertSyntheticHistory,
   readSessionTranscriptHistoryEventCount,
@@ -34,19 +36,23 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
+    clearRuntimeConfigSnapshot();
     cleanup();
   }),
 );
+
+beforeEach(() => setRuntimeConfigSnapshot({}));
 
 function readHistoryWithQueryPlans(
   database: OpenClawAgentDatabase,
   scope: SessionTranscriptReadScope,
 ) {
-  clearNodeSqliteKyselyCacheForDatabase(database.db);
-  const prepare = database.db.prepare.bind(database.db);
+  const nativeDb = requireNativeSqliteDatabase(database.db);
+  clearNodeSqliteKyselyCacheForDatabase(nativeDb);
+  const prepare = nativeDb.prepare.bind(nativeDb);
   const markerStatements: StatementSync[] = [];
   const anchorStatements: StatementSync[] = [];
-  const spy = vi.spyOn(database.db, "prepare").mockImplementation((query) => {
+  const spy = vi.spyOn(nativeDb, "prepare").mockImplementation((query) => {
     const statement = prepare(query);
     const columns = statement.columns().map(({ name }) => name);
     if (columns.includes("following_message_position")) {

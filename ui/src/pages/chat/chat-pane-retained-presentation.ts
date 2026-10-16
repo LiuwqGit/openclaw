@@ -1,9 +1,7 @@
 import type { ProgressCard } from "@openclaw/gateway-protocol";
-import { html, nothing } from "lit";
 import { createDeferredCore } from "../../../../src/shared/deferred.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
-import "../../components/modal-dialog.ts";
 import type { SessionProgressCardRefreshAction } from "../../components/session-progress-card.ts";
 import { t } from "../../i18n/index.ts";
 import { boardProviderCacheKey } from "../../lib/board/provider.ts";
@@ -18,6 +16,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
 import { storeChatComposerMemoryFallback } from "./chat-composer-memory-fallback.ts";
+import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { loadChatBranches, retireChatBranchRequests } from "./chat-history-branches.ts";
 import {
   chatHistoryRequests,
@@ -146,14 +145,14 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       this.state &&
       this.isCurrentSessionArchived(this.state) &&
       this.currentSessionArchived === false &&
-      isThreadPresentationFocused(this.presentationId, this),
+      isThreadPresentationFocused(this.presentationId, this.element),
     );
   }
 
   protected retireArchivedPresentation(): void {
     const archived = this.state ? this.isCurrentSessionArchived(this.state) : false;
     if (archived && this.currentSessionArchived === false) {
-      dismissThreadPortals(this.presentationId, this);
+      dismissThreadPortals(this.presentationId, this.element);
       if (this.archiveFocusOwned) {
         this.querySelector<HTMLElement>(".chat-thread")?.focus({ preventScroll: true });
       }
@@ -191,7 +190,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       agentId: edit.agentId,
       exactKey: true,
     });
-    runSessionNavigationIntent(this, {
+    runSessionNavigationIntent(this.element, {
       agentId: edit.agentId,
       face: "chat",
       sessionKey: edit.sessionKey,
@@ -436,43 +435,9 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
 
   protected renderResetConfirmation() {
     if (!this.resetConfirmation) {
-      return nothing;
+      return null;
     }
-    const title = t("chat.board.resetTitle");
-    const description = t("chat.board.resetDescription");
-    return html`
-      <openclaw-modal-dialog
-        label=${title}
-        description=${description}
-        @modal-cancel=${() => this.settleResetConfirmation(false)}
-      >
-        <div class="exec-approval-card board-reset-confirmation">
-          <div class="exec-approval-header">
-            <div>
-              <div class="exec-approval-title">${title}</div>
-              <div class="exec-approval-sub">${description}</div>
-            </div>
-          </div>
-          <div class="exec-approval-actions">
-            <button
-              class="btn primary"
-              type="button"
-              @click=${() => this.settleResetConfirmation(true)}
-            >
-              ${t("common.confirm")}
-            </button>
-            <button
-              class="btn"
-              type="button"
-              autofocus
-              @click=${() => this.settleResetConfirmation(false)}
-            >
-              ${t("common.cancel")}
-            </button>
-          </div>
-        </div>
-      </openclaw-modal-dialog>
-    `;
+    return { onResolve: (confirmed: boolean) => this.settleResetConfirmation(confirmed) };
   }
 
   protected override activeChanged(active: boolean): void {
@@ -510,7 +475,6 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       return;
     }
     if (presented) {
-      this.minutePoll.start();
       this.consumeSessionHandoff(this.sessionKey);
       this.activateComposerPresentation();
       this.syncActiveBindings();
@@ -543,7 +507,6 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       void this.refreshSessionPullRequests();
       return;
     }
-    this.minutePoll.stop();
     if (this.state) {
       retireChatBranchRequests(this.state);
       // Unwatch can cancel an admitted refresh before sync; a later presentation
@@ -558,8 +521,8 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     this.clearComposerPrefillAttention();
     this.settleResetConfirmation(false);
     this.cancelHeaderRename();
-    dismissConfirmedActionPopovers(this);
-    resetTranscriptSession(this.presentationId, this);
+    dismissConfirmedActionPopovers(this.element);
+    resetTranscriptSession(this.presentationId, this.element);
     const state = this.state;
     if (state) {
       stopChatRealtimeTalk(state);
@@ -629,8 +592,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
         if (this.state !== state || state.sessionKey !== sessionKey) {
           return;
         }
-        const client = state.client;
-        const connectionEpoch = state.connectionEpoch;
+        const connectionIsCurrent = captureChatConnectionOwner(state);
         const sessions = state.sessions;
         const attachments = state.chatAttachments;
         const mentions = state.chatMentions;
@@ -640,9 +602,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
         const isCurrent = () =>
           this.state === state &&
           state.sessionKey === sessionKey &&
-          state.connected &&
-          state.client === client &&
-          state.connectionEpoch === connectionEpoch &&
+          connectionIsCurrent() &&
           state.sessions === sessions &&
           this.isConnected &&
           this.active &&

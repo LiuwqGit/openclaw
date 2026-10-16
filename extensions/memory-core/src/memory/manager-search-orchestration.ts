@@ -7,7 +7,6 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   readMemoryFile,
-  MEMORY_INDEX_VECTOR_TABLE as VECTOR_TABLE,
   MEMORY_SEARCH_DEADLINE_CONTROL,
   type MemoryReadResult,
   type MemorySearchManager,
@@ -19,7 +18,10 @@ import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { uniqueValues } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { mergeHybridResults, selectHybridSearchResults } from "./hybrid.js";
 import { runMemoryVectorFallback } from "./manager-cpu-worker-runtime.js";
-import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
+import {
+  createMemoryEmbeddingOperationError,
+  isMemoryEmbeddingOperationError,
+} from "./manager-embedding-errors.js";
 import { acquireMemoryIndexReadGeneration } from "./manager-index-generation-lease.js";
 import {
   MemoryKeywordRetrieval,
@@ -28,11 +30,10 @@ import {
 } from "./manager-keyword-retrieval.js";
 import type { MemoryIndexIdentityState } from "./manager-reindex-state.js";
 import type { MemoryRetrievalIndexState } from "./manager-retrieval-read.js";
-import { runVectorKnnInSubprocess } from "./manager-search-knn-subprocess.js";
+import { admitMemoryVectorIndex, searchMemoryVectorIndex } from "./manager-search-knn.js";
 import { searchVector } from "./manager-search-vector.js";
 import { prepareExactPathMatcher } from "./manager-search.js";
 import type { MemoryKeywordWorkerResult } from "./manager-search.worker.js";
-import { assertMemoryShadowIdentity, readMemoryShadowIdentity } from "./manager-shadow-task.js";
 import { applyRetrievalRanking, prepareActiveProjectKeys } from "./project-ranking.js";
 import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
 
@@ -132,15 +133,10 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       sourceFilterList[0] === "sessions";
     const keywordOptions = { boostFallbackRanking: true, signal: opts?.signal, fuseRecallMetadata };
     const database = this.publishedDatabase;
-    const databasePath = resolveUserPath(this.settings.store.databasePath);
-    const fileIdentity = fuseRecallMetadata ? readMemoryShadowIdentity(databasePath) : undefined;
     const assertReadOwner = () => {
       opts?.signal?.throwIfAborted();
-      if (database.closed || !database.db.isOpen || this.publishedDatabase !== database) {
+      if (!database.isOpen || this.publishedDatabase !== database) {
         throw new Error("Memory retrieval changed its captured database owner");
-      }
-      if (fileIdentity) {
-        assertMemoryShadowIdentity(databasePath, fileIdentity);
       }
     };
     let preparedKeyword: MemoryKeywordWorkerResult | undefined;
@@ -155,7 +151,6 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       releaseGeneration ??= await acquireMemoryIndexReadGeneration(
         this.settings.store.databasePath,
         opts?.signal,
-        fuseRecallMetadata,
       );
       assertReadOwner();
       preparedKeyword = undefined;
@@ -354,7 +349,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         searchSyncEnabled &&
         !capacitySyncInFlight &&
         !formatUpgradePendingKeywordOnly(repairedIndexIdentity) &&
-        (this.dirty || this.sessionsDirty)
+        this.dirty
       ) {
         const trackedSearchSync = this.syncPublishedIndexInBackground({ reason: "search" })
           .catch((err: unknown) => {
@@ -463,6 +458,16 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
               semanticProviderRuntime,
               opts?.[MEMORY_SEARCH_DEADLINE_CONTROL],
             );
+            const dimensions = indexState.meta?.vectorDims;
+            if (dimensions !== undefined && queryVec.length !== dimensions) {
+              throw createMemoryEmbeddingOperationError({
+                operation: "query",
+                providerId: semanticProvider.id,
+                cause: new Error(
+                  `query embedding has ${queryVec.length} dimensions, but the memory index expects ${dimensions}; rebuild with openclaw memory index --force --agent ${this.agentId}`,
+                ),
+              });
+            }
             break;
           } catch (err) {
             releaseProvider();
@@ -521,17 +526,19 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       const vectorResults = vector.results;
 
       if (!hybrid.enabled || !this.fts.enabled || !this.fts.available) {
+        const activeProjects = prepareActiveProjectKeys(opts?.activeProjectKeys);
+        const eligible = applyRetrievalRanking(vectorResults, activeProjects).filter(
+          (entry) => entry.score >= minScore,
+        );
         const decayed = await applyTemporalDecayToHybridResults({
-          results: vectorResults,
+          results: eligible,
           temporalDecay: hybrid.temporalDecay,
           workspaceDir: this.workspaceDir,
           sessionSourceMtimes: this.loadSourceMtimes("sessions", vectorResults),
           memorySourceMtimes: this.loadSourceMtimes("memory", vectorResults),
         });
-        // Decay and importance can reverse the order returned by vector retrieval.
-        const activeProjects = prepareActiveProjectKeys(opts?.activeProjectKeys);
-        return applyRetrievalRanking(decayed, activeProjects)
-          .filter((entry) => entry.score >= minScore)
+        // Recency reorders eligible hits without changing their membership.
+        return decayed
           .toSorted(
             (left, right) =>
               right.score - left.score ||
@@ -637,11 +644,13 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         },
         signal,
       );
+    const vectorIndex = admitMemoryVectorIndex({
+      databasePath: resolveUserPath(this.settings.store.databasePath),
+    });
     const results = await searchVector({
-      vectorTable: VECTOR_TABLE,
       ...query,
       signal,
-      ensureVectorReady: async (dimensions) => {
+      ensureVectorReady: async () => {
         if (!this.vector.enabled) {
           return false;
         }
@@ -652,19 +661,19 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
           this.markConfiguredSourcesForFullReindex();
           return false;
         }
-        return (
-          indexState.vectorState.state === "complete" &&
-          (indexState.meta?.vectorDims === undefined || indexState.meta.vectorDims === dimensions)
-        );
+        return indexState.vectorState.state === "complete";
       },
       runFallback: readVectorRows,
       runVectorKnn: async (request, knnSignal) => {
-        const response = await runVectorKnnInSubprocess({
-          databasePath: resolveUserPath(this.settings.store.databasePath),
-          extensionPath: this.vector.extensionPath,
+        const response = await searchMemoryVectorIndex(
+          vectorIndex.capability,
+          vectorIndex.index,
           request,
-          signal: knnSignal,
-        });
+          {
+            extensionPath: this.vector.extensionPath,
+            signal: knnSignal,
+          },
+        );
         if (!response.fallbackScanRequired) {
           this.vector.available = true;
           this.vector.semanticAvailable = true;

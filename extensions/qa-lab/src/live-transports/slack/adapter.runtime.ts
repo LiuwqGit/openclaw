@@ -122,9 +122,6 @@ export async function createSlackQaTransportAdapter(
   context: FactoryContext,
 ): Promise<AdapterDefinition> {
   const { createDebugProxyCaptureReaderAsync } = proxyCapture;
-  if (typeof createDebugProxyCaptureReaderAsync !== "function") {
-    throw new Error("Slack QA requires async proxy capture support. Upgrade the OpenClaw host.");
-  }
   const { createSlackWebClient, createSlackWriteClient, resolveSlackWebClientOptions } =
     loadSlackQaRuntime();
   const options = context.adapterOptions ?? {};
@@ -351,9 +348,19 @@ export async function createSlackQaTransportAdapter(
       OPENCLAW_DEBUG_PROXY_SESSION_ID: captureSessionId,
     }),
     prepareFlow: async (input) => {
-      captureReader ??= createDebugProxyCaptureReaderAsync({
-        env: (input.gateway as { runtimeEnv: NodeJS.ProcessEnv }).runtimeEnv,
-      });
+      // The Gateway exposes its process environment on the runtime handle.
+      const gateway = input.gateway as typeof input.gateway & { runtimeEnv: NodeJS.ProcessEnv };
+      const captureEnv = gateway.runtimeEnv;
+      // Each read acquires admission for the current Gateway lifetime, including after restart.
+      captureReader = {
+        getSessionEvents: (sessionId, limit) =>
+          createDebugProxyCaptureReaderAsync({ env: captureEnv }).getSessionEvents(
+            sessionId,
+            limit,
+          ),
+        readBlob: (blobId) =>
+          createDebugProxyCaptureReaderAsync({ env: captureEnv }).readBlob(blobId),
+      };
       if (options.agentE2e) {
         flowSignal = input.signal;
         assertNativeActive();
@@ -401,7 +408,10 @@ export async function createSlackQaTransportAdapter(
         });
         e2eSessions.push(e2e);
         await e2e.driver.doctor();
-        return { ...(await scenarioEnvironment.prepareFlow(input)), channelE2e: e2e.driver };
+        return {
+          ...(await scenarioEnvironment.prepareFlow(input, e2e.driver, e2e.recordScenarioMessages)),
+          channelE2e: e2e.driver,
+        };
       }
       return await scenarioEnvironment.prepareFlow(input);
     },

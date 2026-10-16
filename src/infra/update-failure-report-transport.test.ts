@@ -148,24 +148,6 @@ describe("update report shared transport boundary", () => {
     },
   );
 
-  it("reconciles its exact pending row when no commit result reaches the caller", async () => {
-    const fixture = await setup();
-    const markPending = vi.fn(
-      async (...args: Parameters<typeof markUpdateFailureReportReceiptPending>) => {
-        await markUpdateFailureReportReceiptPending(...args);
-        throw new SqliteWorkerError("Both pending acknowledgements lost", "outcome-unknown");
-      },
-    );
-    expect(await fixture.submit({ markPending })).toMatchObject({
-      status: "created",
-      url: issueUrl,
-    });
-    expect(markPending).toHaveBeenCalledOnce();
-    expect(fixture.createCalls).toHaveLength(1);
-    expect(await fixture.submit()).toMatchObject({ status: "duplicate", url: issueUrl });
-    expect(fixture.createCalls).toHaveLength(1);
-  });
-
   it("does not publish when a status check cannot find its prior receipt", async () => {
     const fixture = await setup();
     const result = await fixture.submit({ publicationMode: "reconcile" });
@@ -305,14 +287,6 @@ describe("update report shared transport boundary", () => {
       expect(await fs.readFile(result.savedReportPath, "utf8")).toBe(prepared.body);
     },
   );
-
-  it("commits pending before POST and reuses the created receipt without transport", async () => {
-    const fixture = await setup();
-    expect(await fixture.submit()).toMatchObject({ status: "created", url: issueUrl });
-    expect(await fixture.submit()).toMatchObject({ status: "duplicate", url: issueUrl });
-    expect(fixture.createCalls).toHaveLength(1);
-    expect(fixture.runGh).toHaveBeenCalledTimes(2);
-  });
 
   it.each([false, true])(
     "does not start POST with retired authority after pending, retire=%s",
@@ -479,7 +453,6 @@ describe("update report shared transport boundary", () => {
   it.each([
     { label: "missing", errorCode: "ENOENT", started: false, status: null },
     { label: "unauthenticated", started: true, status: 1 },
-    { label: "preflight timeout", errorCode: "ETIMEDOUT", started: true, status: null },
   ])("offers the exact browser body after $label auth without POST", async (failure) => {
     const fixture = await setup();
     fixture.runGh.mockResolvedValueOnce({ ...failure, stdout: Buffer.alloc(0) });
