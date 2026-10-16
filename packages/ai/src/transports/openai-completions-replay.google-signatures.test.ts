@@ -52,7 +52,9 @@ function geminiToolReplayContext(
           },
         ]
       : [assistant],
-    tools: [],
+    // Declare the tool the stored call references so the historical call
+    // stays protocol-replayed (#174779: undeclared names project to text).
+    tools: [{ name: "echo_value", description: "Echo", parameters: { type: "object" } }],
   } as never;
 }
 

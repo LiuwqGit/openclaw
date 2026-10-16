@@ -150,3 +150,115 @@ describe("no-tools Chat Completions replay", () => {
     ]);
   });
 });
+
+describe("undeclared historical tool call replay at the request boundary", () => {
+  // Issue #174779: strict providers validate replayed tool_calls against the
+  // request tool list. A stored hallucinated call plus its synthetic not-found
+  // result must be projected to text when the active catalog does not declare
+  // that function, while stored transcript bytes stay untouched.
+  const toolsCapableModel = { ...baseModel };
+
+  const storedBrokenHistory: Context = {
+    systemPrompt: "Keep file identities intact.",
+    tools: [{ name: "read", description: "Read a file", parameters: { type: "object" } }],
+    messages: [
+      {
+        role: "user",
+        content: "статус",
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        api: toolsCapableModel.api,
+        provider: toolsCapableModel.provider,
+        model: toolsCapableModel.id,
+        content: [
+          { type: "text", text: "Checking status." },
+          { type: "toolCall", id: "call_status", name: "session_status", arguments: {} },
+        ],
+        usage: createZeroUsage(),
+        stopReason: "toolUse",
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_status",
+        toolName: "session_status",
+        content: [{ type: "text", text: "Tool session_status not found" }],
+        isError: true,
+        timestamp: 3,
+      },
+      {
+        role: "user",
+        content: "Continue.",
+        timestamp: 4,
+      },
+    ],
+  };
+
+  it("projects stored undeclared calls to text while advertising the active catalog", () => {
+    const before = structuredClone(storedBrokenHistory);
+    const payload = buildOpenAICompletionsParams(toolsCapableModel, storedBrokenHistory, {
+      toolChoice: "auto",
+    });
+
+    expect(payload.tools).toMatchObject([{ function: { name: "read" } }]);
+    const messages = payload.messages as ChatCompletionMessageParam[];
+    for (const message of messages) {
+      expect(message).not.toHaveProperty("tool_calls");
+      expect(message).not.toHaveProperty("tool_call_id");
+    }
+    const assistantText = messages
+      .filter((message) => message.role === "assistant")
+      .map((message) => (typeof message.content === "string" ? message.content : ""))
+      .join("\n");
+    expect(assistantText).toContain("Checking status.");
+    expect(assistantText).toContain("[tool call id=call_status name=session_status] {}");
+    expect(assistantText).toContain(
+      "[tool result id=call_status name=session_status] Tool session_status not found",
+    );
+    expect(storedBrokenHistory).toEqual(before);
+  });
+
+  it("keeps protocol replay for calls declared in the active catalog", () => {
+    const declaredHistory: Context = {
+      ...storedBrokenHistory,
+      messages: [
+        {
+          role: "assistant",
+          api: toolsCapableModel.api,
+          provider: toolsCapableModel.provider,
+          model: toolsCapableModel.id,
+          content: [
+            { type: "toolCall", id: "call_read", name: "read", arguments: { path: "notes.txt" } },
+          ],
+          usage: createZeroUsage(),
+          stopReason: "toolUse",
+          timestamp: 1,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_read",
+          toolName: "read",
+          content: [{ type: "text", text: "amber-17" }],
+          isError: false,
+          timestamp: 2,
+        },
+        { role: "user", content: "Continue.", timestamp: 3 },
+      ],
+    };
+    const payload = buildOpenAICompletionsParams(toolsCapableModel, declaredHistory, {
+      toolChoice: "auto",
+    });
+
+    expect(payload.messages).toMatchObject([
+      { role: "system" },
+      {
+        role: "assistant",
+        tool_calls: [{ id: "call_read", function: { name: "read" } }],
+      },
+      { role: "tool", tool_call_id: "call_read", content: "amber-17" },
+      { role: "user", content: "Continue." },
+    ]);
+  });
+});

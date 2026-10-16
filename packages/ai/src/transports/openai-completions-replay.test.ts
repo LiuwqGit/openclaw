@@ -90,7 +90,9 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
           makeTextToolResult("call_1", "read_file", "{ }", false, 1),
           { role: "user", content: "continue" },
         ],
-        tools: [],
+        // Declare the tool the stored call references so the historical call
+        // stays protocol-replayed (#174779: undeclared names project to text).
+        tools: [{ name: "read_file", description: "Read", parameters: { type: "object" } }],
       } as never,
       undefined,
     ) as { messages: Array<Record<string, unknown>> };
@@ -224,7 +226,9 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
           makeTextToolResult("call_1", "lookup", "sunny", false, 1),
           { role: "user", content: "answer" },
         ],
-        tools: [],
+        // Declare the tool the stored call references so the historical call
+        // stays protocol-replayed (#174779: undeclared names project to text).
+        tools: [{ name: "lookup", description: "Lookup", parameters: { type: "object" } }],
       } as never,
       undefined,
     ) as { messages: unknown };

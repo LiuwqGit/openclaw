@@ -279,7 +279,12 @@ describe("OpenAI-compatible completions compatibility", () => {
     let replayPayload: unknown;
     await streamOpenAICompletions(
       model,
-      { messages: [result] },
+      // Declare the tool the stored call references so the historical call
+      // stays protocol-replayed (#174779: undeclared names project to text).
+      {
+        messages: [result],
+        tools: [{ name: "lookup", description: "Lookup", parameters: { type: "object" } }],
+      },
       {
         apiKey: "test",
         onPayload(payload) {

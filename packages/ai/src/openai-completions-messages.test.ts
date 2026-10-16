@@ -265,6 +265,178 @@ describe("convertMessages parallel tool-result image ownership", () => {
   });
 });
 
+describe("convertMessages undeclared tool replay", () => {
+  const compat = () => resolveOpenAICompletionsCompat(model);
+
+  // Issue #174779: a stored historical call to a function that is not part of
+  // the current request's tool catalog must not reach the wire as a protocol
+  // tool call; strict providers validate history against the declared tools.
+  const hallucinatedTurn = (): AssistantMessage => ({
+    role: "assistant",
+    api: model.api,
+    provider: model.provider,
+    model: model.id,
+    content: [
+      { type: "text", text: "Checking status." },
+      {
+        type: "toolCall",
+        id: "call_status",
+        name: "session_status",
+        arguments: {},
+      },
+    ],
+    usage: emptyUsage,
+    stopReason: "toolUse",
+    timestamp: 2,
+  });
+
+  it("replays an undeclared historical call and its paired result as text", () => {
+    const converted = convertMessages(
+      model,
+      {
+        messages: [
+          hallucinatedTurn(),
+          makeTextToolResult(
+            "call_status",
+            "session_status",
+            "Tool session_status not found",
+            true,
+            3,
+          ),
+          { role: "user", content: "Continue.", timestamp: 4 },
+        ],
+      },
+      compat(),
+      { supportsTools: true, declaredToolNames: new Set(["read"]) },
+    );
+
+    for (const message of converted) {
+      expect(message).not.toHaveProperty("tool_calls");
+      expect(message).not.toHaveProperty("tool_call_id");
+    }
+    const assistantText = converted.find((message) => message.role === "assistant");
+    expect(assistantText?.content).toContain("[tool call id=call_status name=session_status] {}");
+    expect(assistantText?.content).toContain(
+      "[tool result id=call_status name=session_status] Tool session_status not found",
+    );
+    expect(converted.map((message) => message.role)).toEqual(["assistant", "user"]);
+  });
+
+  it("keeps protocol replay for declared calls beside undeclared ones", () => {
+    const mixedTurn: AssistantMessage = {
+      role: "assistant",
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      content: [
+        {
+          type: "toolCall",
+          id: "call_read",
+          name: "read",
+          arguments: { path: "notes.txt" },
+        },
+        {
+          type: "toolCall",
+          id: "call_status",
+          name: "session_status",
+          arguments: {},
+        },
+      ],
+      usage: emptyUsage,
+      stopReason: "toolUse",
+      timestamp: 2,
+    };
+    const converted = convertMessages(
+      model,
+      {
+        messages: [
+          mixedTurn,
+          makeTextToolResult("call_read", "read", "amber-17", false, 3),
+          makeTextToolResult(
+            "call_status",
+            "session_status",
+            "Tool session_status not found",
+            true,
+            4,
+          ),
+          { role: "user", content: "Continue.", timestamp: 5 },
+        ],
+      },
+      compat(),
+      { supportsTools: true, declaredToolNames: new Set(["read"]) },
+    );
+
+    const assistant = converted.find(
+      (message) => message.role === "assistant" && "tool_calls" in message,
+    );
+    expect(assistant?.tool_calls).toEqual([
+      {
+        id: "call_read",
+        type: "function",
+        function: { name: "read", arguments: '{"path":"notes.txt"}' },
+      },
+    ]);
+    expect(converted).toContainEqual({
+      role: "tool",
+      content: "amber-17",
+      tool_call_id: "call_read",
+    });
+    const textAssistant = converted.filter((message) => typeof message.content === "string");
+    expect(
+      textAssistant.some((message) =>
+        message.content?.includes("[tool call id=call_status name=session_status] {}"),
+      ),
+    ).toBe(true);
+    expect(
+      textAssistant.some((message) =>
+        message.content?.includes(
+          "[tool result id=call_status name=session_status] Tool session_status not found",
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      converted.some(
+        (message) => message.role === "tool" && message.tool_call_id === "call_status",
+      ),
+    ).toBe(false);
+  });
+
+  it("preserves legacy protocol replay when no declared catalog is provided", () => {
+    const converted = convertMessages(
+      model,
+      {
+        messages: [
+          hallucinatedTurn(),
+          makeTextToolResult(
+            "call_status",
+            "session_status",
+            "Tool session_status not found",
+            true,
+            3,
+          ),
+        ],
+      },
+      compat(),
+      { supportsTools: true },
+    );
+
+    expect(converted).toEqual([
+      {
+        role: "assistant",
+        content: "Checking status.",
+        tool_calls: [
+          {
+            id: "call_status",
+            type: "function",
+            function: { name: "session_status", arguments: "{}" },
+          },
+        ],
+      },
+      { role: "tool", content: "Tool session_status not found", tool_call_id: "call_status" },
+    ]);
+  });
+});
+
 describe("convertMessages relocatable region", () => {
   const compat = () => resolveOpenAICompletionsCompat(model);
   const marked = (facts: string) =>

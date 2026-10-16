@@ -55,10 +55,22 @@ export function convertMessages(
     cacheOptOutIndexes?: Set<number>;
     preserveSystemPromptCacheBoundary?: boolean;
     supportsTools?: boolean;
+    /**
+     * Function names declared in the current request's tools. Historical calls
+     * to names outside this set are replayed as text: strict providers validate
+     * replayed tool calls against the request tool list and reject the whole
+     * conversation otherwise. Undefined keeps legacy protocol replay.
+     */
+    declaredToolNames?: ReadonlySet<string>;
   } = {},
 ): ChatCompletionMessageParam[] {
   const params: ChatCompletionMessageParam[] = [];
   const supportsTools = options.supportsTools !== false;
+  const declaredToolNames = options.declaredToolNames;
+  // Tool results whose paired historical call was replayed as text must not be
+  // emitted as role "tool": without a matching tool_calls entry strict
+  // providers reject the request.
+  const textReplayedToolCallIds = new Set<string>();
 
   const normalizeToolCallId = (id: string): string => {
     // Responses ids can contain a pipe plus a long provider item id. Chat
@@ -174,9 +186,12 @@ export function convertMessages(
         } else if (block.type === "thinking" && block.thinking.trim().length > 0) {
           nonEmptyThinkingBlocks.push(block);
         } else if (block.type === "toolCall") {
-          if (supportsTools) {
+          const replayAsProtocol =
+            supportsTools && (declaredToolNames === undefined || declaredToolNames.has(block.name));
+          if (replayAsProtocol) {
             toolCalls.push(block);
           } else {
+            textReplayedToolCallIds.add(block.id);
             assistantTexts.push(
               sanitizeSurrogates(
                 `[tool call id=${block.id} name=${block.name}] ${JSON.stringify(block.arguments)}`,
@@ -270,7 +285,7 @@ export function convertMessages(
         const mediaPlaceholder = describeToolResultMediaPlaceholder(toolMsg.content);
         const images = toolMsg.content.filter(isImageWithMediaPayload);
         const content = textResult.trim() ? textResult : (mediaPlaceholder ?? "(no output)");
-        if (supportsTools) {
+        if (supportsTools && !textReplayedToolCallIds.has(toolMsg.toolCallId)) {
           const toolResultMsg: ChatCompletionToolMessageParam = {
             role: "tool",
             content,
@@ -321,7 +336,11 @@ export function convertMessages(
       i = j - 1;
 
       if (imageContentParts.length > 0) {
-        if (supportsTools && compat.requiresAssistantAfterToolResult) {
+        if (
+          supportsTools &&
+          compat.requiresAssistantAfterToolResult &&
+          params.at(-1)?.role === "tool"
+        ) {
           params.push({ role: "assistant", content: "I have processed the tool results." });
         }
         params.push({
@@ -330,7 +349,9 @@ export function convertMessages(
         });
         lastRole = "user";
       } else {
-        lastRole = supportsTools ? "toolResult" : "assistant";
+        // A text-replayed run ends on an assistant message; only protocol
+        // results leave the conversation on a role "tool" message.
+        lastRole = params.at(-1)?.role === "tool" ? "toolResult" : "assistant";
       }
       continue;
     }

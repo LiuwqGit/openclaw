@@ -832,9 +832,15 @@ describe("OpenAI completions compatibility and tools", () => {
       [
         { ...proxy, compat: { strictMessageKeys: true } },
         { ...historyContext(), tools: [] },
+        // No tool is declared in this request, so the stored call and its
+        // result are projected to text (#174779): protocol tool_calls history
+        // without an advertised catalog is rejected by strict providers.
         [
-          { role: "assistant", content: null },
-          { role: "tool", content: "sunny" },
+          {
+            role: "assistant",
+            content:
+              "[tool call id=call_1 name=lookup_weather] {}\n[tool result id=call_1 name=lookup_weather] sunny",
+          },
         ],
       ],
     ];
