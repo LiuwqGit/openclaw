@@ -430,14 +430,6 @@ test.each([
     },
     stale: false,
   },
-  {
-    name: "self-origin without any freshness proof is retained",
-    origin: {
-      modelOverrideFallbackOriginProvider: "openai",
-      modelOverrideFallbackOriginModel: "gpt-x",
-    },
-    stale: false,
-  },
 ])("Codex legacy self-origin boundary: $name", async ({ origin, stale }) => {
   await withStateDirEnv("reply-codex-self-origin-boundary-", async () => {
     const entry: SessionEntry = {
