@@ -649,6 +649,25 @@ describe("narrow session read owners", () => {
           io.mockRestore();
         }
         const settled = await outcome;
+        const success =
+          changed === "authority"
+            ? undefined
+            : metadataOnly
+              ? method === "sessions.branches.list"
+                ? { branches: [] }
+                : method === "sessions.files.list"
+                  ? { sessionKey: key, files: [] }
+                  : {
+                      sessionKey: key,
+                      file: {
+                        path: "note.txt",
+                        name: "note.txt",
+                        content: "visible content",
+                        kind: "read",
+                        missing: false,
+                      },
+                    }
+              : undefined;
         if (changed === "authority") {
           expect(settled).toMatchObject([
             { status: "rejected", reason: { message: "Gateway requester authority changed" } },
@@ -657,11 +676,8 @@ describe("narrow session read owners", () => {
         } else {
           expect(settled).toEqual([{ status: "fulfilled", value: undefined }]);
           expect(respond).toHaveBeenCalledOnce();
-          const unchangedAccess = method === "sessions.branches.list" && metadataOnly;
-          expect(respond.mock.calls[0]?.[0]).toBe(unchangedAccess);
-          expect(respond.mock.calls[0]?.[1]).toEqual(
-            unchangedAccess ? { branches: [] } : undefined,
-          );
+          expect(respond.mock.calls[0]?.[0]).toBe(success !== undefined);
+          expect(respond.mock.calls[0]?.[1]).toEqual(success);
         }
       }
     });

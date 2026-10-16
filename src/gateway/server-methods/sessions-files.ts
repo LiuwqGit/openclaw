@@ -315,12 +315,11 @@ async function handleSessionFilesRead(
   const read = await retainSessionScopedRead(options, params.sessionKey, agentId, {
     requireMaterialized: true,
     retain: request.kind === "download",
-    entryMatches:
-      request.kind === "download"
-        ? (previous, current) =>
-            !hasSessionReadAccessChanged(previous, current) &&
-            sessionFileWorkspaceMatches(previous, current)
-        : undefined,
+    // Harmless label or activity updates during file I/O must not invalidate an
+    // otherwise permitted read; real access, lifecycle or workspace changes still do.
+    entryMatches: (previous, current) =>
+      !hasSessionReadAccessChanged(previous, current) &&
+      sessionFileWorkspaceMatches(previous, current),
   });
   let downloadOwnsRead = false;
   return withSessionFileRoot(
