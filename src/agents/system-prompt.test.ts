@@ -145,7 +145,7 @@ describe("buildAgentSystemPrompt", () => {
       {
         docsPath: "/opt/homebrew/lib/node_modules/openclaw/docs",
         sourcePath: "/opt/homebrew/lib/node_modules/openclaw",
-        toolNames: ["read"],
+        toolNames: ["read", "web_fetch"],
         sandboxInfo: {
           enabled: true,
           workspaceDir: "/tmp/openclaw",
@@ -210,7 +210,7 @@ describe("buildAgentSystemPrompt", () => {
       {
         docsPath: "/opt/homebrew/lib/node_modules/openclaw/docs",
         sourcePath: "/opt/homebrew/lib/node_modules/openclaw",
-        toolNames: ["read"],
+        toolNames: ["read", "web_search"],
         sandboxInfo: {
           enabled: true,
           workspaceDir: "/tmp/openclaw-sandbox-ws",
@@ -226,6 +226,56 @@ describe("buildAgentSystemPrompt", () => {
         "inspect GitHub source",
       ],
       ["/opt/homebrew", "/srv/openclaw", "docs first via"],
+    ],
+    [
+      "says docs are not readable for sandboxed runs without web tools",
+      {
+        docsPath: "/opt/homebrew/lib/node_modules/openclaw/docs",
+        sourcePath: "/opt/homebrew/lib/node_modules/openclaw",
+        toolNames: ["read"],
+        sandboxInfo: {
+          enabled: true,
+          workspaceDir: "/tmp/openclaw-sandbox-ws",
+          containerWorkspaceDir: "/workspace",
+          workspaceAccess: "ro",
+          agentWorkspaceMount: "/agent",
+          agentWorkspaceDir: "/srv/openclaw",
+        },
+      },
+      [
+        "Docs: not readable in this sandbox, and no web tool is available.",
+        "OpenClaw behavior questions: say docs could not be checked; mark recalled behavior as unverified.",
+        "Source: https://github.com/openclaw/openclaw",
+      ],
+      [
+        "https://docs.openclaw.ai",
+        "docs mirror first when web exists",
+        "inspect GitHub source",
+        "/opt/homebrew",
+        "/srv/openclaw",
+      ],
+    ],
+    [
+      "keeps source inspection guidance for sandboxed runs without web tools but readable source",
+      {
+        docsPath: "/opt/homebrew/lib/node_modules/openclaw/docs",
+        sourcePath: "/srv/openclaw",
+        toolNames: ["read"],
+        sandboxInfo: {
+          enabled: true,
+          workspaceDir: "/tmp/openclaw-sandbox-ws",
+          containerWorkspaceDir: "/workspace",
+          workspaceAccess: "ro",
+          agentWorkspaceMount: "/agent",
+          agentWorkspaceDir: "/srv/openclaw",
+        },
+      },
+      [
+        "Docs: not readable in this sandbox, and no web tool is available.",
+        "Source: /srv/openclaw",
+        "inspect local source when behavior matters",
+      ],
+      ["https://docs.openclaw.ai", "docs mirror first when web exists"],
     ],
     [
       "uses limited bootstrap wording for constrained user-facing runs",
