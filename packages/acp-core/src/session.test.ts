@@ -121,6 +121,29 @@ describe("acp session manager", () => {
     expect(session.sessionKey).toBe("acp:after");
   });
 
+  it("keeps the reverse index consistent when rebinding a session key", () => {
+    const session = store.createSession({
+      sessionId: "rebound",
+      sessionKey: "acp:provisional",
+      cwd: "/tmp",
+    });
+
+    store.rebindSessionKey?.("rebound", "agent:main:acp:rebound");
+
+    expect(session.sessionKey).toBe("agent:main:acp:rebound");
+    expect(store.findSessionsByKey?.("acp:provisional")).toEqual([]);
+    expect(store.findSessionsByKey?.("agent:main:acp:rebound")?.map((s) => s.sessionId)).toEqual([
+      "rebound",
+    ]);
+
+    // Rebinding to the current key is a no-op, and unknown sessions are ignored.
+    store.rebindSessionKey?.("rebound", "agent:main:acp:rebound");
+    store.rebindSessionKey?.("missing", "agent:main:other");
+    expect(store.findSessionsByKey?.("agent:main:acp:rebound")?.map((s) => s.sessionId)).toEqual([
+      "rebound",
+    ]);
+  });
+
   it("reports every removal path through onSessionRemoved", () => {
     const removed: string[] = [];
     const reportingStore = createInMemorySessionStore({

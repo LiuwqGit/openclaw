@@ -13,9 +13,12 @@ import {
 
 async function createBackgroundHarness() {
   const sent = createDeferred<string>();
+  const chatSendRunIds: string[] = [];
   const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
     if (method === "chat.send") {
-      sent.resolve(params?.idempotencyKey as string);
+      const runId = params?.idempotencyKey as string;
+      chatSendRunIds.push(runId);
+      sent.resolve(runId);
     }
     return {};
   }) as GatewayClient["request"];
@@ -40,13 +43,13 @@ async function createBackgroundHarness() {
       event,
       payload: { seq: seq++, ...payload },
     });
-  return { ...harness, promptRunId, promptPromise, send };
+  return { ...harness, promptRunId, promptPromise, send, chatSendRunIds };
 }
 
 type EmittedUpdate = { sessionId: string; kind: string; text?: string; tool?: string };
 
 function emitted(sessionUpdate: ReturnType<typeof vi.fn>): EmittedUpdate[] {
-  return sessionUpdate.mock.calls.flatMap(([{ sessionId, update }]) => {
+  return sessionUpdate.mock.calls.flatMap(([{ sessionId, update }]): EmittedUpdate[] => {
     switch (update.sessionUpdate) {
       case "agent_message_chunk":
         return [{ sessionId, kind: update.sessionUpdate, text: update.content.text }];
@@ -170,5 +173,138 @@ describe("ACP background session updates between prompts", () => {
       message,
     });
     expect(emitted(h.sessionUpdate)).toEqual([]);
+  });
+
+  it("suppresses a retained background run while a later prompt owns the session", async () => {
+    const h = await createBackgroundHarness();
+    await h.send("chat", {
+      sessionKey: h.sessionKey,
+      runId: "background-run-5",
+      state: "delta",
+      message: { content: [{ type: "text", text: "Sub-agent" }] },
+    });
+    expect(emitted(h.sessionUpdate)).toEqual([
+      { sessionId: h.sessionId, kind: "agent_message_chunk", text: "Sub-agent" },
+    ]);
+    h.sessionUpdate.mockClear();
+
+    // A prompt that starts after attachment owns the session: background
+    // deltas for the retained run must not interleave into its stream.
+    const secondPrompt = promptAgent(h.agent);
+    const secondRunId = await vi.waitFor(() => {
+      expect(h.chatSendRunIds.length).toBeGreaterThanOrEqual(2);
+      return h.chatSendRunIds[h.chatSendRunIds.length - 1]!;
+    });
+    await h.send("chat", {
+      sessionKey: h.sessionKey,
+      runId: "background-run-5",
+      state: "delta",
+      message: { content: [{ type: "text", text: "Sub-agent finished: PINEAPPLE" }] },
+    });
+    expect(
+      emitted(h.sessionUpdate).filter((update) => update.kind === "agent_message_chunk"),
+    ).toEqual([]);
+
+    // Once the prompt settles, background delivery resumes from the retained
+    // context and only the unsent remainder is forwarded.
+    await h.send("chat", {
+      sessionKey: h.sessionKey,
+      runId: secondRunId,
+      state: "final",
+      stopReason: "stop",
+    });
+    await expect(secondPrompt).resolves.toEqual({ stopReason: "end_turn" });
+    h.sessionUpdate.mockClear();
+    await h.send("chat", {
+      sessionKey: h.sessionKey,
+      runId: "background-run-5",
+      state: "final",
+      stopReason: "stop",
+      message: { content: [{ type: "text", text: "Sub-agent finished: PINEAPPLE" }] },
+    });
+    expect(emitted(h.sessionUpdate)).toEqual([
+      {
+        sessionId: h.sessionId,
+        kind: "agent_message_chunk",
+        text: " finished: PINEAPPLE",
+      },
+    ]);
+  });
+
+  it("revokes a retained background run when the session rebinds to another key", async () => {
+    const h = await createBackgroundHarness();
+    await h.send("chat", {
+      sessionKey: h.sessionKey,
+      runId: "background-run-6",
+      state: "delta",
+      message: { content: [{ type: "text", text: "Sub-agent" }] },
+    });
+    h.sessionUpdate.mockClear();
+
+    // session/resume or session/load can rebind the same session id to another
+    // gateway key; the retained route must not keep delivery authority.
+    h.sessionStore.createSession({
+      sessionId: h.sessionId,
+      sessionKey: "agent:main:other",
+      cwd: "/tmp",
+    });
+    await h.send("chat", {
+      sessionKey: h.sessionKey,
+      runId: "background-run-6",
+      state: "delta",
+      message: { content: [{ type: "text", text: " stale" }] },
+    });
+    // Events under the new key cannot re-target the retained run either.
+    await h.send("chat", {
+      sessionKey: "agent:main:other",
+      runId: "background-run-6",
+      state: "delta",
+      message: { content: [{ type: "text", text: " stale" }] },
+    });
+    expect(emitted(h.sessionUpdate)).toEqual([]);
+  });
+
+  it("routes background events through a session key reconciled during a prompt", async () => {
+    const provisionalKey = "acp:session-9";
+    const canonicalKey = "agent:main:acp:session-9";
+    const sent = createDeferred<string>();
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "chat.send") {
+        sent.resolve(params?.idempotencyKey as string);
+      }
+      return {};
+    }) as GatewayClient["request"];
+    const harness = createSessionAgentHarness(request, { sessionKey: provisionalKey });
+    const promptPromise = promptAgent(harness.agent);
+    const runId = await sent.promise;
+    // The Gateway settles the prompt under the canonical key, reconciling the
+    // session binding through the store's key index.
+    await harness.agent.handleGatewayEvent(
+      createChatEvent({
+        sessionKey: canonicalKey,
+        runId,
+        seq: 1,
+        state: "final",
+        stopReason: "stop",
+      }),
+    );
+    await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
+    harness.sessionUpdate.mockClear();
+    await harness.agent.handleGatewayEvent(
+      createChatEvent({
+        sessionKey: canonicalKey,
+        runId: "background-run-7",
+        seq: 2,
+        state: "delta",
+        message: { content: [{ type: "text", text: "Sub-agent finished: PINEAPPLE" }] },
+      }),
+    );
+    expect(emitted(harness.sessionUpdate)).toEqual([
+      {
+        sessionId: harness.sessionId,
+        kind: "agent_message_chunk",
+        text: "Sub-agent finished: PINEAPPLE",
+      },
+    ]);
   });
 });

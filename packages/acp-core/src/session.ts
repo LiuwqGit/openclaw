@@ -18,6 +18,12 @@ export type AcpSessionStore = {
    * prompt-less gateway events (background runs) to an ACP session.
    */
   findSessionsByKey?: (sessionKey: string) => AcpSession[];
+  /**
+   * Rebinds a session's gateway session key through the store so key-indexed
+   * lookups (findSessionsByKey) stay consistent with the authoritative record.
+   * Optional: stores without key-indexed lookups can omit it.
+   */
+  rebindSessionKey?: (sessionId: string, sessionKey: string) => void;
   /** Binds an active runtime run to a session so cancel/close can abort it later. */
   setActiveRun: (sessionId: string, runId: string, abortController: AbortController) => void;
   clearActiveRun: (sessionId: string, expectedRunId?: string) => void;
@@ -159,6 +165,15 @@ export function createInMemorySessionStore(
       return session;
     },
     hasSession: (sessionId) => sessions.has(sessionId),
+    rebindSessionKey(sessionId, sessionKey) {
+      const session = sessions.get(sessionId);
+      if (!session || session.sessionKey === sessionKey) {
+        return;
+      }
+      const previousKey = session.sessionKey;
+      session.sessionKey = sessionKey;
+      bindSessionKey(session, previousKey);
+    },
     getSession(sessionId) {
       const session = sessions.get(sessionId);
       if (session) {
