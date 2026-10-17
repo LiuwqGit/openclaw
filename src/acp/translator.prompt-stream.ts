@@ -714,7 +714,9 @@ export class AcpTranslatorPromptStream {
     pending.sessionKey = sessionKey;
     const session = this.sessionStore.getSession(pending.sessionId);
     if (session?.activeRunId === pending.idempotencyKey) {
-      session.sessionKey = sessionKey;
+      // Rebind through the store so key-indexed lookups (background run
+      // routing) stay consistent with the authoritative session record.
+      this.sessionStore.rebindSessionKey?.(pending.sessionId, sessionKey);
     }
   }
 
