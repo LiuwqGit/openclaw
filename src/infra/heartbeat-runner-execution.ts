@@ -4,6 +4,7 @@ import {
   resolveActiveEmbeddedRunSessionId,
 } from "../agents/embedded-agent-runner/active-run-projections.js";
 import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
+import { resetRegisteredAgentHarnessSessions } from "../agents/harness/registry.js";
 import { transitionMainSessionRecovery } from "../agents/main-session-recovery/main-session-recovery-state.js";
 import { isHeartbeatAcknowledgementText } from "../auto-reply/heartbeat.js";
 import {
@@ -549,6 +550,25 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
           sessionKey: staleIsolatedSessionKey,
         })
       : undefined;
+    // The stable-key rollover below keeps lineage on purpose (usage attribution
+    // and transcript history), so native-thread harnesses would otherwise adopt
+    // the predecessor's binding and resume its thread on every isolated run.
+    // Retire the predecessor's native generation explicitly, exactly like an
+    // ordinary session rollover does before replacing a session entry.
+    const isolatedEntry = await readSessionEntryReadOnlyInWorker({
+      agentId,
+      storePath: isolatedStorePath,
+      sessionKey: isolatedSessionKey,
+    });
+    if (isolatedEntry?.sessionId) {
+      await resetRegisteredAgentHarnessSessions({
+        agentId,
+        sessionId: isolatedEntry.sessionId,
+        sessionKey: isolatedSessionKey,
+        sessionFile: isolatedSessionKey,
+        reason: "new",
+      });
+    }
     const removals: SessionEntryLifecycleRemoval[] = staleIsolatedSessionKey
       ? [
           {
