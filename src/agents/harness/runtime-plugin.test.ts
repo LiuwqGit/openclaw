@@ -353,6 +353,19 @@ describe("harness runtime plugins", () => {
     ).toEqual(["selected-plugin"]);
   });
 
+  it("keeps an installed but unused harness plugin out of cold metadata", () => {
+    const scope = metadataScope({
+      config: { plugins: { slots: { memory: "none" } } },
+      selections: [{ provider: "custom-provider", modelId: "custom-model" }],
+    });
+    expect(
+      resolveScope(scope, [
+        installedProviderRecord("custom-provider", { providers: ["custom-provider"] }),
+        installedProviderRecord("codex", { agentHarnesses: ["codex"] }),
+      ]),
+    ).toEqual(["custom-provider"]);
+  });
+
   it("retains shorthand model owners while resolving the fallback provider", () => {
     const scope = metadataScope({
       selections: [{ provider: "fallback-provider", modelId: "magic-model" }],

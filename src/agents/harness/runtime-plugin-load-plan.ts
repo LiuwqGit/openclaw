@@ -114,11 +114,11 @@ function resolveAgentRuntimeMetadataPluginIds(params: {
     return [];
   }
   const pluginIds = new Set<string>();
-  for (const plugin of params.index.plugins) {
-    if (plugin.startup.agentHarnesses.length) {
-      pluginIds.add(plugin.pluginId);
-    }
-  }
+  // Harness owners join only when a selection or the configured harness policy
+  // resolves to their runtime; an installed but unused harness plugin must not
+  // enter the cold metadata scope (#175861). resolveAgentRuntimePluginSelections
+  // contributes configured runtimes, and the per-selection resolution below adds
+  // the owners of runtimes that are actually selected.
   lookup.addShorthandModelOwners(pluginIds, params.shorthandModelIds ?? []);
   const selections = resolveAgentRuntimePluginSelections(params.config, params.selections);
   const providerIds = normalizeUniqueStringEntries(
