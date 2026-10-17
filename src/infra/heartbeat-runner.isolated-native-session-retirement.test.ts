@@ -11,6 +11,7 @@ import {
   withTempHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
 
+// mock-isolation: exercise heartbeat ownership without real channel delivery.
 vi.mock("./outbound/deliver.js", () => ({
   deliverOutboundPayloads: vi.fn().mockResolvedValue([]),
   deliverOutboundPayloadsInternal: vi.fn().mockResolvedValue([]),
