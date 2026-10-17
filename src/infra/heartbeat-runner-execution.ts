@@ -550,11 +550,8 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
           sessionKey: staleIsolatedSessionKey,
         })
       : undefined;
-    // The stable-key rollover below keeps lineage on purpose (usage attribution
-    // and transcript history), so native-thread harnesses would otherwise adopt
-    // the predecessor's binding and resume its thread on every isolated run.
-    // Retire the predecessor's native generation explicitly, exactly like an
-    // ordinary session rollover does before replacing a session entry.
+    // Keep usage/transcript lineage without adopting the predecessor's native thread.
+    // As with ordinary rollovers, reset the harness before replacing the entry.
     const isolatedEntry = await readSessionEntryReadOnlyInWorker({
       agentId,
       storePath: isolatedStorePath,
