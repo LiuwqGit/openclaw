@@ -128,6 +128,7 @@ function execute<Key extends Operation>(
   { databaseOptions, assertCurrent, guard, ...input }: Input<Key>,
   options?: {
     onCommitted?: (resolutionKey: string) => void;
+    changesExecPolicy?: boolean;
     context?: OpenClawStateWorkerContext;
     read?: {
       command: Extract<OpenClawStateReadCommand, { type: `operatorApprovals.${string}` }>;
@@ -176,18 +177,10 @@ function execute<Key extends Operation>(
     };
     const approvals = operatorApprovalPublication.begin(owner);
     const grants = operatorStandingGrantPublication.begin(owner);
-    // Only a durable allow-always MCP tool grant changes exec policy; other
-    // approval-store operations are bookkeeping and must not install pending
-    // exec facts that fence the final execution guard (web-push terminal
-    // reads in particular).
-    const capturedRecord: unknown = captured;
     const exec = execApprovalsPublication.begin({
       ...owner,
-      publishPending:
-        type === "operatorApprovals.resolve" &&
-        isRecord(capturedRecord) &&
-        capturedRecord.decision === "allow-always" &&
-        capturedRecord.mcpToolGrant !== undefined,
+      // Approval bookkeeping cannot revoke exec authority; durable MCP grants can.
+      publishPending: options?.changesExecPolicy === true,
     });
     observeSqliteWorkerCommittedFacts(admission, ({ facts }) => {
       batchStateDomainPublications(() => {
@@ -210,16 +203,6 @@ function execute<Key extends Operation>(
     };
     return retained;
   };
-  const publishCommitted = (facts: unknown) => {
-    if (
-      options?.onCommitted &&
-      isRecord(facts) &&
-      facts.type === "operatorApprovals.resolve" &&
-      typeof facts.resolutionKey === "string"
-    ) {
-      options.onCommitted(facts.resolutionKey);
-    }
-  };
   return runApprovalStoreOperation(
     context,
     captured,
@@ -238,7 +221,15 @@ function execute<Key extends Operation>(
         return await preparation.handoff(() => scope.execute({ type, input: captured }));
       } finally {
         // Broker settlement retains the native receipt even when the command reply is lost.
-        publishCommitted(admission?.committed?.facts);
+        const facts = admission?.committed?.facts;
+        if (
+          options?.onCommitted &&
+          isRecord(facts) &&
+          facts.type === "operatorApprovals.resolve" &&
+          typeof facts.resolutionKey === "string"
+        ) {
+          options.onCommitted(facts.resolutionKey);
+        }
       }
     },
     {
@@ -310,7 +301,10 @@ export function resolveOperatorApproval(
   },
 ) {
   const { onCommitted, ...input } = params;
-  return execute("operatorApprovals.resolve", input, { onCommitted });
+  return execute("operatorApprovals.resolve", input, {
+    onCommitted,
+    changesExecPolicy: input.decision === "allow-always" && input.mcpToolGrant !== undefined,
+  });
 }
 export function forceDenyOperatorApproval(params: Input<"operatorApprovals.deny">) {
   return execute("operatorApprovals.deny", params);
