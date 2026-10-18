@@ -176,7 +176,19 @@ function execute<Key extends Operation>(
     };
     const approvals = operatorApprovalPublication.begin(owner);
     const grants = operatorStandingGrantPublication.begin(owner);
-    const exec = execApprovalsPublication.begin(owner);
+    // Only a durable allow-always MCP tool grant changes exec policy; other
+    // approval-store operations are bookkeeping and must not install pending
+    // exec facts that fence the final execution guard (web-push terminal
+    // reads in particular).
+    const capturedRecord: unknown = captured;
+    const exec = execApprovalsPublication.begin({
+      ...owner,
+      publishPending:
+        type === "operatorApprovals.resolve" &&
+        isRecord(capturedRecord) &&
+        capturedRecord.decision === "allow-always" &&
+        capturedRecord.mcpToolGrant !== undefined,
+    });
     observeSqliteWorkerCommittedFacts(admission, ({ facts }) => {
       batchStateDomainPublications(() => {
         approvals.committed(isRecord(facts) ? facts.approvalFacts : undefined);

@@ -9,6 +9,11 @@ import {
   withAgentDeletion,
   type AgentDeletionOperation,
 } from "../agents/agent-lifecycle-registry.js";
+import {
+  getOperatorApprovalDetailed,
+  insertOperatorApproval,
+  resolveOperatorApproval,
+} from "../gateway/operator-approval-store.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { publishAgentDeletionJournalStatus } from "../state/agent-deletion-journal-status.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -73,6 +78,42 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => ({
 }));
 
 type ExecApprovalsDatabase = Pick<OpenClawStateKyselyDatabase, "exec_approvals_config">;
+type NewOperatorApproval = Parameters<typeof insertOperatorApproval>[0]["approval"];
+
+function approvalCard(id: string): NewOperatorApproval {
+  return {
+    id,
+    kind: "exec",
+    presentation: {
+      kind: "exec",
+      commandText: `echo ${id}`,
+      commandPreview: `echo ${id}`,
+      warningText: null,
+      host: "gateway",
+      nodeId: null,
+      agentId: "main",
+      allowedDecisions: ["allow-once", "allow-always", "deny"],
+    },
+    requester: {
+      deviceId: "request-device",
+      clientId: "request-client",
+      deviceTokenAuth: true,
+    },
+    reviewerDeviceIds: ["reviewer-device"],
+    source: {
+      agentId: "main",
+      sessionKey: "agent:main:child",
+      sessionId: "session-1",
+      runId: "run-1",
+      toolCallId: "tool-call-1",
+      toolName: "exec",
+    },
+    audienceSessionKeys: ["agent:main:child"],
+    runtimeEpoch: "runtime-a",
+    createdAtMs: 1_000,
+    expiresAtMs: 10_000,
+  };
+}
 
 const tempDirs: string[] = [];
 const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
@@ -628,6 +669,100 @@ describe("exec approvals SQLite store", () => {
       expect(loadExecApprovals().agents?.main?.allowlist?.[0]?.lastUsedCommand).toBe("echo after");
     },
   );
+
+  it.each([
+    { decision: "allow-once", mcpToolGrant: undefined, fences: false },
+    { decision: "allow-always", mcpToolGrant: undefined, fences: false },
+    {
+      decision: "allow-always",
+      mcpToolGrant: { agentId: "main", server: "server", tool: "tool" },
+      fences: true,
+    },
+  ] as const)(
+    "approval-store $decision resolutions fence execution only when they mint durable MCP grants",
+    async ({ decision, mcpToolGrant, fences }) => {
+      const entry = { id: "echo", pattern: "/usr/bin/echo" };
+      saveExecApprovals({ version: 1, agents: { main: { allowlist: [entry] } } });
+      const input: ExecAuthorizationCommitInput = {
+        agentId: "main",
+        matches: [entry],
+        command: "echo approved",
+        authorization: {
+          source: "current-policy",
+          security: "allowlist",
+          ask: "on-miss",
+          allowlistSatisfied: true,
+        },
+      };
+      const assertCurrent = await commitExecAuthorizationLocked(input);
+      expect(
+        await insertOperatorApproval({ approval: approvalCard("approval-echo") }),
+      ).toMatchObject({ outcome: "inserted" });
+      const failures: unknown[] = [];
+      const probe = workerProbe.admission(workerAdmission, (request, grant, admit) => {
+        admit(request, grant);
+        if (request.stage === "transaction") {
+          try {
+            assertCurrent();
+          } catch (error) {
+            failures.push(error);
+          }
+        }
+      });
+      try {
+        expect(
+          await resolveOperatorApproval({
+            id: "approval-echo",
+            decision,
+            mcpToolGrant,
+            resolver: { kind: "device", id: "reviewer-device" },
+            nowMs: 2_000,
+          }),
+        ).toMatchObject({ outcome: "resolved" });
+      } finally {
+        probe.mockRestore();
+      }
+      expect(
+        failures.map((failure) => (failure instanceof Error ? failure.message : failure)),
+      ).toEqual(fences ? ["Exec approval policy is unavailable or changing before execution"] : []);
+      expect(assertCurrent).not.toThrow();
+    },
+  );
+
+  it("does not fence execution behind approval-store reads", async () => {
+    const entry = { id: "echo", pattern: "/usr/bin/echo" };
+    saveExecApprovals({ version: 1, agents: { main: { allowlist: [entry] } } });
+    const input: ExecAuthorizationCommitInput = {
+      agentId: "main",
+      matches: [entry],
+      command: "echo approved",
+      authorization: {
+        source: "current-policy",
+        security: "allowlist",
+        ask: "on-miss",
+        allowlistSatisfied: true,
+      },
+    };
+    const assertCurrent = await commitExecAuthorizationLocked(input);
+    expect(await insertOperatorApproval({ approval: approvalCard("approval-read") })).toMatchObject(
+      { outcome: "inserted" },
+    );
+    const pending: string[] = [];
+    const releaseFacts = execApprovalsPublication.subscribeFacts((change) => {
+      if (change.kind === "pending") {
+        pending.push(change.operationId);
+      }
+    });
+    try {
+      expect(await getOperatorApprovalDetailed({ id: "approval-read" })).toMatchObject({
+        outcome: "found",
+      });
+    } finally {
+      releaseFacts();
+    }
+    expect(pending).toEqual([]);
+    expect(assertCurrent).not.toThrow();
+  });
 
   it("does not batch authorizations across an intervening policy denial", async () => {
     const entry = { id: "echo", pattern: "/usr/bin/echo" };
