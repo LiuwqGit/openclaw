@@ -7,8 +7,10 @@ import { retryAsync } from "../infra/retry.js";
 import { getAgentWorkspaceAccess } from "./workspace-access.js";
 import type { WorkspaceBootstrapFile } from "./workspace-bootstrap-policy.js";
 import {
+  decodeWorkspaceBootstrapBytes,
   MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
   readWorkspaceBootstrapFile,
+  WorkspaceBootstrapEncodingError,
 } from "./workspace-bootstrap-read.js";
 import { readWorkspaceFileCache, writeWorkspaceFileCache } from "./workspace-file-cache.js";
 
@@ -108,7 +110,7 @@ export async function readWorkspaceFileWithGuards(params: {
       }
       return {
         ok: true,
-        content: data.toString("utf-8"),
+        content: decodeWorkspaceBootstrapBytes(data),
         sourceIdentity: [canonicalPath, undefined, workspaceRelativePath],
       };
     } catch (error) {
@@ -116,7 +118,11 @@ export async function readWorkspaceFileWithGuards(params: {
       if (hasErrnoCode(error, "ENOENT")) {
         return { ok: false, reason: "path", error };
       }
-      return { ok: false, reason: error instanceof RangeError ? "validation" : "io", error };
+      return {
+        ok: false,
+        reason: isWorkspaceReadValidationError(error) ? "validation" : "io",
+        error,
+      };
     }
   }
   try {
@@ -167,8 +173,16 @@ export async function readWorkspaceFileWithGuards(params: {
     );
   } catch (error) {
     // Non-transient read failure, or transient retries exhausted.
-    return { ok: false, reason: error instanceof RangeError ? "validation" : "io", error };
+    return {
+      ok: false,
+      reason: isWorkspaceReadValidationError(error) ? "validation" : "io",
+      error,
+    };
   }
+}
+
+function isWorkspaceReadValidationError(error: unknown): boolean {
+  return error instanceof RangeError || error instanceof WorkspaceBootstrapEncodingError;
 }
 
 export function isTransientWorkspaceReadError(error: unknown): boolean {
