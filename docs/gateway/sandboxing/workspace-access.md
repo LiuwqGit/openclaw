@@ -64,8 +64,9 @@ read-only. This also keeps normal retention cleanup independent of container
 user-namespace ownership.
 
 At the checkout root, `.cache/vitest/`, `.cache/openclaw/bun/`,
-`.cache/ms-playwright/`, and `.local/share/pnpm/store/` caches stay with the runtime
-that produced them, along with `.artifacts/vitest-workers/` compiler outputs and
+`.cache/ms-playwright/`, `.cache/bun-transpiler/`, and `.local/share/pnpm/store/`
+caches stay with the runtime that produced them, along with `.artifacts/vitest-workers/`
+and `.artifacts/vitest-worker-cache/` compiler outputs and
 `.artifacts/dist-artifacts.lock/` ownership files.
 Synchronization and recovery of older pending results exclude these exact paths,
 so dependency and test-tool downloads do not count as authored workspace results.

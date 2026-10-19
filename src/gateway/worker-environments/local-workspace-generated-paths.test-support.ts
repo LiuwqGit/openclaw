@@ -25,6 +25,8 @@ const packageCaches = [
   ".local/share/pnpm/store/v11/files/10/package-content",
   ".cache/openclaw/bun/pinned/linux-x64/bin/bun",
   ".cache/ms-playwright/chromium-1248/chrome-linux64/chrome",
+  ".cache/bun-transpiler/shell/1/bun.transpiler-cache",
+  ".artifacts/vitest-worker-cache/run-cache-0/package.json",
 ];
 
 function legacyManifest(manifest: WorkerWorkspaceManifest) {
@@ -84,6 +86,8 @@ export async function proveGeneratedWorkspaceRecovery(owner: LocalWorkspaceOwner
     "source.txt": "guest source edit\n",
     ".artifacts/report.md": "guest report\n",
     ".artifacts/vitest-workers-notes.md": "guest notes\n",
+    ".artifacts/vitest-worker-cache-notes.md": "guest notes\n",
+    ".cache/bun-transpiler-notes.md": "guest notes\n",
     ".cache/user-data.json": "user data\n",
     ".local/share/user-data.json": "user data\n",
   };

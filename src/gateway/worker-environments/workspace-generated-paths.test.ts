@@ -21,6 +21,8 @@ const packageCaches = [
   ".local/share/pnpm/store/v11/files/10/package-content",
   ".cache/openclaw/bun/pinned/linux-x64/bin/bun",
   ".cache/ms-playwright/chromium-1248/chrome-linux64/chrome",
+  ".cache/bun-transpiler/shell/1/bun.transpiler-cache",
+  ".artifacts/vitest-worker-cache/run-cache-0/package.json",
 ];
 const workerPackage = ".artifacts/vitest-workers/run-cache-0/package.json";
 const lock = ".artifacts/dist-artifacts.lock/owner.json";
@@ -35,6 +37,10 @@ const userFiles = {
   ".artifacts/report.md": "user report\n",
   ".artifacts/vitest-workers-notes.md": "user notes\n",
   "fixtures/.artifacts/vitest-workers/input.json": "nested user fixture\n",
+  ".artifacts/vitest-worker-cache-notes.md": "user notes\n",
+  "fixtures/.artifacts/vitest-worker-cache/input.json": "nested user fixture\n",
+  ".cache/bun-transpiler-notes.md": "user notes\n",
+  "fixtures/.cache/bun-transpiler/input.txt": "nested user fixture\n",
   ".cache/openclaw/notes.md": "user notes\n",
   ".cache/ms-playwright-notes.md": "user notes\n",
   "fixtures/.cache/ms-playwright/input.txt": "nested user fixture\n",
