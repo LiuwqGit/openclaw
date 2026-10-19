@@ -1,15 +1,13 @@
-import { resolveAgentConfig } from "../agents/agent-scope-config.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import type { ModelRef } from "../agents/model-ref-shared.js";
 import {
   inferUniqueProviderFromConfiguredModels,
   isCliProvider,
   normalizeStoredOverrideModel,
   parseModelRef,
+  resolveDefaultModelForAgent,
   resolvePersistedSelectedModelRef,
   type CliProviderClassifier,
 } from "../agents/model-selection.js";
-import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
@@ -21,18 +19,15 @@ type SessionDisplayModelRow = Pick<
 };
 
 function resolveSessionDisplayDefaults(cfg: OpenClawConfig, agentId?: string): ModelRef {
-  const primary =
-    (agentId
-      ? resolveAgentModelPrimaryValue(resolveAgentConfig(cfg, agentId)?.model)
-      : undefined) ??
-    resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model) ??
-    DEFAULT_MODEL;
-  return (
-    parseModelRef(primary, DEFAULT_PROVIDER, {
-      allowManifestNormalization: false,
-      allowPluginNormalization: false,
-    }) ?? { provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL }
-  );
+  // Resolve the configured primary through the canonical agent-scoped
+  // resolver so configured aliases resolve like the runtime does; a bare
+  // alias must not be displayed under the fallback default provider.
+  return resolveDefaultModelForAgent({
+    cfg,
+    agentId,
+    allowManifestNormalization: false,
+    allowPluginNormalization: false,
+  });
 }
 
 function normalizeCliRuntimeDisplayRef(
