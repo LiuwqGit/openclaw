@@ -38,3 +38,21 @@ export function normalizeOpenClawStateSchemaReadError(error: unknown, pathname: 
   }
   return error;
 }
+
+/**
+ * Startup admission failures must identify the inspected store even when the
+ * underlying SQLite read error carries no path (e.g. corruption). Prepending
+ * the context in place preserves the original error identity for downstream
+ * typed refusal classification while keeping the cause message. Cancellation
+ * reasons stay untouched with their abort owner.
+ */
+export function annotateStartupStateInspectionFailure(
+  failure: unknown,
+  pathname: string,
+  signal?: AbortSignal,
+): unknown {
+  if (!signal?.aborted && failure instanceof Error && !failure.message.includes(pathname)) {
+    failure.message = `OpenClaw state database ${pathname} failed startup inspection: ${failure.message}`;
+  }
+  return failure;
+}

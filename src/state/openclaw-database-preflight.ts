@@ -63,7 +63,7 @@ import {
   executeExistingOpenClawStateRead,
   getActiveOpenClawStateDatabaseReadSnapshot,
 } from "./openclaw-state-db-readonly.js";
-import { normalizeOpenClawStateSchemaReadError } from "./openclaw-state-db-schema-migration-required.js";
+import * as schemaRead from "./openclaw-state-db-schema-migration-required.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import {
   inspectStateDatabaseSchema,
@@ -374,10 +374,11 @@ export async function preflightOpenClawDatabaseSchemas(
   } catch (error) {
     // Accepted stop must not turn cancellation or failed cleanup into a
     // warn-and-continue result that launches the remaining startup runtime.
-    const failure = normalizeOpenClawStateSchemaReadError(error, statePath);
+    const failure = schemaRead.normalizeOpenClawStateSchemaReadError(error, statePath);
     stateInspectionErrors.push(failure);
     if (options.signal?.aborted || options.requireStartupMigrationReadiness) {
-      throw failure;
+      // Startup refusals must name the store even when the read error carries no path.
+      throw schemaRead.annotateStartupStateInspectionFailure(failure, statePath, options.signal);
     }
     const row: IndeterminateOpenClawDatabase = {
       kind: "state",

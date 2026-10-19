@@ -64,6 +64,19 @@ it.each([
   },
 );
 
+it("names the failing state database when gateway startup admission hits a corrupted store", async () => {
+  const fixture = databaseFixture(tempDirs.make("startup-state-corruption-"));
+  fixture.state();
+  closeDatabases();
+  // A truncated main file fails schema reads with a pathless SQLite error (issue #177440).
+  fs.writeFileSync(fixture.statePath, "corrupted store bytes");
+  const failure = await fixture.ready({}, "gateway-startup").catch((cause: unknown) => cause);
+  expect(failure).toBeInstanceOf(Error);
+  const message = (failure as Error).message;
+  expect(message).toContain(fixture.statePath);
+  expect(message).toMatch(/not a database|disk image is malformed/iu);
+});
+
 it("keeps retry and restore guidance with their affected agent databases", async () => {
   const fixture = databaseFixture(tempDirs.make("doctor-mixed-readiness-"));
   const busy = fixture.agent("busy");
