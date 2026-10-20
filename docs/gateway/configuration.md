@@ -125,6 +125,8 @@ Suspicious external reductions and stub-shaped snapshots also leave the trusted
 recovery copy unchanged during startup and hot reload. An ordinary accepted edit
 to an already-truncated file does not approve that earlier loss for replacing the
 backup, so Doctor can still restore the intact configuration.
+The health owner carries that anomaly across automatic metadata stamping and later
+reads; stamping a missing `meta` section does not restore the lost settings.
 
 ## Configuration pages
 

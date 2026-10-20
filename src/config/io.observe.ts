@@ -23,7 +23,10 @@ import {
   readConfigFingerprintForPathSync,
   readConfigHealthEntry,
 } from "./io.observe-state.js";
-import { resolveConfigObserveSuspiciousReasons } from "./io.observe-suspicious.js";
+import {
+  createInheritedConfigAnomalySignature,
+  resolveConfigObserveSuspiciousReasons,
+} from "./io.observe-suspicious.js";
 import type { NormalizedConfigIoDeps } from "./io.read.types.js";
 import type { ConfigFileSnapshot } from "./types.js";
 
@@ -69,6 +72,8 @@ function resolveObservation(params: {
   const entry = readConfigHealthEntry(params.healthState, params.snapshot.path);
   const baseline = entry.lastKnownGood ?? params.backupBaseline;
   const suspicious = resolveConfigObserveSuspiciousReasons({
+    hash: params.current.hash,
+    lastObservedSuspiciousSignature: entry.lastObservedSuspiciousSignature,
     bytes: params.current.bytes,
     hasMeta: params.current.hasMeta,
     gatewayMode: params.current.gatewayMode,
@@ -266,32 +271,30 @@ export async function advanceConfigHealthBaselineForAcceptedWrite(
       previousLastKnownGood: baseline.previousLastKnownGood,
       previousSuspiciousSignature: baseline.previousSuspiciousSignature,
     };
-    if (suspicious.length > 0) {
-      // An accepted edit may shrink healthy input, but must not legitimize loss
-      // already present before this write. Keep compensation for rollback even
-      // when the prior anomaly prevents advancing the recovery baseline.
-      const source = params.sourceSnapshot;
-      if (typeof source.raw !== "string") {
-        return compensation;
-      }
-      const before = createConfigHealthFingerprint({
-        raw: source.raw,
+    // Inspect input even when stamping repaired its shape. Bind inherited loss
+    // to the output hash so rereads/promotion cannot silently bless those bytes.
+    const source = params.sourceSnapshot;
+    const before =
+      typeof source.raw === "string"
+        ? createConfigHealthFingerprint({
+            raw: source.raw,
+            parsed: source.parsed,
+            resolved: source.resolved,
+            stat: null,
+          })
+        : null;
+    const preserveBaseline =
+      !before ||
+      resolveConfigObserveSuspiciousReasons({
+        ...before,
         parsed: source.parsed,
-        resolved: source.resolved,
-        stat: null,
-      });
-      if (
-        resolveConfigObserveSuspiciousReasons({
-          bytes: before.bytes,
-          hasMeta: before.hasMeta,
-          gatewayMode: before.gatewayMode,
-          parsed: source.parsed,
-          lastKnownGood: baseline.previousLastKnownGood,
-        }).length > 0
-      ) {
-        return compensation;
-      }
-    }
+        lastKnownGood: baseline.previousLastKnownGood,
+        lastObservedSuspiciousSignature: baseline.previousSuspiciousSignature,
+      }).length > 0;
+    const nextBaseline = preserveBaseline ? baseline.previousLastKnownGood : current;
+    const nextSignature = preserveBaseline
+      ? createInheritedConfigAnomalySignature(current.hash)
+      : null;
     const settled = await settleConfigHealthTransition(
       deps,
       baseline.configPath,
@@ -307,11 +310,14 @@ export async function advanceConfigHealthBaselineForAcceptedWrite(
         ) {
           return "settled";
         }
-        if (persisted?.hash === current.hash && entry.lastObservedSuspiciousSignature == null) {
+        if (
+          persisted?.hash === nextBaseline.hash &&
+          (entry.lastObservedSuspiciousSignature ?? null) === nextSignature
+        ) {
           return "settled";
         }
         await store.updateAfterFileCommit(
-          { lastKnownGood: current, lastObservedSuspiciousSignature: null },
+          { lastKnownGood: nextBaseline, lastObservedSuspiciousSignature: nextSignature },
           healthSnapshot,
         );
         // The worker returns no conditional-write receipt; reread to detect a lost update.
@@ -320,8 +326,8 @@ export async function advanceConfigHealthBaselineForAcceptedWrite(
           return "retry";
         }
         const afterEntry = readConfigHealthEntry(after.state, baseline.configPath);
-        return afterEntry.lastKnownGood?.hash === current.hash &&
-          afterEntry.lastObservedSuspiciousSignature == null
+        return afterEntry.lastKnownGood?.hash === nextBaseline.hash &&
+          (afterEntry.lastObservedSuspiciousSignature ?? null) === nextSignature
           ? "settled"
           : "retry";
       },
@@ -357,14 +363,21 @@ export async function restoreConfigHealthBaselineForRolledBackWrite(
         const entry = readConfigHealthEntry(healthSnapshot.state, record.configPath);
         // Newer observations win, and this also covers an already-restored
         // baseline: only the candidate this writer published is compensable.
-        if (entry.lastKnownGood?.hash !== record.candidate.hash) {
+        const inheritedMarker =
+          entry.lastObservedSuspiciousSignature ===
+          createInheritedConfigAnomalySignature(record.candidate.hash);
+        if (
+          entry.lastKnownGood?.hash !== record.candidate.hash &&
+          !(entry.lastKnownGood?.hash === record.previousLastKnownGood.hash && inheritedMarker)
+        ) {
           return "settled";
         }
+        const restoreMarker = entry.lastObservedSuspiciousSignature == null || inheritedMarker;
         await store.updateAfterFileCommit(
           {
             lastKnownGood: record.previousLastKnownGood,
             // Only rewind the anomaly marker when nothing newer recorded one.
-            ...(entry.lastObservedSuspiciousSignature == null
+            ...(restoreMarker
               ? { lastObservedSuspiciousSignature: record.previousSuspiciousSignature }
               : {}),
           },
@@ -374,8 +387,11 @@ export async function restoreConfigHealthBaselineForRolledBackWrite(
         if (!after) {
           return "retry";
         }
-        return readConfigHealthEntry(after.state, record.configPath).lastKnownGood?.hash ===
-          record.previousLastKnownGood.hash
+        const restored = readConfigHealthEntry(after.state, record.configPath);
+        return restored.lastKnownGood?.hash === record.previousLastKnownGood.hash &&
+          (!restoreMarker ||
+            (restored.lastObservedSuspiciousSignature ?? null) ===
+              record.previousSuspiciousSignature)
           ? "settled"
           : "retry";
       },

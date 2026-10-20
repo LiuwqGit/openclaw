@@ -48,6 +48,8 @@ export async function promoteConfigSnapshotToLastKnownGoodCore(params: {
   health.assertCurrent();
   const entry = readConfigHealthEntry(healthSnapshot.state, snapshot.path);
   const suspiciousReasons = resolveConfigObserveSuspiciousReasons({
+    hash: current.hash,
+    lastObservedSuspiciousSignature: entry.lastObservedSuspiciousSignature,
     bytes: current.bytes,
     hasMeta: current.hasMeta,
     gatewayMode: current.gatewayMode,

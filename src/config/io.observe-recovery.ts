@@ -295,6 +295,7 @@ function* planSuspiciousConfigRead(
   const suspicious = resolveConfigObserveSuspiciousReasons({
     ...current,
     parsed,
+    lastObservedSuspiciousSignature: entry.lastObservedSuspiciousSignature,
     lastKnownGood: backupBaseline,
   });
   const suspiciousSignature = `${current.hash}:${suspicious.join(",")}`;

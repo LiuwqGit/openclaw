@@ -388,51 +388,66 @@ describe("last-known-good promotion after accepted writes", () => {
     return raw;
   }
 
-  it("does not bless a pre-existing truncation through an ordinary accepted edit", async () => {
-    const { configPath, env, root } = acceptedWriteFixture();
-    const io = createConfigIO({
-      env,
-      configPath,
-      homedir: () => root,
-      observe: true,
-      logger: { warn: vi.fn(), error: vi.fn() },
-    });
-    const healthyRaw = seedConfig(configPath, {
-      meta: { lastTouchedVersion: "2026.4.22" },
-      gateway: {
-        mode: "local",
-        trustedProxies: Array.from({ length: 80 }, (_, index) => `192.0.2.${index}`),
-      },
-    });
-    const healthy = await io.readConfigFileSnapshot();
-    await expect(io.promoteConfigSnapshotToLastKnownGood(healthy)).resolves.toBe(true);
+  it.each([
+    { anomaly: "size", proxies: 80 },
+    { anomaly: "metadata-only", proxies: 1 },
+  ])(
+    "does not bless a pre-existing $anomaly truncation through an ordinary accepted edit",
+    async ({ anomaly, proxies }) => {
+      const { configPath, env, root } = acceptedWriteFixture();
+      const io = createConfigIO({
+        env,
+        configPath,
+        homedir: () => root,
+        observe: true,
+        logger: { warn: vi.fn(), error: vi.fn() },
+      });
+      const healthyRaw = seedConfig(configPath, {
+        meta: { lastTouchedVersion: "2026.4.22" },
+        gateway: {
+          mode: "local",
+          trustedProxies: Array.from({ length: proxies }, (_, index) => `192.0.2.${index}`),
+        },
+      });
+      expect(Buffer.byteLength(healthyRaw) < 512).toBe(anomaly === "metadata-only");
+      const healthy = await io.readConfigFileSnapshot();
+      await expect(io.promoteConfigSnapshotToLastKnownGood(healthy)).resolves.toBe(true);
 
-    // Retaining metadata and mode leaves only the size anomaly. The edit itself
-    // does not shrink this already-truncated input and needs no destructive flag.
-    seedConfig(configPath, {
-      meta: { lastTouchedVersion: "2026.4.22" },
-      gateway: { mode: "local" },
-    });
-    const truncated = await io.readConfigFileSnapshot();
-    await expect(io.promoteConfigSnapshotToLastKnownGood(truncated)).resolves.toBe(false);
-    await io.writeConfigFile(
-      { ...truncated.config, gateway: { ...truncated.config.gateway, port: 19187 } },
-      { baseSnapshot: truncated },
-    );
-    const edited = await io.readConfigFileSnapshot();
-    expect(edited.config.gateway?.port).toBe(19187);
-    await expect(io.promoteConfigSnapshotToLastKnownGood(edited)).resolves.toBe(false);
-    expect(fs.readFileSync(configPath + ".last-good", "utf8")).toBe(healthyRaw);
+      // Metadata-only loss must survive writer stamping even below the size-drop
+      // threshold; an ordinary edit is not approval of either earlier anomaly.
+      seedConfig(configPath, {
+        ...(anomaly === "size" ? { meta: { lastTouchedVersion: "2026.4.22" } } : {}),
+        gateway: { mode: "local", port: 18789 },
+      });
+      const truncated = await io.readConfigFileSnapshot();
+      await expect(io.promoteConfigSnapshotToLastKnownGood(truncated)).resolves.toBe(false);
+      await io.writeConfigFile(
+        { ...truncated.config, gateway: { ...truncated.config.gateway, port: 19187 } },
+        { baseSnapshot: truncated },
+      );
+      const edited = await io.readConfigFileSnapshot();
+      expect(edited.config.gateway?.port).toBe(19187);
+      await expect(io.promoteConfigSnapshotToLastKnownGood(edited)).resolves.toBe(false);
+      expect(fs.readFileSync(configPath + ".last-good", "utf8")).toBe(healthyRaw);
 
-    fs.writeFileSync(configPath, "{ gateway: { mode: 123 } }\n", "utf8");
-    await expect(
-      io.recoverConfigFromLastKnownGood({
-        snapshot: await io.readConfigFileSnapshot(),
-        reason: "test-edited-truncation",
-      }),
-    ).resolves.toBe(true);
-    expect(fs.readFileSync(configPath, "utf8")).toBe(healthyRaw);
-  });
+      await io.writeConfigFile(
+        { ...edited.config, gateway: { ...edited.config.gateway, port: 19188 } },
+        { baseSnapshot: edited },
+      );
+      await expect(
+        io.promoteConfigSnapshotToLastKnownGood(await io.readConfigFileSnapshot()),
+      ).resolves.toBe(false);
+
+      fs.writeFileSync(configPath, "{ gateway: { mode: 123 } }\n", "utf8");
+      await expect(
+        io.recoverConfigFromLastKnownGood({
+          snapshot: await io.readConfigFileSnapshot(),
+          reason: "test-edited-truncation",
+        }),
+      ).resolves.toBe(true);
+      expect(fs.readFileSync(configPath, "utf8")).toBe(healthyRaw);
+    },
+  );
 
   it("advances last-known-good after an accepted intentional size-drop write", async () => {
     const { configPath, io } = acceptedWriteFixture();
@@ -594,6 +609,60 @@ describe("last-known-good promotion after accepted writes", () => {
     const editedSnapshot = await io.readConfigFileSnapshot();
     await expect(io.promoteConfigSnapshotToLastKnownGood(editedSnapshot)).resolves.toBe(true);
     expect(fs.readFileSync(lastGoodPath, "utf8")).toBe(canonicalRaw);
+  });
+
+  it("restores the inherited anomaly when a later accepted edit rolls back", async () => {
+    const initial = {
+      meta: { lastTouchedVersion: "2026.4.22" },
+      gateway: { mode: "local" as const, trustedProxies: ["192.0.2.1"] },
+    };
+    await withTempHomeConfig(initial, async ({ configPath }) => {
+      const io = createConfigIO({ observe: true });
+      const healthy = await io.readConfigFileSnapshot();
+      await expect(io.promoteConfigSnapshotToLastKnownGood(healthy)).resolves.toBe(true);
+      fs.writeFileSync(configPath, JSON.stringify({ gateway: { mode: "local", port: 18789 } }));
+      const truncated = await io.readConfigFileSnapshot();
+      await io.writeConfigFile(
+        { ...truncated.config, gateway: { ...truncated.config.gateway, port: 19187 } },
+        { baseSnapshot: truncated },
+      );
+      const edited = await io.readConfigFileSnapshot();
+      await expect(io.promoteConfigSnapshotToLastKnownGood(edited)).resolves.toBe(false);
+      const acceptedRaw = fs.readFileSync(configPath, "utf8");
+      const failure = new Error("synthetic overlay failure");
+      const unsubscribe = registerConfigWriteListener(vi.fn(), {
+        ownsRuntimeActivationFor: configPath,
+        preCommitRuntimePreflight: async (sourceConfig) => ({
+          runtimeConfig: sourceConfig,
+          compareConfig: sourceConfig,
+          reapplyRuntimeOverlays() {
+            throw failure;
+          },
+          reapplyCompareOverlays: (config) => config,
+        }),
+      });
+      try {
+        setRuntimeConfigSnapshot(edited.config, edited.config);
+        await expect(
+          writeConfigFile({
+            ...edited.config,
+            gateway: { ...edited.config.gateway, port: 19188 },
+          }),
+        ).rejects.toMatchObject({
+          name: "ConfigWritePostCommitError",
+          rollbackStatus: "restored",
+          cause: failure,
+        });
+      } finally {
+        unsubscribe();
+        resetConfigRuntimeState();
+      }
+      expect(fs.readFileSync(configPath, "utf8")).toBe(acceptedRaw);
+      await expect(
+        io.promoteConfigSnapshotToLastKnownGood(await io.readConfigFileSnapshot()),
+      ).resolves.toBe(false);
+      expect(fs.readFileSync(configPath + ".last-good", "utf8")).toBe(healthy.raw);
+    });
   });
 
   it("restores the last-known-good baseline when a committed write rolls back", async () => {
