@@ -123,20 +123,18 @@ describe("dedicated worker RPC", () => {
       release.resolve();
       await settled(events, 2);
       const inference = events.filter((event) => event.method === "worker.inference.start");
-      expect(inference.map((event) => event.phase)).toEqual([
-        "received",
-        "response",
-        "handler",
-        "dispatch",
+      expect(inference).toMatchObject([
+        { phase: "received" },
+        { phase: "response", outcome: "ok", durationMs: 40 },
+        { phase: "handler", admissionMs: 40, durationMs: 30, outcome: "returned" },
+        {
+          phase: "dispatch",
+          queueWaitMs: 40,
+          durationMs: 70,
+          outcome: "returned",
+          response: "sent",
+        },
       ]);
-      expect(inference[1]).toMatchObject({ outcome: "ok", durationMs: 40 });
-      expect(inference[2]).toMatchObject({ admissionMs: 40, durationMs: 30, outcome: "returned" });
-      expect(inference[3]).toMatchObject({
-        queueWaitMs: 40,
-        durationMs: 70,
-        outcome: "returned",
-        response: "sent",
-      });
       expect(harness.responses.at(-1)).toEqual(INFERENCE_EVENT);
       expect(harness.close).not.toHaveBeenCalled();
       for (const value of [
@@ -246,19 +244,20 @@ describe("dedicated worker RPC", () => {
     expect(events.at(-1)).toMatchObject({ phase: "dispatch", response: "unavailable" });
   });
 
-  it("records a throwing service once and preserves protocol failure", async () => {
+  it("records a throwing transcript service once and measures its error response", async () => {
     const events = observeRequests();
     const harness = attachHarness({ identity: ATTACHED_IDENTITY });
     await admit(harness);
     harness.service.commitTranscript.mockRejectedValueOnce(new Error("synthetic service fault"));
     harness.sendRequest("worker.transcript.commit", TRANSCRIPT_COMMIT);
     await settled(events);
-    expect(events.map((event) => event.phase)).toEqual(["received", "handler", "dispatch"]);
-    expect(events.slice(1)).toMatchObject([
-      { outcome: "threw" },
-      { outcome: "threw", response: "none" },
+    expect(events).toMatchObject([
+      { phase: "received" },
+      { phase: "handler", outcome: "threw" },
+      { phase: "response", outcome: "error" },
+      { phase: "dispatch", outcome: "threw", response: "sent" },
     ]);
-    expect(harness.close).toHaveBeenCalledWith(1011, "gateway-unavailable");
+    expect(harness.close).not.toHaveBeenCalled();
     expect(JSON.stringify(events)).not.toContain("synthetic service fault");
   });
 

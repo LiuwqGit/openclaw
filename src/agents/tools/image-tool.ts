@@ -1,4 +1,5 @@
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { Type } from "typebox";
 import { findCapabilityProviderById } from "../../../packages/media-generation-core/src/capability-model-ref.js";
@@ -51,7 +52,7 @@ import {
 import {
   buildToolModelConfigFromCandidates,
   hasToolModelConfig,
-  prepareToolAuthProfileStoreSource,
+  prepareToolAuthProfileStore,
   resolveDefaultModelRef,
   resolveOpenAiImageMediaCandidate,
 } from "./model-config.helpers.js";
@@ -80,14 +81,6 @@ function isExecutionAliasCandidateForProvider(
   );
 }
 
-/**
- * Resolve the effective image model config for the `view_image` tool.
- *
- * - Prefer explicit config (`agents.defaults.imageModel`).
- * - Otherwise, try to "pair" the primary model with an image-capable model:
- *   - same provider (best effort)
- *   - fall back to OpenAI/Anthropic when available
- */
 function resolveImageModelConfigForTool(params: {
   cfg?: OpenClawConfig;
   agentDir: string;
@@ -229,18 +222,6 @@ function resolveImageModelConfigForTool(params: {
   });
 }
 
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.imageToolTestApi")] = {
-    resolveImageModelConfigForTool,
-  };
-}
-
-function pickMaxBytes(cfg?: OpenClawConfig, maxBytesMb?: number): number | undefined {
-  const limit =
-    asPositiveFiniteNumber(maxBytesMb) ?? asPositiveFiniteNumber(cfg?.agents?.defaults?.mediaMaxMb);
-  return limit === undefined ? undefined : Math.floor(limit * 1024 * 1024);
-}
-
 export function createImageTool(options?: {
   config?: OpenClawConfig;
   agentId?: string;
@@ -257,11 +238,6 @@ export function createImageTool(options?: {
   currentChannelId?: string | null;
   /** If true, the model has native vision capability and images in the prompt are auto-injected */
   modelHasVision?: boolean;
-  /**
-   * Avoid resolving auto image-provider/model candidates while registering the
-   * tool. The concrete image model is still resolved before execution.
-   */
-  deferAutoModelResolution?: boolean;
 }): AnyAgentTool | null {
   const agentDir = options?.agentDir?.trim();
   const modelHasVision = options?.modelHasVision === true;
@@ -279,21 +255,6 @@ export function createImageTool(options?: {
           imageModelConfig: explicit,
         })
       : null;
-  const shouldResolveAutoImageModel =
-    !modelHasVision && !explicitImageModelConfig && !options?.deferAutoModelResolution;
-  const resolvedImageModelConfig = shouldResolveAutoImageModel
-    ? resolveImageModelConfigForTool({
-        cfg: options?.config,
-        agentDir,
-        workspaceDir: options?.workspaceDir,
-        authStore: options?.authProfileStore,
-        authProfileStoreSource: options?.authProfileStoreSource,
-        preparedModelRuntime: options?.preparedModelRuntime,
-      })
-    : explicitImageModelConfig;
-  if (!modelHasVision && !resolvedImageModelConfig && !options?.deferAutoModelResolution) {
-    return null;
-  }
   const remoteMediaSsrfPolicy = options?.config?.tools?.web?.fetch?.ssrfPolicy;
 
   const description = modelHasVision
@@ -321,10 +282,7 @@ export function createImageTool(options?: {
     }),
     execute: async (_toolCallId, args, suppliedSignal) =>
       runWithAsyncWorkResources(async (onAcquired) => {
-        const record: Record<string, unknown> = args && typeof args === "object" ? { ...args } : {};
-        if (Array.isArray(record.paths)) {
-          record.paths = [...record.paths];
-        }
+        const record = asRecord(args);
         const capturedOperator = await captureAmbientGatewayOperatorAuthority({
           missingBindingError: () =>
             new Error("Image analysis requires its current Gateway binding."),
@@ -365,12 +323,14 @@ export function createImageTool(options?: {
           record,
           DEFAULT_PROMPT,
         );
-        const maxBytesMb = readFiniteNumberParam(record, "maxBytesMb", {
-          min: 0,
-          minExclusive: true,
-          message: "maxBytesMb must be greater than 0",
-        });
-        const maxBytes = pickMaxBytes(options?.config, maxBytesMb);
+        const maxBytesMb =
+          readFiniteNumberParam(record, "maxBytesMb", {
+            min: 0,
+            minExclusive: true,
+            message: "maxBytesMb must be greater than 0",
+          }) ?? asPositiveFiniteNumber(options?.config?.agents?.defaults?.mediaMaxMb);
+        const maxBytes =
+          maxBytesMb === undefined ? undefined : Math.floor(maxBytesMb * 1024 * 1024);
         let imageRoute:
           | { kind: "native" }
           | {
@@ -382,20 +342,19 @@ export function createImageTool(options?: {
           imageRoute = { kind: "native" };
         } else {
           let imageModelConfig =
-            resolvedImageModelConfig ??
+            explicitImageModelConfig ??
             resolveImageModelConfigForOverride({
               cfg: options?.config,
               modelOverride,
             });
           if (!imageModelConfig) {
-            const authProfileStoreSource = await prepareToolAuthProfileStoreSource(options);
+            const authStore = await prepareToolAuthProfileStore(options);
             assertCurrent();
             imageModelConfig = resolveImageModelConfigForTool({
               cfg: options?.config,
               agentDir,
               workspaceDir: options?.workspaceDir,
-              authStore: options?.authProfileStore,
-              authProfileStoreSource,
+              authStore,
               preparedModelRuntime: options?.preparedModelRuntime,
             });
           }

@@ -1,8 +1,8 @@
 import { renderQrTerminal } from "openclaw/plugin-sdk/media-runtime";
 import { finiteSecondsToTimerSafeMilliseconds } from "openclaw/plugin-sdk/number-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { readFeishuJsonResponse } from "./json-response.js";
 import type { FeishuDomain } from "./types.js";
 
 const FEISHU_ACCOUNTS_URL = "https://accounts.feishu.cn";
@@ -60,7 +60,7 @@ function accountsBaseUrl(domain: FeishuDomain): string {
 }
 
 async function postRegistration<T>(baseUrl: string, body: Record<string, string>): Promise<T> {
-  return await fetchFeishuJson<T>({
+  return fetchFeishuJson<T>({
     url: `${baseUrl}${REGISTRATION_PATH}`,
     init: {
       method: "POST",
@@ -85,18 +85,12 @@ async function fetchFeishuJson<T>(params: {
   });
   try {
     // Registration poll returns 4xx for pending/error states with a JSON body.
-    return await readFeishuJsonResponse<T>(response);
+    return await readProviderJsonResponse<T>(response, "feishu.api");
   } finally {
     await release();
   }
 }
 
-/**
- * Step 1: Initialize registration and verify the environment supports
- * `client_secret` auth.
- *
- * @throws If the environment does not support `client_secret`.
- */
 export async function initAppRegistration(domain: FeishuDomain = "feishu"): Promise<void> {
   const baseUrl = accountsBaseUrl(domain);
   const res = await postRegistration<InitResponse>(baseUrl, { action: "init" });
@@ -200,10 +194,8 @@ export async function pollAppRegistration(params: {
       };
     }
 
-    if (pollRes.error) {
-      if (pollRes.error === "authorization_pending") {
-        // Continue waiting.
-      } else if (pollRes.error === "slow_down") {
+    if (pollRes.error && pollRes.error !== "authorization_pending") {
+      if (pollRes.error === "slow_down") {
         currentInterval += 5;
       } else if (pollRes.error === "access_denied") {
         return { status: "access_denied" };

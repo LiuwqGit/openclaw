@@ -1,9 +1,8 @@
-/** Model selection, compression preparation, and provider execution for view_image. */
 import { findCapabilityProviderById } from "../../../packages/media-generation-core/src/capability-model-ref.js";
 import { normalizeMediaProviderId } from "../../../packages/media-understanding-common/src/provider-id.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MediaUnderstandingModelConfig } from "../../config/types.tools.js";
-import { DEFAULT_TIMEOUT_SECONDS } from "../../media-understanding/defaults.js";
+import { MEDIA_CAPABILITY_DEFAULTS } from "../../media-understanding/defaults.constants.js";
 import { matchesMediaEntryCapability } from "../../media-understanding/entry-capabilities.js";
 import {
   describeImageWithModel,
@@ -106,10 +105,9 @@ function matchesImageTimeoutEntry(params: {
 }): boolean {
   const configuredProvider = normalizeMediaProviderId(params.entry.provider ?? "");
   const selectedProvider = normalizeMediaProviderId(params.provider);
-  if (!configuredProvider || configuredProvider !== selectedProvider) {
-    return false;
-  }
   if (
+    !configuredProvider ||
+    configuredProvider !== selectedProvider ||
     !matchesMediaEntryCapability({
       entry: params.entry,
       capability: "image",
@@ -207,7 +205,7 @@ export async function runImagePrompt(params: {
         );
         const timeoutMs = resolveTimeoutMs(
           sharedEntry?.timeoutSeconds ?? providerCfg.tools?.media?.image?.timeoutSeconds,
-          DEFAULT_TIMEOUT_SECONDS.image,
+          MEDIA_CAPABILITY_DEFAULTS.image.timeoutSeconds,
         );
         const imageProvider = getMediaUnderstandingProvider(provider, providerRegistry);
         const request = {

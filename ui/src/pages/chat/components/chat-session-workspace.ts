@@ -6,6 +6,10 @@ import {
 } from "../../../../../src/shared/markdown-code.js";
 import { downloadArtifact, isHttpArtifactDownloadUrl } from "../../../api/artifact-download.ts";
 import { GatewayRequestError } from "../../../api/gateway.ts";
+import {
+  downloadSessionFile,
+  type SessionFileDownload,
+} from "../../../api/session-file-download.ts";
 import type { ArtifactDownloadResult, SessionWorkspaceGetResult } from "../../../api/types.ts";
 import { hasOperatorAdminAccess } from "../../../app/operator-access.ts";
 import type { MarkdownFileLinkTarget } from "../../../components/markdown-file-links.ts";
@@ -26,32 +30,28 @@ import {
   isCurrentSessionWorkspace,
   loadSessionWorkspace,
   refreshSessionWorkspaceState,
+  sessionWorkspaceForHost,
   trackSessionCheckoutSidebar,
 } from "./chat-session-workspace-state.ts";
 import type {
+  SessionWorkspaceFilter,
   SessionWorkspaceHost,
-  SessionWorkspaceProps,
   SessionWorkspaceState,
 } from "./chat-session-workspace-types.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
-import { hasUniformLineEndings } from "./chat-sidebar-file-view.ts";
+import { hasUniformLineEndings } from "./chat-sidebar-file-view.tsx";
 
 registerFilePreviewEnglish();
 
 export { retireSessionWorkspaceCheckout } from "./chat-session-workspace-state.ts";
-export { renderSessionWorkspaceRail } from "./chat-session-workspace-rail.ts";
-export type {
-  SessionWorkspaceHost,
-  SessionWorkspaceProps,
-} from "./chat-session-workspace-types.ts";
+export type { SessionWorkspaceHost } from "./chat-session-workspace-types.ts";
 
-function languageForFile(name: string): string {
-  const extension = name.match(/\.([a-z0-9_-]+)$/i)?.[1]?.toLowerCase() ?? "";
-  if (extension === "yml") {
-    return "yaml";
-  }
-  return extension;
-}
+type SessionWorkspaceView = ReturnType<typeof createSessionWorkspaceProps>;
+export type SessionWorkspaceProps = Omit<
+  SessionWorkspaceView,
+  "connectionEpoch" | "onDownloadFile" | "onOpenDiff"
+> &
+  Partial<Pick<SessionWorkspaceView, "connectionEpoch" | "onDownloadFile" | "onOpenDiff">>;
 
 function formatMarkdownCodeSpan(value: string): string {
   // Markdown finds block boundaries before inline spans, so filenames must
@@ -74,6 +74,7 @@ function formatFileUpdatedAt(updatedAtMs: number | undefined): string | null {
 function unsupportedFileSidebarContent(
   file: SessionWorkspaceGetResult["file"],
   fallbackPath: string,
+  download: (signal: AbortSignal) => Promise<SessionFileDownload | null>,
 ): SidebarContent {
   const filePath = file.workspacePath || file.path || fallbackPath;
   const updatedAt = formatFileUpdatedAt(file.updatedAtMs);
@@ -90,6 +91,11 @@ function unsupportedFileSidebarContent(
     kind: "markdown",
     content,
     rawText: content,
+    fileDownload: {
+      path: filePath,
+      name: file.name || pathDisplayName(filePath),
+      download,
+    },
   };
 }
 
@@ -101,6 +107,14 @@ function workspaceBrowserFilePath(root: string | undefined, filePath: string): s
   const base = root.replace(/[\\/]+$/, "");
   const relative = filePath.replace(/^[\\/]+/, "").replaceAll(/[\\/]/g, separator);
   return base ? `${base}${separator}${relative}` : `${separator}${relative}`;
+}
+
+function readWorkspaceFileText(file: SessionWorkspaceGetResult["file"] | undefined): string | null {
+  return file?.previewKind === "text" &&
+    file.contentEncoding === "utf8" &&
+    typeof file.content === "string"
+    ? file.content
+    : null;
 }
 
 async function loadArtifactSidebarContent(
@@ -165,7 +179,7 @@ async function loadArtifactSidebarContent(
 export function refreshSessionWorkspace(state: SessionWorkspaceHost, refreshFiles: boolean) {
   if (refreshSessionWorkspaceState(state, refreshFiles)) {
     state.sidebarContent = resolveSessionDiffSidebarContent(state);
-    state.requestUpdate?.();
+    sessionWorkspaceForHost(state).publish();
   }
 }
 
@@ -188,16 +202,49 @@ function openFile(
     state,
     workspace,
     viewingSession ? `file:${requestPath}` : JSON.stringify(["file", sessionKey, requestPath]),
-    () =>
-      state.sessions.getFile(sessionKey, requestPath, {
-        agentId,
-      }),
+    async () => {
+      try {
+        return await state.sessions.getFile(sessionKey, requestPath, { agentId });
+      } catch (error) {
+        const details = error instanceof GatewayRequestError ? error.details : null;
+        if (
+          details &&
+          typeof details === "object" &&
+          "type" in details &&
+          details.type === "session_file_too_large" &&
+          "size" in details &&
+          typeof details.size === "number"
+        ) {
+          // The authorized read supplies metadata even when its preview bytes are unavailable.
+          const metadata: SessionWorkspaceGetResult = {
+            sessionKey,
+            file: {
+              path: requestPath,
+              name: pathDisplayName(path),
+              size: details.size,
+              kind: "read",
+              missing: false,
+              previewKind: "unsupported",
+            },
+          };
+          return metadata;
+        }
+        throw error;
+      }
+    },
     (result) => {
       const file = result.file;
       if (!file) {
         return null;
       }
       const name = file.name || pathDisplayName(path);
+      const filePath = file.workspacePath || file.path || path;
+      const download = (signal: AbortSignal) =>
+        downloadSessionFile(
+          state,
+          { sessionKey: result.sessionKey, agentId, path: requestPath },
+          signal,
+        );
       if (file.previewKind === "image") {
         if (
           file.contentEncoding !== "base64" ||
@@ -212,25 +259,22 @@ function openFile(
           title: name,
           src: `data:${file.mimeType};base64,${file.content}`,
           mimeType: file.mimeType,
-          rawText: file.workspacePath || file.path || path,
+          rawText: filePath,
         };
       }
       if (file.previewKind === "unsupported") {
         return {
-          ...unsupportedFileSidebarContent(file, path),
+          ...unsupportedFileSidebarContent(file, path, download),
           fileLinkSessionKey: result.sessionKey,
         };
       }
-      if (
-        file.previewKind !== "text" ||
-        file.contentEncoding !== "utf8" ||
-        typeof file.content !== "string"
-      ) {
+      const text = readWorkspaceFileText(file);
+      if (text === null) {
         return null;
       }
       const canEdit =
         typeof file.hash === "string" &&
-        hasUniformLineEndings(file.content) &&
+        hasUniformLineEndings(text) &&
         isGatewayMethodAdvertised(state, "sessions.files.set") === true &&
         hasOperatorAdminAccess(state.hello?.auth ?? null);
       const edit = canEdit
@@ -303,22 +347,24 @@ function openFile(
             },
           }
         : undefined;
+      const extension = name.match(/\.([a-z0-9_-]+)$/i)?.[1]?.toLowerCase() ?? "";
       return {
         kind: "file",
-        path: file.workspacePath || file.path || path,
+        path: filePath,
         name,
-        content: file.content,
+        content: text,
+        download,
         sessionFileSource: {
           sessionKey: result.sessionKey,
           agentId,
-          path: file.workspacePath || file.path || path,
+          path: filePath,
         },
         draftKey: [
           gatewayUrl,
           draftScope ?? "",
           result.sessionKey,
           result.root ?? "",
-          file.workspacePath || file.path || path,
+          filePath,
         ].join("\u0000"),
         draftContext: {
           sessionKey: result.sessionKey,
@@ -329,9 +375,9 @@ function openFile(
         },
         root: result.root ?? null,
         mimeType: file.mimeType,
-        language: languageForFile(name),
+        language: extension === "yml" ? "yaml" : extension,
         line: opts.line ?? null,
-        rawText: file.content,
+        rawText: text,
         ...(edit ? { edit } : {}),
       };
     },
@@ -383,7 +429,7 @@ export function revealSessionWorkspaceFile(state: SessionWorkspaceHost, path: st
   workspace.filter = "all";
   workspace.activeId = `file:${path}`;
   loadSessionWorkspace(state, workspace, true);
-  state.requestUpdate?.();
+  sessionWorkspaceForHost(state).publish();
 }
 
 function openArtifact(
@@ -460,7 +506,7 @@ export function createSessionWorkspaceProps(
     expanded?: boolean;
     presented?: boolean;
   },
-): SessionWorkspaceProps {
+) {
   state.sessionWorkspaceDraftScope = options?.draftScope;
   state.sessionWorkspaceDraftContext = options?.draftContext;
   const workspace = getSessionWorkspace(state);
@@ -493,17 +539,34 @@ export function createSessionWorkspaceProps(
     filter: workspace.filter,
     browserPath: workspace.browserPath,
     browserSearch: workspace.browserSearch,
-    onSetFilter: (filter) => {
+    connectionEpoch: state.connectionEpoch,
+    onDownloadFile: (path: string, origin: "session" | "workspace", signal: AbortSignal) =>
+      downloadSessionFile(
+        state,
+        {
+          sessionKey: workspace.sessionKey,
+          agentId: workspace.agentId,
+          path:
+            origin === "workspace" ? workspaceBrowserFilePath(workspace.list?.root, path) : path,
+        },
+        signal,
+      ),
+    onSetFilter: (filter: SessionWorkspaceFilter) => {
       workspace.filter = filter;
-      state.requestUpdate?.();
+      sessionWorkspaceForHost(state).publish();
     },
-    onBrowsePath: (path) => {
+    onRetry: () => {
+      clearWorkspaceTimer(workspace);
+      loadSessionWorkspace(state, workspace, true);
+    },
+    onBrowsePath: (path: string) => {
       clearWorkspaceTimer(workspace);
       workspace.browserPath = path;
       workspace.browserSearch = "";
       loadSessionWorkspace(state, workspace, true);
+      sessionWorkspaceForHost(state).publish();
     },
-    onOpenFile: (path, origin) => {
+    onOpenFile: (path: string, origin: "session" | "workspace") => {
       // Session paths are cwd-relative; browser rows are workspace-root-relative.
       // Keep the origin explicit so a nested cwd cannot shadow the selected browser file.
       const opts =
@@ -512,16 +575,16 @@ export function createSessionWorkspaceProps(
           : {};
       openFile(state, workspace, path, opts);
     },
-    onSearch: (search) => {
+    onSearch: (search: string) => {
       workspace.browserSearch = search;
-      state.requestUpdate?.();
+      sessionWorkspaceForHost(state).publish();
       clearWorkspaceTimer(workspace);
       workspace.browserSearchTimer = globalThis.setTimeout(() => {
         workspace.browserSearchTimer = null;
         loadSessionWorkspace(state, workspace, true);
       }, 160);
     },
-    onOpenArtifact: (artifactId) => openArtifact(state, workspace, artifactId),
+    onOpenArtifact: (artifactId: string) => openArtifact(state, workspace, artifactId),
     onOpenDiff: diffContent ? () => state.handleOpenSidebar(diffContent) : undefined,
   };
 }
@@ -530,16 +593,14 @@ export function resolveSessionDiffSidebarContent(
   state: SessionWorkspaceHost,
 ): SidebarContent | null {
   const workspace = getSessionWorkspace(state);
-  const canOpenDiff =
-    isGatewayMethodAdvertised(state, "sessions.diff") === true && Boolean(state.client);
-  if (!canOpenDiff) {
+  const client = state.client;
+  if (isGatewayMethodAdvertised(state, "sessions.diff") !== true || !client) {
     return null;
   }
   if (workspace.diffContent) {
     return workspace.diffContent;
   }
   const sessionKey = state.sessionKey;
-  const client = state.client;
   const agentId = workspace.agentId;
   const canLoadFileText =
     isGatewayMethodAdvertised(state, "sessions.files.get") === true && Boolean(state.client);
@@ -547,32 +608,19 @@ export function resolveSessionDiffSidebarContent(
     kind: "session-diff",
     // Checkout retirement replaces this identity; ordinary refreshes retain it.
     owner: workspace,
-    load: async (scope) => {
-      if (!client) {
-        throw new Error(t("chat.sessionDiff.disconnected"));
-      }
-      return await client.request<SessionsDiffResult>("sessions.diff", {
+    load: async (scope) =>
+      await client.request<SessionsDiffResult>("sessions.diff", {
         sessionKey,
         ...(agentId ? { agentId } : {}),
         ...scope,
-      });
-    },
+      }),
     loadFileText: canLoadFileText
       ? async (path) => {
           try {
             const result = await state.sessions.getFile(sessionKey, path, {
               agentId,
             });
-            const file = result?.file;
-            if (
-              !file ||
-              file.previewKind !== "text" ||
-              file.contentEncoding !== "utf8" ||
-              typeof file.content !== "string"
-            ) {
-              return null;
-            }
-            return file.content;
+            return readWorkspaceFileText(result?.file);
           } catch {
             return null;
           }

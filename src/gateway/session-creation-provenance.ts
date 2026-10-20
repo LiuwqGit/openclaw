@@ -14,6 +14,8 @@ export type TrustedSessionCreation = Partial<AgentRuntimeSessionSpawnContext> & 
   sandbox?: "required";
   /** Exact spawning session retained separately from the stable actor identity. */
   requesterSessionKey?: string;
+  /** Live host-only ingress intent; never accepted from wire arguments. */
+  childSessionPublication?: import("../channels/message-access/child-session-publication.js").ChildSessionPublication;
 };
 
 /**
@@ -40,6 +42,7 @@ export function resolveOperatorSessionCreation(
   if (options.allowTrustedHint && agentRuntimeIdentity?.sessionSpawnContext) {
     const {
       requesterProfileId,
+      gitContributorProfileId,
       completionOwnerSessionKey,
       requesterSenderIsOwner,
       inheritedToolPolicy,
@@ -52,6 +55,7 @@ export function resolveOperatorSessionCreation(
       actor: { type: "agent", id: agentRuntimeIdentity.agentId },
       requesterSessionKey: agentRuntimeIdentity.sessionKey,
       ...(requesterProfileId ? { requesterProfileId } : {}),
+      ...(gitContributorProfileId ? { gitContributorProfileId } : {}),
       ...(completionOwnerSessionKey ? { completionOwnerSessionKey } : {}),
       requesterSenderIsOwner,
       inheritedToolPolicy,

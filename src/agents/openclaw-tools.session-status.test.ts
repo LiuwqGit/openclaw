@@ -11,6 +11,11 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
+import { prepareSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
+import {
+  createMockConfig,
+  fixedStoreConfig,
+} from "./openclaw-tools.session-status.test-support.js";
 
 const loadSessionStoreMock = vi.fn();
 const updateSessionStoreMock = vi.fn();
@@ -45,36 +50,7 @@ const emptyPluginMetadataSnapshot = {
 };
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
-const createMockConfig = () => ({
-  session: { mainKey: "main", scope: "per-sender" },
-  agents: {
-    defaults: {
-      model: { primary: "openai/gpt-5.4" },
-      models: {},
-    },
-  },
-  tools: {
-    agentToAgent: { enabled: false },
-  },
-});
-
 let mockConfig: Record<string, unknown> = createMockConfig();
-
-function fixedStoreConfig() {
-  return {
-    session: { mainKey: "main", scope: "global", store: "/tmp/shared-sessions.sqlite" },
-    agents: {
-      ownership: "explicit",
-      defaults: {
-        model: { primary: "openai/gpt-5.4" },
-        models: {},
-        sessionStore: { agentId: "ops" },
-      },
-      entries: { ops: {}, research: {} },
-    },
-    tools: { agentToAgent: { enabled: false } },
-  };
-}
 
 function createSessionsModuleMock() {
   const resolveMockStorePath = (_store: string | undefined, opts?: { agentId?: string }) =>
@@ -200,7 +176,7 @@ function createModelAuthModuleMock() {
   return {
     resolveEnvApiKey: resolveEnvApiKeyMock,
     resolveUsableCustomProviderApiKey: resolveUsableCustomProviderApiKeyMock,
-    resolveModelAuthMode: () => "api-key",
+    resolveModelAuthModeAsync: () => "api-key",
   };
 }
 
@@ -269,6 +245,11 @@ function createCommandsStatusRuntimeModuleMock() {
 }
 
 vi.mock("../config/sessions.js", createSessionsModuleMock);
+vi.mock("../config/sessions/session-accessor.entry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/sessions/session-accessor.entry.js")>()),
+  resolveSessionEntryCandidateTargetForRuntime:
+    createSessionsModuleMock().resolveSessionEntryCandidateTarget,
+}));
 vi.mock("../gateway/call.js", createGatewayCallModuleMock);
 vi.mock("./tools/in-process-gateway.js", () => ({
   callAgentToolGatewayRequest: (opts: unknown) => agentToolGatewayCallMock(opts),
@@ -301,6 +282,7 @@ vi.mock("../plugins/providers.runtime.js", () => ({
   resolvePluginProvidersCore: () => [],
 }));
 vi.mock("../agents/auth-profiles.js", createAuthProfilesModuleMock);
+// mock-isolation: Session status uses fixture auth labels without discovering host keys or accounts.
 vi.mock("../agents/model-auth.js", createModelAuthModuleMock);
 vi.mock("../infra/provider-usage.js", createProviderUsageModuleMock);
 vi.mock("../status/status-text.js", createCommandsStatusRuntimeModuleMock);
@@ -325,6 +307,7 @@ vi.mock("../sessions/session-state-events.js", () => ({
 let createSessionStatusTool: typeof import("./tools/session-status-tool.js").createSessionStatusTool;
 
 beforeAll(async () => {
+  await prepareSharedAuthStoreOwnership();
   ({ createSessionStatusTool } = await import("./tools/session-status-tool.js"));
 });
 
@@ -632,6 +615,91 @@ describe("session_status tool", () => {
     }
   });
 
+  it("reports session capabilities from the Gateway tool inventory on request", async () => {
+    resetSessionStore({ main: fixtureSession("s1") });
+    agentToolGatewayCallMock.mockImplementation((opts: { method?: string }) =>
+      opts.method === "tools.effective"
+        ? Promise.resolve({
+            agentId: "main",
+            profile: "coding",
+            groups: [
+              {
+                id: "core",
+                label: "Built-in tools",
+                source: "core",
+                tools: [
+                  {
+                    id: "exec",
+                    label: "Exec",
+                    description: "",
+                    rawDescription: "",
+                    source: "core",
+                  },
+                ],
+              },
+            ],
+            toolAccess: {
+              checked: "live-session",
+              profiles: [],
+              tools: [
+                { id: "exec", status: "available", reasons: [] },
+                {
+                  id: "browser",
+                  status: "excluded",
+                  reasons: [{ kind: "deny", label: "Denied by tools.deny", source: "tools.deny" }],
+                },
+              ],
+            },
+          })
+        : callGatewayMock(opts),
+    );
+
+    const tool = getSessionStatusTool();
+    const plain = await tool.execute("call-plain", {});
+    expect((plain.details as Record<string, unknown>).capabilities).toBeUndefined();
+    expect(agentToolGatewayCallMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ method: "tools.effective" }),
+    );
+
+    const result = await tool.execute("call-capabilities", { capabilities: true });
+    const text = (result.content?.[0] as { text?: string } | undefined)?.text ?? "";
+    expect(agentToolGatewayCallMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "tools.effective",
+        params: { agentId: "main", sessionKey: "main" },
+      }),
+    );
+    expect(result.details).toMatchObject({
+      capabilities: {
+        checked: "live-session",
+        available: ["exec"],
+        unavailable: [{ reason: "Denied by tools.deny", tools: ["browser"] }],
+      },
+    });
+    expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
+    expect(text).toContain("Capabilities (this session only");
+    expect(text).toContain("- Denied by tools.deny: browser");
+  });
+
+  it("keeps status usable when the capability inventory cannot be read", async () => {
+    resetSessionStore({ main: fixtureSession("s1") });
+    agentToolGatewayCallMock.mockImplementation((opts: { method?: string }) =>
+      opts.method === "tools.effective"
+        ? Promise.reject(new Error("missing scope: operator.read"))
+        : callGatewayMock(opts),
+    );
+
+    const tool = getSessionStatusTool();
+    const result = await tool.execute("call-capabilities-error", { capabilities: true });
+    const text = (result.content?.[0] as { text?: string } | undefined)?.text ?? "";
+    expect(result.details).toMatchObject({
+      ok: true,
+      capabilities: { checked: "unavailable", error: "missing scope: operator.read" },
+    });
+    expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
+    expect(text).toContain("not evidence that OpenClaw lacks a capability");
+  });
+
   it("returns same-agent group changesSince from main under tree visibility", async () => {
     const groupSessionKey = "agent:main:telegram:group:unspawned";
     resetSessionStore({
@@ -710,7 +778,6 @@ describe("session_status tool", () => {
         thinkingLevel: "off",
       },
       [mainKey]: fixtureSession("s-main", {
-        status: "running",
         thinkingLevel: "high",
       }),
     });
@@ -734,9 +801,7 @@ describe("session_status tool", () => {
         updatedAt: 5,
         status: "done",
       },
-      [mainKey]: fixtureSession("s-main", {
-        status: "running",
-      }),
+      [mainKey]: fixtureSession("s-main"),
     });
 
     mockConfig = { ...mockConfig, tools: { sessions: { visibility: "tree" } } };
@@ -858,9 +923,7 @@ describe("session_status tool", () => {
         updatedAt: 5,
         status: "done",
       },
-      [mainKey]: fixtureSession("s-main", {
-        status: "running",
-      }),
+      [mainKey]: fixtureSession("s-main"),
     });
 
     mockConfig = { ...mockConfig, tools: { sessions: { visibility: "tree" } } };

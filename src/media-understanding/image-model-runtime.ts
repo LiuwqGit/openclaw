@@ -1,4 +1,3 @@
-// Resolves image-capable model metadata and credential-bound runtime auth.
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveModelAsync } from "../agents/embedded-agent-runner/model.js";
 import { isMinimaxVlmModel } from "../agents/minimax-vlm.js";
@@ -20,6 +19,10 @@ import { providerUsesCredentialScopedModelMetadata } from "../agents/runtime-pla
 import { getModelRegistryRuntime } from "../agents/sessions/model-registry-runtime.js";
 import { bindModelLlmRuntime } from "../llm/model-runtime-binding.js";
 import type { Model } from "../llm/types.js";
+import {
+  attachProviderAuthAuthority,
+  getProviderAuthAuthority,
+} from "../plugins/provider-auth-authority.js";
 import {
   attachModelProviderRuntimePluginHandle,
   resolveProviderRuntimePluginHandle,
@@ -180,6 +183,7 @@ async function prepareResolvedImageRuntime(
   ) {
     return bindResolvedImageRuntime(params, "", bindPreparedModel(model));
   }
+  model = attachProviderAuthAuthority(model, getProviderAuthAuthority(apiKeyInfo));
   let apiKey = requireApiKey(apiKeyInfo, model.provider);
   const runtimeAuth = await prepareProviderRuntimeAuth({
     provider: model.provider,

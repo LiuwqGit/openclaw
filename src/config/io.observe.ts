@@ -2,13 +2,12 @@ import type fs from "node:fs";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isStateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
-  appendConfigAuditRecordSync,
+  enqueueConfigAuditRecord,
   captureConfigAuditAppender,
   createConfigObserveAuditRecord,
 } from "./io.audit.js";
 import {
   captureConfigHealthStateStore,
-  supersedeConfigHealthObservations,
   readConfigHealthStateFromStore,
   patchConfigHealthEntryToStore,
 } from "./io.health-state.js";
@@ -103,23 +102,13 @@ export async function observeConfigSnapshot(
     return;
   }
   assertCurrent?.();
-  const superseded = new Error("Config audit observation was superseded");
   try {
-    using health = captureConfigHealthStateStore(deps, snapshot.path, assertCurrent);
-    const appendAudit = captureConfigAuditAppender(deps, () => {
-      if (!health.isCurrent()) {
-        throw superseded;
-      }
-    });
+    const health = captureConfigHealthStateStore(deps, snapshot.path, assertCurrent);
+    const appendAudit = captureConfigAuditAppender(deps, health.assertCurrent);
     const stat = await deps.fs.promises.stat(snapshot.path).catch(() => null);
-    if (!health.isCurrent()) {
-      return;
-    }
+    health.assertCurrent();
     const current = createObservedFingerprint(snapshot, stat);
     const healthSnapshot = await health.read();
-    if (!healthSnapshot) {
-      return;
-    }
     const healthState = healthSnapshot.state;
     const backupPath = `${snapshot.path}.bak`;
     const initialEntry = readConfigHealthEntry(healthState, snapshot.path);
@@ -127,9 +116,7 @@ export async function observeConfigSnapshot(
       initialEntry.lastKnownGood ??
       (await readConfigFingerprintForPath(deps, backupPath)) ??
       undefined;
-    if (!health.isCurrent()) {
-      return;
-    }
+    health.assertCurrent();
     const { entry, baseline, suspicious } = resolveObservation({
       snapshot,
       current,
@@ -149,9 +136,7 @@ export async function observeConfigSnapshot(
     }
     const backup =
       (baseline?.hash ? baseline : null) ?? (await readConfigFingerprintForPath(deps, backupPath));
-    if (!health.isCurrent()) {
-      return;
-    }
+    health.assertCurrent();
     deps.logger.warn(`Config observe anomaly: ${snapshot.path} (${suspicious.join(", ")})`);
     await appendAudit(
       createConfigObserveAuditRecord({
@@ -165,7 +150,7 @@ export async function observeConfigSnapshot(
     );
     await health.update({ lastObservedSuspiciousSignature: signature }, healthSnapshot);
   } catch (error) {
-    if (error === superseded || isStateDatabaseReadAdmissionInvalidatedError(error)) {
+    if (isStateDatabaseReadAdmissionInvalidatedError(error)) {
       return;
     }
     throw error;
@@ -195,23 +180,9 @@ export type ConfigHealthBaselineCapture = {
   previousSuspiciousSignature: string | null;
 };
 
-/**
- * Bounded attempts for write-owned health transitions. An ordinary observed read
- * can supersede the scope a transition captured while it awaits the worker, and
- * a competing observation can win the conditional write the transition then
- * issues; the accepted write this bookkeeping belongs to has already succeeded,
- * so the transition re-captures a fresh scope and re-reads the persisted
- * snapshot instead of being discarded. The bound keeps a stream of competing
- * observations from spinning forever.
- */
+// Retry only lost conditional health updates; a newer unrelated baseline always wins.
 const CONFIG_HEALTH_TRANSITION_ATTEMPTS = 4;
 
-/**
- * Run a write-owned config-health transition until it settles. The callback
- * re-evaluates its guard against the freshly read snapshot and returns
- * `"retry"` whenever a supersession or a lost compare-and-set means the state
- * it observed is no longer authoritative.
- */
 async function settleConfigHealthTransition(
   deps: NormalizedConfigIoDeps,
   configPath: string,
@@ -221,13 +192,8 @@ async function settleConfigHealthTransition(
   ) => Promise<"settled" | "retry">,
 ): Promise<boolean> {
   for (let attempt = 0; attempt < CONFIG_HEALTH_TRANSITION_ATTEMPTS; attempt += 1) {
-    using store = captureConfigHealthStateStore(deps, configPath);
+    const store = captureConfigHealthStateStore(deps, configPath);
     const healthSnapshot = await store.read();
-    if (!healthSnapshot) {
-      // Superseded by a competing observation while awaiting the worker: the
-      // write still stands, so capture a fresh scope and re-evaluate.
-      continue;
-    }
     if ((await transition(store, healthSnapshot)) === "settled") {
       return true;
     }
@@ -235,38 +201,22 @@ async function settleConfigHealthTransition(
   return false;
 }
 
-/**
- * Capture the pre-publication last-known-good baseline on the worker-backed
- * health owner. The writer calls this before publishing the candidate file;
- * {@link advanceConfigHealthBaselineForAcceptedWrite} settles the capture once
- * the write commits. Reading the baseline only after publication would let an
- * intervening observed read (which records the freshly published candidate as
- * healthy) replace the pre-write baseline the compensation must restore.
- * Best-effort: health metadata failures never fail the accepted write, and
- * returns null when no baseline exists yet (nothing to advance from).
- */
+// Capture before file publication: an intervening observer can record the candidate.
 export async function captureConfigHealthBaselineForWrite(
   deps: NormalizedConfigIoDeps,
   configPath: string,
 ): Promise<ConfigHealthBaselineCapture | null> {
   try {
-    let capture: ConfigHealthBaselineCapture | null = null;
-    const settled = await settleConfigHealthTransition(
-      deps,
-      configPath,
-      async (_store, healthSnapshot) => {
-        const entry = readConfigHealthEntry(healthSnapshot.state, configPath);
-        capture = entry.lastKnownGood
-          ? {
-              configPath,
-              previousLastKnownGood: entry.lastKnownGood,
-              previousSuspiciousSignature: entry.lastObservedSuspiciousSignature ?? null,
-            }
-          : null;
-        return "settled";
-      },
-    );
-    return settled ? capture : null;
+    const store = captureConfigHealthStateStore(deps, configPath);
+    const snapshot = await store.read();
+    const entry = readConfigHealthEntry(snapshot.state, configPath);
+    return entry.lastKnownGood
+      ? {
+          configPath,
+          previousLastKnownGood: entry.lastKnownGood,
+          previousSuspiciousSignature: entry.lastObservedSuspiciousSignature ?? null,
+        }
+      : null;
   } catch (error) {
     deps.logger.warn(
       `Config last-known-good baseline capture failed: ${formatErrorMessage(error)}`,
@@ -275,30 +225,13 @@ export async function captureConfigHealthBaselineForWrite(
   }
 }
 
-/**
- * Advance the last-known-good baseline after the config owner accepts a write.
- * Accepted writes include formatting normalization that shrinks raw bytes and
- * intentionally permitted size drops (`allowConfigSizeDrop`); the writer
- * validated and committed them, so their result becomes the new promotion
- * baseline. Stub-shaped results (missing meta, missing gateway mode,
- * update-channel-only root) keep the older baseline so external truncations
- * stay rejected by promotion and observation. The capture must come from
- * {@link captureConfigHealthBaselineForWrite} before the write published its
- * candidate. Persistence runs on the worker-backed health owner, so ordinary
- * live writes never execute SQLite on the Gateway thread. Best-effort: health
- * metadata failures never fail the accepted write, and the compensation is
- * still published when the update cannot land because the conditional restore
- * skips it unless the persisted baseline matches the candidate. Returns the
- * compensation record the writer uses to restore the baseline if the committed
- * write later rolls back. Absorbs ordinary observation supersession by
- * re-reading and re-applying its guard, so the accepted write's baseline is
- * never silently dropped, while a baseline that is neither the pre-write value
- * nor this candidate (a newer decision) stays preserved.
- */
+// Accepted formatting/size reductions may advance the baseline, but stub shapes may not.
+// Health bookkeeping is worker-backed and best-effort; retain compensation for rollback.
 export async function advanceConfigHealthBaselineForAcceptedWrite(
   deps: NormalizedConfigIoDeps,
   capture: ConfigHealthBaselineCapture | null,
   params: {
+    sourceSnapshot: ConfigFileSnapshot;
     raw: string;
     parsed: unknown;
     resolved?: unknown;
@@ -333,6 +266,32 @@ export async function advanceConfigHealthBaselineForAcceptedWrite(
       previousLastKnownGood: baseline.previousLastKnownGood,
       previousSuspiciousSignature: baseline.previousSuspiciousSignature,
     };
+    if (suspicious.length > 0) {
+      // An accepted edit may shrink healthy input, but must not legitimize loss
+      // already present before this write. Keep compensation for rollback even
+      // when the prior anomaly prevents advancing the recovery baseline.
+      const source = params.sourceSnapshot;
+      if (typeof source.raw !== "string") {
+        return compensation;
+      }
+      const before = createConfigHealthFingerprint({
+        raw: source.raw,
+        parsed: source.parsed,
+        resolved: source.resolved,
+        stat: null,
+      });
+      if (
+        resolveConfigObserveSuspiciousReasons({
+          bytes: before.bytes,
+          hasMeta: before.hasMeta,
+          gatewayMode: before.gatewayMode,
+          parsed: source.parsed,
+          lastKnownGood: baseline.previousLastKnownGood,
+        }).length > 0
+      ) {
+        return compensation;
+      }
+    }
     const settled = await settleConfigHealthTransition(
       deps,
       baseline.configPath,
@@ -355,9 +314,7 @@ export async function advanceConfigHealthBaselineForAcceptedWrite(
           { lastKnownGood: current, lastObservedSuspiciousSignature: null },
           healthSnapshot,
         );
-        // A competing observation can still supersede the scope at the worker
-        // or win the conditional write; re-read and re-evaluate rather than
-        // dropping the accepted write's baseline.
+        // The worker returns no conditional-write receipt; reread to detect a lost update.
         const after = await store.read();
         if (!after) {
           return "retry";
@@ -383,19 +340,7 @@ export async function advanceConfigHealthBaselineForAcceptedWrite(
   }
 }
 
-/**
- * Restore the last-known-good baseline captured before an accepted write when
- * that write's runtime activation fails and the committed file rolls back.
- * The rolled-back bytes are the pre-write config, so keeping the candidate
- * baseline would make the next promotion reject the valid restored file as a
- * size drop. Newer observations win: the restore is skipped when the persisted
- * baseline no longer matches the candidate this writer published (a candidate
- * recorded by an intervening observed read matches by raw hash and is still
- * restored). Best-effort: health metadata failures never fail the rollback.
- * Absorbs ordinary observation supersession the same way as the accepted-write
- * advance, so a superseded rollback compensation still lands while newer
- * baselines stay preserved.
- */
+// Only compensate this candidate; preserve a newer observation or anomaly marker.
 export async function restoreConfigHealthBaselineForRolledBackWrite(
   deps: NormalizedConfigIoDeps,
   compensation: ConfigHealthBaselineCompensation | null,
@@ -454,7 +399,6 @@ export function observeConfigSnapshotSync(
   if (!snapshot.exists || typeof snapshot.raw !== "string") {
     return;
   }
-  supersedeConfigHealthObservations(deps, snapshot.path);
   const stat = deps.fs.statSync(snapshot.path, { throwIfNoEntry: false }) ?? null;
   const current = createObservedFingerprint(snapshot, stat);
   const healthState = readConfigHealthStateFromStore(deps);
@@ -482,7 +426,7 @@ export function observeConfigSnapshotSync(
   const backup =
     (baseline?.hash ? baseline : null) ?? readConfigFingerprintForPathSync(deps, backupPath);
   deps.logger.warn(`Config observe anomaly: ${snapshot.path} (${suspicious.join(", ")})`);
-  appendConfigAuditRecordSync({
+  enqueueConfigAuditRecord({
     env: deps.env,
     homedir: deps.homedir,
     record: createConfigObserveAuditRecord({

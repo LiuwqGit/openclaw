@@ -1,5 +1,6 @@
 import {
   buildGatewayConnectAuth,
+  buildDeviceAuthPayload,
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
   resolveGatewayConnectScopes,
@@ -24,10 +25,11 @@ import type {
   NativeGatewayConnectAuth,
 } from "../app/native-gateway-auth.ts";
 import { i18n } from "../i18n/index.ts";
-import { loadOrCreateDeviceIdentity } from "../lib/nodes/index.ts";
-import { buildGatewayConnectDevice } from "./gateway-connect-device.ts";
+import { loadOrCreateDeviceIdentity, signDevicePayload } from "../lib/nodes/index.ts";
 
 export type GatewayBrowserConnectOptions = {
+  /** Keep complete roster messages for event listeners already present at connect. */
+  includeSessionMessageBodies?: boolean;
   url: string;
   nativeConnectAuth?: NativeGatewayConnectAuth;
   token?: string;
@@ -166,17 +168,33 @@ export async function buildBrowserGatewayConnectPlan({
       storedScopes: selectedAuth.storedScopes,
       defaultScopes: CONTROL_UI_OPERATOR_SCOPES,
     });
-  const device =
-    nativeAuth?.device ??
-    (await buildGatewayConnectDevice({
-      deviceIdentity,
-      client,
+  let device = nativeAuth?.device;
+  if (deviceIdentity) {
+    if (connectChallengeTs === null) {
+      throw new Error("gateway connect challenge timestamp invalid");
+    }
+    // The Control UI alone supports pre-challenge Gateways; that timeout fallback has no server time.
+    const signedAt = connectChallengeTs ?? Date.now();
+    const nonce = connectNonce ?? "";
+    const payload = buildDeviceAuthPayload({
+      deviceId: deviceIdentity.deviceId,
+      clientId: client.id,
+      clientMode: client.mode,
       role,
       scopes,
-      authToken: selectedAuth.signatureToken,
-      connectNonce,
-      connectChallengeTs,
-    }));
+      signedAtMs: signedAt,
+      token: selectedAuth.signatureToken ?? null,
+      nonce,
+    });
+    const signature = await signDevicePayload(deviceIdentity.privateKey, payload);
+    device = {
+      id: deviceIdentity.deviceId,
+      publicKey: deviceIdentity.publicKey,
+      signature,
+      signedAt,
+      nonce,
+    };
+  }
   return {
     generation,
     params: {
@@ -186,9 +204,15 @@ export async function buildBrowserGatewayConnectPlan({
       role,
       scopes,
       device,
+      ...(!nativeAuth && opts.includeSessionMessageBodies
+        ? { includeSessionMessageBodies: true }
+        : {}),
       // Tests bind these compact wire literals to the canonical capability registry.
       ...resolveModelCatalogConnect({
-        modelCatalog: opts.modelCatalog,
+        // Reading the target reserves its bootstrap wait, so negotiate support first.
+        get modelCatalog() {
+          return opts.modelCatalog;
+        },
         serverCapabilities,
         caps: [
           "agent-kind",
@@ -199,9 +223,17 @@ export async function buildBrowserGatewayConnectPlan({
           "terminal-upload-path-style",
           "tool-events",
           "chat-only-assistant-text",
+          "hello-health-on-demand",
+          "health-summary",
+          "hello-presence-self",
           "session-scoped-events",
+          "presence-deltas",
+          ...(!nativeAuth
+            ? ["session-row-deltas", "session-event-field-refs", "roster-message-bodies-optional"]
+            : []),
           "inline-widgets",
           "model-selection-policy",
+          "model-wait-status",
           "ui-commands",
           "ultrafast",
           "usage-refreshing",

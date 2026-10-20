@@ -1,7 +1,11 @@
 import path from "node:path";
 import { root } from "../infra/fs-safe.js";
 import { captureConfigHealthStateStore } from "./io.health-state.js";
-import { commitRecoveryFileIfCurrent, type ObserveRecoveryDeps } from "./io.observe-recovery.js";
+import {
+  commitConfigRecoveryFile,
+  createConfigRecoverySourceGuard,
+} from "./io.observe-recovery-effects.js";
+import type { ObserveRecoveryDeps } from "./io.observe-recovery.js";
 import { createConfigHealthFingerprint, readConfigHealthEntry } from "./io.observe-state.js";
 import { resolveConfigObserveSuspiciousReasons } from "./io.observe-suspicious.js";
 import { chmodConfigBestEffort } from "./io.write-safety.js";
@@ -29,11 +33,8 @@ export async function promoteConfigSnapshotToLastKnownGoodCore(params: {
     );
     return false;
   }
-  using health = captureConfigHealthStateStore(deps, snapshot.path);
+  const health = captureConfigHealthStateStore(deps, snapshot.path);
   const healthSnapshot = await health.read();
-  if (!healthSnapshot) {
-    return false;
-  }
   const stat = await deps.fs.promises.stat(snapshot.path).catch(() => null);
   const now = new Date().toISOString();
   const current = createConfigHealthFingerprint({
@@ -44,9 +45,7 @@ export async function promoteConfigSnapshotToLastKnownGoodCore(params: {
     observedAt: now,
   });
   const lastGoodPath = `${snapshot.path}.last-good`;
-  if (!health.isCurrent()) {
-    return false;
-  }
+  health.assertCurrent();
   const entry = readConfigHealthEntry(healthSnapshot.state, snapshot.path);
   const suspiciousReasons = resolveConfigObserveSuspiciousReasons({
     bytes: current.bytes,
@@ -62,24 +61,22 @@ export async function promoteConfigSnapshotToLastKnownGoodCore(params: {
     return false;
   }
   const raw = snapshot.raw;
-  if (
-    !(await commitRecoveryFileIfCurrent({
-      health,
-      write: async (assertCurrent) => {
-        const directory = await root(path.dirname(lastGoodPath));
-        await directory.write(path.basename(lastGoodPath), raw, {
-          mkdir: false,
-          mode: 0o600,
-          durable: false,
-          encoding: "utf8",
-          overwrite: true,
-          assertBeforeMutation: assertCurrent,
-        });
-      },
-    }))
-  ) {
-    return false;
-  }
+  const assertUnchanged = createConfigRecoverySourceGuard(deps, [[snapshot.path, raw, stat]]);
+  await commitConfigRecoveryFile({
+    health,
+    beforeCommit: assertUnchanged,
+    write: async (assertCurrent) => {
+      const directory = await root(path.dirname(lastGoodPath));
+      await directory.write(path.basename(lastGoodPath), raw, {
+        mkdir: false,
+        mode: 0o600,
+        durable: false,
+        encoding: "utf8",
+        overwrite: true,
+        assertBeforeMutation: assertCurrent,
+      });
+    },
+  });
   await chmodConfigBestEffort({
     deps,
     configPath: lastGoodPath,

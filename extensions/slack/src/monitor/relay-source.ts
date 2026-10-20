@@ -194,8 +194,7 @@ function runRelayWebSocket(params: {
         });
     };
     const onError = (error: Error) => {
-      cleanup();
-      reject(error);
+      settleReject(error);
     };
     const onClose = (code: number, reason: Buffer) => {
       const closeReason = formatRelayClose(code, reason);
@@ -285,9 +284,8 @@ export function parseRelayFrame(data: RawData): unknown {
 }
 
 function extractRelaySlackMessageEvent(
-  frame: unknown,
+  record: Record<string, unknown> | undefined,
 ): { deliveryId: string; message: SlackMessageEvent; route: SlackRelayRoute } | undefined {
-  const record = asOptionalRecord(frame);
   if (!record || record.type !== "slack_event") {
     return undefined;
   }

@@ -182,6 +182,7 @@ describe("config observe recovery promotion", () => {
     });
     const capture = await captureConfigHealthBaselineForWrite(deps, configPath);
     const compensation = await advanceConfigHealthBaselineForAcceptedWrite(deps, capture, {
+      sourceSnapshot: healthy,
       raw: grown.raw,
       parsed: grown.parsed,
       resolved: grown.resolved,
@@ -328,6 +329,7 @@ describe("config observe recovery promotion", () => {
     });
     const capture = await captureConfigHealthBaselineForWrite(deps, configPath);
     const compensation = await advanceConfigHealthBaselineForAcceptedWrite(deps, capture, {
+      sourceSnapshot: healthy,
       raw: grown.raw,
       parsed: grown.parsed,
       resolved: grown.resolved,
@@ -385,6 +387,52 @@ describe("last-known-good promotion after accepted writes", () => {
     fs.writeFileSync(configPath, raw, "utf8");
     return raw;
   }
+
+  it("does not bless a pre-existing truncation through an ordinary accepted edit", async () => {
+    const { configPath, env, root } = acceptedWriteFixture();
+    const io = createConfigIO({
+      env,
+      configPath,
+      homedir: () => root,
+      observe: true,
+      logger: { warn: vi.fn(), error: vi.fn() },
+    });
+    const healthyRaw = seedConfig(configPath, {
+      meta: { lastTouchedVersion: "2026.4.22" },
+      gateway: {
+        mode: "local",
+        trustedProxies: Array.from({ length: 80 }, (_, index) => `192.0.2.${index}`),
+      },
+    });
+    const healthy = await io.readConfigFileSnapshot();
+    await expect(io.promoteConfigSnapshotToLastKnownGood(healthy)).resolves.toBe(true);
+
+    // Retaining metadata and mode leaves only the size anomaly. The edit itself
+    // does not shrink this already-truncated input and needs no destructive flag.
+    seedConfig(configPath, {
+      meta: { lastTouchedVersion: "2026.4.22" },
+      gateway: { mode: "local" },
+    });
+    const truncated = await io.readConfigFileSnapshot();
+    await expect(io.promoteConfigSnapshotToLastKnownGood(truncated)).resolves.toBe(false);
+    await io.writeConfigFile(
+      { ...truncated.config, gateway: { ...truncated.config.gateway, port: 19187 } },
+      { baseSnapshot: truncated },
+    );
+    const edited = await io.readConfigFileSnapshot();
+    expect(edited.config.gateway?.port).toBe(19187);
+    await expect(io.promoteConfigSnapshotToLastKnownGood(edited)).resolves.toBe(false);
+    expect(fs.readFileSync(configPath + ".last-good", "utf8")).toBe(healthyRaw);
+
+    fs.writeFileSync(configPath, "{ gateway: { mode: 123 } }\n", "utf8");
+    await expect(
+      io.recoverConfigFromLastKnownGood({
+        snapshot: await io.readConfigFileSnapshot(),
+        reason: "test-edited-truncation",
+      }),
+    ).resolves.toBe(true);
+    expect(fs.readFileSync(configPath, "utf8")).toBe(healthyRaw);
+  });
 
   it("advances last-known-good after an accepted intentional size-drop write", async () => {
     const { configPath, io } = acceptedWriteFixture();
@@ -483,7 +531,7 @@ describe("last-known-good promotion after accepted writes", () => {
     expect(fs.readFileSync(configPath, "utf8")).toBe(canonicalRaw);
   });
 
-  it("settles last-known-good advancement superseded by an observed read", async () => {
+  it("keeps an accepted write promotable when observed during baseline advancement", async () => {
     const { configPath, env, io, root } = acceptedWriteFixture();
     const lastGoodPath = `${configPath}.last-good`;
     const original = {
@@ -508,7 +556,7 @@ describe("last-known-good promotion after accepted writes", () => {
       logger: { warn: vi.fn(), error: vi.fn() },
     });
     const capture = healthOwner.captureConfigHealthStateStore;
-    let superseded = false;
+    let observedDuringAdvance = false;
     const spy = vi
       .spyOn(healthOwner, "captureConfigHealthStateStore")
       .mockImplementation((...args) => {
@@ -518,13 +566,13 @@ describe("last-known-good promotion after accepted writes", () => {
           async read() {
             // An ordinary observed read lands while the writer's baseline
             // advance awaits its worker read: it records the published canonical
-            // candidate as a size-drop anomaly and supersedes the advance's scope.
+            // candidate as a size-drop anomaly before the accepted-write update.
             if (
-              !superseded &&
+              !observedDuringAdvance &&
               args[1] === configPath &&
               fs.readFileSync(configPath, "utf8") !== verboseRaw
             ) {
-              superseded = true;
+              observedDuringAdvance = true;
               observeConfigSnapshotSync(healthDeps, await io.readConfigFileSnapshot());
             }
             return store.read();
@@ -541,9 +589,8 @@ describe("last-known-good promotion after accepted writes", () => {
     }
 
     const canonicalRaw = fs.readFileSync(configPath, "utf8");
-    expect(superseded).toBe(true);
-    // The superseded advance settled on a fresh scope, so the next startup
-    // promotes the accepted edit instead of freezing the verbose baseline.
+    expect(observedDuringAdvance).toBe(true);
+    // The accepted edit stays promotable despite the intervening observation.
     const editedSnapshot = await io.readConfigFileSnapshot();
     await expect(io.promoteConfigSnapshotToLastKnownGood(editedSnapshot)).resolves.toBe(true);
     expect(fs.readFileSync(lastGoodPath, "utf8")).toBe(canonicalRaw);

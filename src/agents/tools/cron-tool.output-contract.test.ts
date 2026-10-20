@@ -1,8 +1,12 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Value } from "typebox/value";
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { typeCheckSources } from "../../../test/helpers/typescript.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { clearCronJobActive, markCronJobActive } from "../../cron/active-jobs.js";
 import { CronService } from "../../cron/service.js";
 import { createCronStoreHarness, createNoopLogger } from "../../cron/service.test-harness.js";
@@ -20,6 +24,7 @@ import {
   waitUntilCompleted,
 } from "../code-mode.test-support.js";
 import { createCronTool } from "./cron-tool.js";
+import * as gatewayModule from "./gateway.js";
 
 const job: CronJob = {
   id: "invoice-check",
@@ -31,7 +36,7 @@ const job: CronJob = {
   sessionTarget: "main",
   wakeMode: "next-heartbeat",
   payload: { kind: "systemEvent", text: "Check unpaid invoices" },
-  state: {},
+  state: { scheduleErrorCount: 3, lastError: "schedule error: bad cron expr" },
 };
 const compactSourceJob: CronJob = {
   ...job,
@@ -87,17 +92,10 @@ function createCronService(storePath: string) {
 
 describe("automations output contract", () => {
   const { makeStorePath } = createCronStoreHarness({ prefix: "cron-code-mode-output-" });
-  it("accepts stored scheduler diagnostics (#157477)", async () => {
-    const tool = createCronTool(undefined, {
-      callGatewayTool: vi.fn().mockResolvedValue({
-        ...job,
-        state: { scheduleErrorCount: 3, lastError: "schedule error: bad cron expr" },
-      }),
-    });
-    const result = await tool.execute("diagnostics", { action: "get", jobId: job.id });
-    expect(Value.Errors(expectDefined(tool.outputSchema, "output schema"), result.details)).toEqual(
-      [],
-    );
+
+  beforeEach(() => {
+    setRuntimeConfigSnapshot({});
+    onTestFinished(clearRuntimeConfigSnapshot);
   });
 
   it.each(["current"] as const)(
@@ -117,7 +115,9 @@ describe("automations output contract", () => {
       const activeJob = await cron.add(input);
       const marker = markCronJobActive(activeJob.id);
       const gatewayCall = vi.fn().mockImplementation(async () => await cron.remove(activeJob.id));
-      const tool = createCronTool(undefined, { callGatewayTool: gatewayCall });
+      const gatewaySpy = vi.spyOn(gatewayModule, "callGatewayTool").mockImplementation(gatewayCall);
+      onTestFinished(() => gatewaySpy.mockRestore());
+      const tool = createCronTool();
       const h = createCodeModeHarness();
       applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, tool] });
       try {
@@ -162,7 +162,9 @@ describe("automations output contract", () => {
         jobs: [{ ...job, effectiveAgentId: "main" }],
         deliveryPreviews: { [job.id]: deliveryPreview },
       });
-    const tool = createCronTool(undefined, { callGatewayTool: gatewayCall });
+    const gatewaySpy = vi.spyOn(gatewayModule, "callGatewayTool").mockImplementation(gatewayCall);
+    onTestFinished(() => gatewaySpy.mockRestore());
+    const tool = createCronTool();
     const result = await tool.execute("call-full", { action: "list" });
     expect(gatewayCall).toHaveBeenCalledTimes(2);
     expect(
@@ -180,7 +182,9 @@ describe("automations output contract", () => {
         }),
       )
       .mockResolvedValueOnce({ ok: true, enqueued: true, runId: "manual:job:1" });
-    const tool = createCronTool(undefined, { callGatewayTool: gatewayCall });
+    const gatewaySpy = vi.spyOn(gatewayModule, "callGatewayTool").mockImplementation(gatewayCall);
+    onTestFinished(() => gatewaySpy.mockRestore());
+    const tool = createCronTool();
     const result = await tool.execute("call-run", {
       action: "run",
       jobId: "job",
@@ -220,7 +224,9 @@ describe("automations output contract", () => {
       }
       return replies[method];
     });
-    const tool = createCronTool(undefined, { callGatewayTool: gatewayCall });
+    const gatewaySpy = vi.spyOn(gatewayModule, "callGatewayTool").mockImplementation(gatewayCall);
+    onTestFinished(() => gatewaySpy.mockRestore());
+    const tool = createCronTool();
     applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, tool] });
     const result = await runUntilCompleted({
       execTool: expectDefined(h.tools[0], "Code Mode exec"),
@@ -239,9 +245,10 @@ async function consume() {
   const jobCount = status.jobs;
   const details = await automations({ action: "get", jobId: "invoice-check" });
   const name = details.name;
+  const scheduleErrorCount = details.state.scheduleErrorCount;
   const runs = await automations({ action: "runs", jobId: details.id });
   const summaries = runs.entries.map(entry => entry.summary);
-  return { names, next, enabled, jobCount, name, summaries };
+  return { names, next, enabled, jobCount, name, scheduleErrorCount, summaries };
 }
 `;
     const fileName = "/automations-consumer.ts";
@@ -263,6 +270,11 @@ async function checkContracts(action: "list" | "runs", input: Parameters<typeof 
   added.id;
   const addedJob = "job" in added ? added.job : added;
   const id: string = addedJob.id;
+  const updated = await automations({ action: "update", jobId: id, job: { enabled: false } });
+  const warning: string | undefined = updated.deliveryPreview?.detail;
+  const details = await automations({ action: "get", jobId: id });
+  // @ts-expect-error Get does not return a write-time delivery preview.
+  details.deliveryPreview;
   const run = await automations({ action: "run", jobId: id });
   if (!run.ok) {
     const instance: string | undefined = run.processInstanceId;
@@ -292,6 +304,7 @@ async function checkContracts(action: "list" | "runs", input: Parameters<typeof 
         enabled: true,
         jobCount: 1,
         name: job.name,
+        scheduleErrorCount: 3,
         summaries: ["Three unpaid invoices"],
       },
     });

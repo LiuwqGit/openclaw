@@ -81,12 +81,17 @@ field map and defaults.
 OpenClaw only accepts configurations that fully match the schema. Unknown keys, malformed types, or invalid values cause the Gateway to **refuse to start**. Run `openclaw doctor --fix` to repair legacy keys before starting the Gateway. The only root-level exception is `$schema` (string), so editors can attach JSON Schema metadata.
 </Warning>
 
-`openclaw config schema` prints the canonical JSON Schema used by Control UI
+`openclaw config schema` prints the authoritative JSON Schema used by Control UI
 and validation. `config.schema.lookup` fetches a single path-scoped node plus
 child summaries for drill-down tooling. Field `title`/`description` docs metadata
 carries through nested objects, wildcard (`*`), array-item (`[]`), and `anyOf`/
 `oneOf`/`allOf` branches. Runtime plugin and channel schemas merge in when the
 manifest registry is loaded.
+
+Use `config.get` to read a redacted config snapshot without building the form
+schema. Request `config.schema` or `config.schema.lookup` when you need field
+metadata. The Gateway shares these results across clients and refreshes them
+when the active config or plugin generation changes.
 
 Every config leaf has a common or advanced presentation tier in `uiHints`.
 `advanced: false` marks common settings and `advanced: true` marks advanced
@@ -94,7 +99,7 @@ settings. A leaf inherits the nearest ancestor tier when it has no direct hint.
 Paths with no declared ancestor default to advanced. This affects presentation
 only, not validation, defaults, reload behavior, or whether the key can be set.
 
-Startup migration uses the same deterministic, prompt-free transforms as `openclaw doctor --fix` and writes only when the entire migrated config validates, including plugins. The previous config stays in the `.bak` ring. Configs using `$include`, Nix-managed configs, and configs written by a newer OpenClaw version are not automatically migrated. See [Legacy config key migrations](/gateway/doctor#detailed-behavior-and-rationale) for the conditions and fallback.
+Startup migration uses the same fixed, prompt-free transforms as `openclaw doctor --fix` and writes only when the entire migrated config validates, including plugins. The previous config stays in the `.bak` ring. Configs using `$include`, Nix-managed configs, and configs written by a newer OpenClaw version are not automatically migrated. See [Legacy config key migrations](/gateway/doctor#detailed-behavior-and-rationale) for the conditions and fallback.
 
 When validation still fails:
 
@@ -116,6 +121,10 @@ The Gateway blocks writes that look like accidental clobbers - dropping the effe
 allows destructive changes. Mode checks resolve `$include` and environment references
 first. Missing `meta` is recorded as a write anomaly. Promotion to last-known-good is
 skipped when a candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
+Suspicious external reductions and stub-shaped snapshots also leave the trusted
+recovery copy unchanged during startup and hot reload. An ordinary accepted edit
+to an already-truncated file does not approve that earlier loss for replacing the
+backup, so Doctor can still restore the intact configuration.
 
 ## Configuration pages
 

@@ -8,15 +8,14 @@ import {
 } from "../plugins/manifest-command-aliases.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { captureEnv } from "../test-utils/env.js";
+import { rewriteUpdateFlagArgv } from "./argv.js";
 import {
   resolveGatewayCatalogCommandPath,
   resolveGatewayRunPreBootstrapOptions,
 } from "./gateway-run-argv.js";
 import {
   isGatewayRunFastPathArgv,
-  rewriteUpdateFlagArgv,
   resolveMissingPluginCommandMessage,
-  shouldStartProxyForCli,
   shouldUseRootHelpFastPath,
 } from "./run-main-policy.js";
 import { runCli } from "./run-main.js";
@@ -34,9 +33,9 @@ const sqliteAdmission = vi.hoisted(() => ({
   initialize: vi.fn<() => Promise<void>>().mockResolvedValue(),
   selectGatewayEnvironment: vi.fn<() => Promise<boolean>>().mockResolvedValue(true),
 }));
-vi.mock("../infra/bun-sqlite-library.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/bun-sqlite-library.js")>()),
-  initializeSqliteRuntimeCapabilities: sqliteAdmission.initialize,
+vi.mock("../infra/sqlite-runtime-initialize.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/sqlite-runtime-initialize.js")>()),
+  initializeSqliteRuntime: sqliteAdmission.initialize,
 }));
 vi.mock("./gateway-cli/run.js", () => ({ runGatewayCommand }));
 // Keep Commander parsing independent of native startup; run-main.exit and
@@ -192,16 +191,6 @@ describe("root startup policy", () => {
     },
   ])("rewrites only a root update flag: $args", ({ args, expected }) => {
     expect(rewriteUpdateFlagArgv(cliArgs(...args))).toEqual(cliArgs(...expected));
-  });
-
-  it("skips proxy startup before SQLite maintenance", () => {
-    expect(shouldStartProxyForCli(cliArgs("doctor", "--state-sqlite", "compact", "--json"))).toBe(
-      false,
-    );
-    expect(shouldStartProxyForCli(cliArgs("doctor", "--state-sqlite=compact", "--json"))).toBe(
-      false,
-    );
-    expect(shouldStartProxyForCli(cliArgs("doctor", "--lint"))).toBe(true);
   });
 
   it("uses root help only for root invocations and aliases", () => {

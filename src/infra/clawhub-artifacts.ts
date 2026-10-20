@@ -1,4 +1,3 @@
-// ClawHub package, skill, resolver URL, and GitHub archive downloads.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
@@ -8,7 +7,6 @@ import {
   readClawHubBytes,
   withClawHubResponse,
   resolveClawHubBaseUrl,
-  type ClawHubFetch,
   type ClawHubFetchOptions,
   type ClawHubRequestParams,
 } from "./clawhub-client.js";
@@ -30,24 +28,6 @@ export type ClawHubDownloadResult = {
   npmTarballName?: string;
   cleanup: () => Promise<void>;
 };
-
-function normalizeGitHubCodeloadBaseUrl(): string {
-  const value =
-    normalizeOptionalString(process.env.CLAWHUB_GITHUB_CODELOAD_BASE_URL) ||
-    DEFAULT_GITHUB_CODELOAD_URL;
-  return value.replace(/\/+$/, "") || DEFAULT_GITHUB_CODELOAD_URL;
-}
-
-function buildGitHubZipUrl(repo: string, commit: string): string {
-  const url = new URL(`${normalizeGitHubCodeloadBaseUrl()}/`);
-  const basePath = url.pathname.replace(/\/+$/, "");
-  const repoPath = repo
-    .split("/")
-    .map((segment) => encodeURIComponent(segment))
-    .join("/");
-  url.pathname = `${basePath}/${repoPath}/zip/${encodeURIComponent(commit)}`;
-  return url.toString();
-}
 
 function safePackageTarballName(name: string, version: string): string {
   const base = name
@@ -242,13 +222,22 @@ export async function downloadClawHubGitHubSkillArchive(params: {
   repo: string;
   commit: string;
   timeoutMs?: number;
-  fetchImpl?: ClawHubFetch;
 }): Promise<ClawHubDownloadResult> {
-  const downloadUrl = buildGitHubZipUrl(params.repo, params.commit);
+  const configuredBaseUrl =
+    normalizeOptionalString(process.env.CLAWHUB_GITHUB_CODELOAD_BASE_URL) ||
+    DEFAULT_GITHUB_CODELOAD_URL;
+  const baseUrl = configuredBaseUrl.replace(/\/+$/, "") || DEFAULT_GITHUB_CODELOAD_URL;
+  const downloadUrl = new URL(`${baseUrl}/`);
+  const basePath = downloadUrl.pathname.replace(/\/+$/, "");
+  const repoPath = params.repo
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+  downloadUrl.pathname = `${basePath}/${repoPath}/zip/${encodeURIComponent(params.commit)}`;
   const { bytes } = await fetchClawHubArchive(
     {
       ...params,
-      url: downloadUrl,
+      url: downloadUrl.toString(),
       skipAuth: true,
     },
     `GitHub source archive for ${params.repo}@${params.commit}`,

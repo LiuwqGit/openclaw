@@ -1,4 +1,4 @@
-import { managedWorktrees } from "../agents/worktrees/service.js";
+import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
 import type {
   GitHubPublicationExecutionRow,
   GitHubPublicationRow,
@@ -8,12 +8,14 @@ import { recoverGitHubPublicationBranchAndIndex } from "./github-publication-git
 
 export async function recoverGitHubPublicationWorkspace(
   row: GitHubPublicationExecutionRow,
+  worktree: ManagedWorktreeRecord,
   run: Parameters<typeof recoverGitHubPublicationBranchAndIndex>[0]["run"],
   assertCustody: () => void,
 ): Promise<void> {
-  const worktree = managedWorktrees.findLiveById(row.worktree_id);
   if (
-    worktree?.repoFingerprint !== row.repository_fingerprint ||
+    worktree.id !== row.worktree_id ||
+    worktree.removedAt !== undefined ||
+    worktree.repoFingerprint !== row.repository_fingerprint ||
     worktree.branch !== row.branch ||
     !row.source_head_commit ||
     !row.workspace_tree
@@ -50,7 +52,7 @@ export async function readKnownGitHubPublicationPullRequestUrls(
     },
     { current: true },
   );
-  if (!result?.ok || result.type !== "githubPublication.knownPullRequestUrls") {
+  if (!result) {
     throw new Error("GitHub publication receipt history is unavailable.");
   }
   return result.urls;
@@ -64,7 +66,7 @@ export async function readGitHubPublicationRequestInWorker(
     { type: "githubPublication.request", requestId },
     { current: true },
   );
-  if (!result?.ok || result.type !== "githubPublication.request") {
+  if (!result) {
     throw new Error("GitHub publication receipt is unavailable.");
   }
   return result.row;
