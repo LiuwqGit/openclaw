@@ -1,87 +1,161 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
+import { createShellOwner } from "./app-host-solid.test-support.ts";
+import { subscribeBootRecordChanges } from "./boot-record.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
-import type { retryStaleChunkReloadWhenReachable } from "./stale-chunk-reload.ts";
+import {
+  createGatewayStoreTestStore,
+  stubGatewayStoreTestGlobals,
+} from "./gateway-store.test-support.ts";
+import { loadSettings } from "./settings.ts";
+import { resolveApplicationStartupSettings } from "./startup-settings.ts";
 
-type RetryOptions = Parameters<typeof retryStaleChunkReloadWhenReachable>[0];
-
-const retryHarness = vi.hoisted(() => ({
-  retry: vi.fn<(options: RetryOptions) => Promise<boolean>>(),
-}));
-
-vi.mock("./stale-chunk-reload.ts", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./stale-chunk-reload.ts")>();
-  return {
-    ...actual,
-    retryStaleChunkReloadWhenReachable: retryHarness.retry,
-  };
+vi.hoisted(() => {
+  // Build identity is captured on import, including imports from an earlier shared test.
+  vi.resetModules();
+  vi.stubGlobal("OPENCLAW_CONTROL_UI_BUILD_INFO", {
+    version: "1.0.0",
+    buildId: "serving-build",
+  });
 });
 
-import "./app-host.ts";
-
-type RefreshShell = HTMLElement & {
-  runtime: ApplicationRuntime;
-  refreshControlUi: () => Promise<boolean>;
-};
-
-function deferred() {
-  let resolve: (value: boolean) => void = () => undefined;
-  const promise = new Promise<boolean>((settle) => {
-    resolve = settle;
-  });
-  return { promise, resolve };
-}
-
-function createRefreshShell() {
+function createRefreshShell(gateway: ApplicationRuntime["context"]["gateway"]) {
   const snapshot = { controlUiRefreshRequired: true };
-  const shell = document.createElement("openclaw-app-shell") as RefreshShell;
+  const shell = createShellOwner();
   shell.runtime = {
-    context: { overlays: { snapshot } },
+    context: { overlays: { snapshot }, gateway },
   } as unknown as ApplicationRuntime;
   return { shell, snapshot };
 }
 
-function installRetryProbe() {
-  const probe = deferred();
-  const reload = vi.fn();
-  retryHarness.retry.mockImplementation(async (options) => {
-    const reachable = await probe.promise;
-    if (!reachable || options?.canReload?.() === false) {
-      return false;
-    }
-    reload();
-    return true;
-  });
-  return { probe, reload };
-}
+let store: ReturnType<typeof createGatewayStoreTestStore>;
+let probe: ReturnType<typeof createDeferred<Response>>;
+let replace: ReturnType<typeof vi.fn<(url: string) => void>>;
+let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
 
-afterEach(() => {
-  retryHarness.retry.mockReset();
-  document.body.replaceChildren();
+beforeEach(() => {
+  // Keep automatic retry probes inside this fixture's lifetime.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  vi.spyOn(Math, "random").mockReturnValue(0);
+  stubGatewayStoreTestGlobals();
+  replace = vi.fn();
+  const location = Object.assign(new URL("http://127.0.0.1:18789/chat/main"), { replace });
+  vi.stubGlobal("location", location);
+  vi.stubGlobal("window", { location });
+  probe = createDeferred<Response>();
+  fetchMock = vi.fn<typeof fetch>(() => probe.promise);
+  vi.stubGlobal("fetch", fetchMock);
+  store = createGatewayStoreTestStore();
+  store.gateway.connect({
+    bootstrapToken: "synthetic-owner-bootstrap",
+    bootstrapProfile: "owner",
+  });
 });
 
-describe("OpenClaw shell Control UI refresh", () => {
-  it("does not reload after the recovery state clears during a successful probe", async () => {
-    const { probe, reload } = installRetryProbe();
-    const { shell, snapshot } = createRefreshShell();
+afterEach(() => {
+  store.gateway.stop();
+  vi.clearAllTimers();
+  vi.useRealTimers();
+  setAvatarGatewayOrigin(null);
+  document.body.replaceChildren();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
 
+it("retires cached roster admission before publishing a replacement connection", () => {
+  store.current().testOptions.onHello?.({
+    type: "hello-ok",
+    protocol: 1,
+    auth: { role: "operator", scopes: [], recoveryScope: "admitted-account" },
+  });
+  const scope = gatewayCredentialScope(store.gateway.connection.gatewayUrl);
+  let retired = false;
+  const observed: boolean[] = [];
+  const cleanups = [
+    subscribeBootRecordChanges((change) => {
+      if (change.scope === scope && change.retiredOwner?.recoveryScope === "admitted-account") {
+        retired = true;
+      }
+    }),
+    store.gateway.subscribe((snapshot) => {
+      if (snapshot.phase === "reconnecting") {
+        observed.push(retired);
+      }
+    }),
+  ];
+  onTestFinished(() => cleanups.forEach((cleanup) => cleanup()));
+  store.gateway.connect({ bootstrapToken: "synthetic-replacement-bootstrap" });
+  expect(observed.length).toBeGreaterThan(0);
+  expect(observed).not.toContain(false);
+});
+
+it.each(["clear", "replace", "remote"])(
+  "does not reload for invalid recovery state or a remote target: %s",
+  async (action) => {
+    if (action === "remote") {
+      store.gateway.connect({
+        gatewayUrl: "wss://remote-gateway.example",
+        bootstrapToken: "synthetic-remote-bootstrap",
+      });
+    }
+    const { shell, snapshot } = createRefreshShell(store.gateway);
     const refresh = shell.refreshControlUi();
-    snapshot.controlUiRefreshRequired = false;
-    probe.resolve(true);
+    if (action === "clear") {
+      snapshot.controlUiRefreshRequired = false;
+    } else if (action === "replace") {
+      shell.runtime = createRefreshShell(store.gateway).shell.runtime;
+    }
+    probe.resolve(new Response(null, { status: 200 }));
 
     await expect(refresh).resolves.toBe(false);
-    expect(reload).not.toHaveBeenCalled();
+    expect(replace).not.toHaveBeenCalled();
+    if (action === "remote") {
+      expect(fetchMock).not.toHaveBeenCalled();
+    }
+  },
+);
+
+it("continues the browser handoff when manual refresh follows a failed automatic probe", async () => {
+  fetchMock.mockResolvedValueOnce(new Response(null, { status: 503 }));
+  store.current().testOptions.onClose?.({
+    code: 1008,
+    reason: "Control UI updated",
+    error: {
+      code: "UNAVAILABLE",
+      message: "Control UI updated",
+      details: {
+        code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
+        gatewayBuildId: "replacement-build",
+        reloadRequired: true,
+      },
+    },
+    willRetry: false,
   });
+  await nextTurn();
+  expect(replace).not.toHaveBeenCalled();
+  const { shell } = createRefreshShell(store.gateway);
 
-  it("allows a successful reload while the same recovery state is still current", async () => {
-    const { probe, reload } = installRetryProbe();
-    const { shell } = createRefreshShell();
+  const refresh = shell.refreshControlUi();
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+  probe.resolve(new Response(null, { status: 200 }));
 
-    const refresh = shell.refreshControlUi();
-    probe.resolve(true);
+  await expect(refresh).resolves.toBe(true);
+  expect(replace).toHaveBeenCalledOnce();
+  const resumed = resolveApplicationStartupSettings(
+    loadSettings(),
+    new URL(replace.mock.calls[0]![0]),
+  );
+  expect(resumed.pendingBootstrapToken).toBe("synthetic-owner-bootstrap");
+  expect(resumed.pendingBootstrapProfile).toBe("owner");
+  expect(resumed.location.hash).toBe("");
 
-    await expect(refresh).resolves.toBe(true);
-    expect(reload).toHaveBeenCalledOnce();
-  });
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+  expect(replace).toHaveBeenCalledOnce();
 });

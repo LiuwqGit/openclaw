@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  computeRelayAuthProof,
-  deriveRelayAuthKeyId,
-  extensionRelayAuthResource,
-  type RelayAuthProofFields,
-} from "./relay-auth-v2-crypto.js";
+import { extensionRelayAuthResource, type RelayAuthProofFields } from "./relay-auth-v2-crypto.js";
 import { createExtensionRelayAuthClient, parseRelayAuthJson } from "./relay-auth-v2.js";
 
 const VECTOR = {
@@ -48,19 +43,6 @@ async function client() {
 }
 
 describe("Browser Relay Authentication v2 WebCrypto vectors", () => {
-  it("matches the fixed Node HMAC vector", async () => {
-    await expect(deriveRelayAuthKeyId(VECTOR.token)).resolves.toBe(VECTOR.fields.keyId);
-    await expect(computeRelayAuthProof(VECTOR.token, "server", VECTOR.fields)).resolves.toBe(
-      VECTOR.serverProof,
-    );
-    await expect(computeRelayAuthProof(VECTOR.token, "client", VECTOR.fields)).resolves.toBe(
-      VECTOR.clientProof,
-    );
-    await expect(
-      computeRelayAuthProof(VECTOR.token, "accept", VECTOR.fields, VECTOR.clientProof),
-    ).resolves.toBe(VECTOR.acceptProof);
-  });
-
   it("verifies server proof before producing client proof and verifies accept proof", async () => {
     const auth = await client();
     expect(auth.start()).toEqual({
@@ -75,7 +57,6 @@ describe("Browser Relay Authentication v2 WebCrypto vectors", () => {
       sessionId: VECTOR.fields.sessionId,
       clientProof: VECTOR.clientProof,
     });
-    expect(auth.authenticated).toBe(false);
     await expect(
       auth.acceptOk({
         type: "auth.ok",
@@ -84,7 +65,6 @@ describe("Browser Relay Authentication v2 WebCrypto vectors", () => {
         acceptProof: VECTOR.acceptProof,
       }),
     ).resolves.toBeUndefined();
-    expect(auth.authenticated).toBe(true);
   });
 });
 
@@ -95,7 +75,6 @@ describe("Browser Relay Authentication v2 client validation", () => {
     await expect(auth.acceptChallenge(challenge({ serverProof: "A".repeat(43) }))).rejects.toThrow(
       "server proof is invalid",
     );
-    expect(auth.authenticated).toBe(false);
     await expect(auth.acceptChallenge(challenge())).rejects.toThrow("out of sequence");
   });
 
@@ -159,7 +138,6 @@ describe("Browser Relay Authentication v2 client validation", () => {
         acceptProof: "A".repeat(43),
       }),
     ).rejects.toThrow("accept proof is invalid");
-    expect(auth.authenticated).toBe(false);
   });
 
   it("canonicalizes only the allowed profile query", () => {

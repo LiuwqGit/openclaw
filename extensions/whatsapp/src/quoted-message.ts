@@ -9,13 +9,10 @@ import {
   formatMediaPlaceholderText,
   type MediaPlaceholderTextFact,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { jidToE164 } from "./text-runtime.js";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import { jidToE164 } from "./targets-runtime.js";
 
-// ── Inbound message metadata cache ──────────────────────────────────────
-// Maps messageId → { participant, participantE164, body, fromMe } so the
-// outbound adapter can
-// populate the quote key with the sender JID and preview text even though
-// the outbound path only receives a bare messageId string.
+// Outbound callers only have a message ID; retain the sender and preview needed for quotes.
 
 type QuotedMeta = {
   participant?: string;
@@ -24,7 +21,7 @@ type QuotedMeta = {
   media?: MediaPlaceholderTextFact;
   fromMe?: boolean;
 };
-type CacheEntry = QuotedMeta & { ts: number };
+type CacheEntry = { meta: QuotedMeta; ts: number };
 type QuotedMetaLookup = QuotedMeta & { remoteJid: string };
 
 export type WhatsAppQuotedMessageKey = {
@@ -55,13 +52,8 @@ export function cacheInboundMessageMeta(
   if (!accountId || !messageId || !remoteJid) {
     return;
   }
-  if (cache.size >= MAX_ENTRIES) {
-    const oldest = cache.keys().next().value;
-    if (oldest) {
-      cache.delete(oldest);
-    }
-  }
-  cache.set(makeCacheKey(accountId, remoteJid, messageId), { ...meta, ts: Date.now() });
+  pruneMapToMaxSize(cache, MAX_ENTRIES - 1);
+  cache.set(makeCacheKey(accountId, remoteJid, messageId), { meta, ts: Date.now() });
 }
 
 export function lookupInboundMessageMeta(
@@ -69,7 +61,10 @@ export function lookupInboundMessageMeta(
   remoteJid: string,
   messageId: string,
 ): QuotedMeta | undefined {
-  const cacheKey = makeCacheKey(accountId, remoteJid, messageId);
+  return readCachedMessageMeta(makeCacheKey(accountId, remoteJid, messageId));
+}
+
+function readCachedMessageMeta(cacheKey: string): QuotedMeta | undefined {
   const entry = cache.get(cacheKey);
   if (!entry) {
     return undefined;
@@ -78,13 +73,7 @@ export function lookupInboundMessageMeta(
     cache.delete(cacheKey);
     return undefined;
   }
-  return {
-    participant: entry.participant,
-    participantE164: entry.participantE164,
-    body: entry.body,
-    media: entry.media,
-    fromMe: entry.fromMe,
-  };
+  return entry.meta;
 }
 
 function normalizeComparableJid(jid: string | undefined): string | undefined {
@@ -144,33 +133,22 @@ export function lookupInboundMessageMetaForTarget(
   if (exact) {
     return {
       remoteJid: targetJid,
-      participant: exact.participant,
-      participantE164: exact.participantE164,
-      body: exact.body,
-      media: exact.media,
-      fromMe: exact.fromMe,
+      ...exact,
     };
   }
   const prefix = `${accountId}:`;
   const suffix = `:${messageId}`;
   let matched: QuotedMetaLookup | undefined;
-  for (const [cacheKey, entry] of cache.entries()) {
+  for (const cacheKey of cache.keys()) {
     if (!cacheKey.startsWith(prefix) || !cacheKey.endsWith(suffix)) {
       continue;
     }
-    if (Date.now() - entry.ts > CACHE_TTL_MS) {
-      cache.delete(cacheKey);
+    const remoteJid = cacheKey.slice(prefix.length, cacheKey.length - suffix.length);
+    const meta = readCachedMessageMeta(cacheKey);
+    if (!meta) {
       continue;
     }
-    const remoteJid = cacheKey.slice(prefix.length, cacheKey.length - suffix.length);
-    const candidate = {
-      remoteJid,
-      participant: entry.participant,
-      participantE164: entry.participantE164,
-      body: entry.body,
-      media: entry.media,
-      fromMe: entry.fromMe,
-    };
+    const candidate = { remoteJid, ...meta };
     if (!matchesQuotedConversationTarget(targetJid, candidate)) {
       continue;
     }

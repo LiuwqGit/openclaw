@@ -1,42 +1,44 @@
-// Mock OpenAI Config tests cover shared E2E mock model config helpers.
 import { describe, expect, it } from "vitest";
 import {
   applyMockOpenAiModelConfig,
   parseMockOpenAiPort,
 } from "../../scripts/e2e/lib/fixtures/mock-openai-config.mjs";
 
-type MockConfig = {
-  agents: {
-    defaults: {
-      imageModel?: unknown;
-      mediaModels?: { image?: unknown; video?: unknown };
-      model?: unknown;
-      models: Record<string, unknown>;
-    };
-    entries: Record<
-      string,
-      {
-        model?: string | { primary: string };
-        models?: Record<string, { agentRuntime?: unknown; params: Record<string, unknown> }>;
-        workspace?: string;
-      }
-    >;
-  };
-  models: {
-    providers: {
-      openai: {
-        api?: string;
-        apiKey?: unknown;
-        baseUrl?: string;
-        models?: unknown[];
-        request: Record<string, unknown>;
-      };
-    };
-  };
-  plugins?: unknown;
-};
+const agentModel = (params: Record<string, unknown> = {}) => ({
+  agentRuntime: { id: "openclaw" },
+  params: { ...params, transport: "sse", openaiWsWarmup: false },
+});
 
 describe("scripts/e2e/lib/fixtures/mock-openai-config.mjs", () => {
+  it("publishes distinct agent and utility models for every configured agent", () => {
+    const cfg = {
+      agents: { defaults: {}, entries: { main: {}, second: { utilityModel: "old/model" } } },
+      models: { providers: {} },
+    };
+    applyMockOpenAiModelConfig(cfg, {
+      mockPort: 18181,
+      modelRef: "openai/fixture-agent",
+      utilityModelRef: "openai/fixture-utility",
+    });
+    expect(cfg.models.providers).toMatchObject({
+      openai: {
+        models: [
+          { id: "fixture-agent", api: "openai-responses", agentRuntime: { id: "openclaw" } },
+          { id: "fixture-utility", api: "openai-responses", agentRuntime: { id: "openclaw" } },
+        ],
+      },
+    });
+    for (const agent of [cfg.agents.defaults, ...Object.values(cfg.agents.entries)]) {
+      expect(agent).toMatchObject({
+        model: { primary: "openai/fixture-agent" },
+        utilityModel: "openai/fixture-utility",
+        models: Object.fromEntries(
+          ["fixture-agent", "fixture-utility"].map((model) => [`openai/${model}`, agentModel()]),
+        ),
+      });
+    }
+  });
+
   it("parses strict TCP port values", () => {
     expect(parseMockOpenAiPort("18080")).toBe(18080);
     expect(parseMockOpenAiPort(443)).toBe(443);
@@ -49,33 +51,21 @@ describe("scripts/e2e/lib/fixtures/mock-openai-config.mjs", () => {
   });
 
   it("writes mock OpenAI provider and agent defaults", () => {
-    const cfg: MockConfig = {
+    const cfg = {
       agents: {
         defaults: {
           mediaModels: { video: { primary: "example/video" } },
-          models: {
-            "openai/gpt-5.4": { params: { preserved: true } },
-          },
+          models: { "openai/gpt-5.4": { params: { preserved: true } } },
         },
         entries: {
           "release-agent": {
             model: { primary: "openai/gpt-5.4" },
             workspace: "/tmp/release-agent",
-            models: {
-              "openai/gpt-5.5": {
-                params: { existing: true },
-              },
-            },
+            models: { "openai/gpt-5.5": { params: { existing: true } } },
           },
         },
       },
-      models: {
-        providers: {
-          openai: {
-            request: { timeoutMs: 10_000 },
-          },
-        },
-      },
+      models: { providers: { openai: { request: { timeoutMs: 10_000 } } } },
     };
 
     applyMockOpenAiModelConfig(cfg, {
@@ -89,15 +79,15 @@ describe("scripts/e2e/lib/fixtures/mock-openai-config.mjs", () => {
       apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
       baseUrl: "http://127.0.0.1:18181/v1",
       request: { allowPrivateNetwork: true, timeoutMs: 10_000 },
+      models: [
+        expect.objectContaining({
+          id: "gpt-5.5",
+          api: "openai-responses",
+          input: ["text", "image"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        }),
+      ],
     });
-    expect(cfg.models.providers.openai.models).toEqual([
-      expect.objectContaining({
-        id: "gpt-5.5",
-        api: "openai-responses",
-        input: ["text", "image"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      }),
-    ]);
     expect(cfg.agents.defaults).toMatchObject({
       imageModel: { primary: "openai/gpt-5.5", timeoutMs: 30_000 },
       mediaModels: {
@@ -107,24 +97,16 @@ describe("scripts/e2e/lib/fixtures/mock-openai-config.mjs", () => {
       model: { primary: "openai/gpt-5.5" },
       models: {
         "openai/gpt-5.4": { params: { preserved: true } },
-        "openai/gpt-5.5": {
-          agentRuntime: { id: "openclaw" },
-          params: { transport: "sse", openaiWsWarmup: false },
-        },
+        "openai/gpt-5.5": agentModel(),
       },
     });
     expect(cfg.agents.defaults).not.toHaveProperty("imageGenerationModel");
     expect(cfg.agents.entries["release-agent"]).toMatchObject({
       model: { primary: "openai/gpt-5.5" },
       workspace: "/tmp/release-agent",
-      models: {
-        "openai/gpt-5.5": {
-          agentRuntime: { id: "openclaw" },
-          params: { existing: true, transport: "sse", openaiWsWarmup: false },
-        },
-      },
+      models: { "openai/gpt-5.5": agentModel({ existing: true }) },
     });
-    expect(cfg.plugins).toEqual({ enabled: true });
+    expect(cfg).toHaveProperty("plugins", { enabled: true });
   });
 
   it.each([
@@ -134,9 +116,7 @@ describe("scripts/e2e/lib/fixtures/mock-openai-config.mjs", () => {
     const cfg = {
       agents: {
         defaults: { models: {} },
-        entries: {
-          main: model === undefined ? {} : { model },
-        },
+        entries: { main: model === undefined ? {} : { model } },
       },
       models: { providers: {} },
     };
@@ -145,12 +125,7 @@ describe("scripts/e2e/lib/fixtures/mock-openai-config.mjs", () => {
 
     expect(cfg.agents.entries.main).toEqual({
       model: { primary: "openai/gpt-5.6-luna" },
-      models: {
-        "openai/gpt-5.6-luna": {
-          agentRuntime: { id: "openclaw" },
-          params: { transport: "sse", openaiWsWarmup: false },
-        },
-      },
+      models: { "openai/gpt-5.6-luna": agentModel() },
     });
   });
 });

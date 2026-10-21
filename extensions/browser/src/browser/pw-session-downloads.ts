@@ -1,6 +1,6 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Page } from "playwright-core";
-import { formatErrorMessage } from "../infra/errors.js";
 import type { BrowserDownloadCandidate, BrowserDownloadResult } from "./download-types.js";
 import type { ActionDownloadCapture } from "./pw-session-contracts.js";
 import { ensurePageState } from "./pw-session-state.js";
@@ -33,7 +33,6 @@ export function beginActionDownloadCaptureOnPage(
   const state = ensurePageState(page);
   const capture: ActionDownloadCapture = {
     pending: [],
-    validations: [],
     waiters: [],
     ...(opts.beforeSave ? { beforeSave: opts.beforeSave } : {}),
   };
@@ -85,9 +84,7 @@ export function beginActionDownloadCaptureOnPage(
       // Establish event ownership before awaiting file I/O. Slow saves must not
       // hold the action window open and absorb unrelated later downloads.
       detach();
-      const pending = capture.pending.slice();
-      await Promise.all(capture.validations.slice());
-      const downloads = await Promise.all(pending);
+      const downloads = await Promise.all(capture.pending);
       return downloads.length > 0 ? downloads : undefined;
     },
     dispose: detach,
