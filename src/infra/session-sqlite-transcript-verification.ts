@@ -1,4 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  mayContainLegacyInboundContextLabels,
+  normalizeLegacyInboundContextLabels,
+} from "../config/sessions/legacy-inbound-context-labels.js";
 import { withSqliteSessionImportStage } from "../config/sessions/session-accessor.sqlite-import-stage.js";
 import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { canonicalizeTranscriptEventMedia } from "../config/sessions/transcript-event-media.js";
@@ -9,8 +13,34 @@ import {
   createTranscriptEventReader,
   readTranscriptFingerprint,
 } from "./session-sqlite-migration-readers.js";
-/** Shared read-only proof that retained transcript events exist in canonical SQLite. */
 import type { EngineConnection } from "./sql-connection.js";
+
+/** Shared read-only proof that retained transcript events exist in canonical SQLite. */
+
+/**
+ * Doctor's frozen inbound-context label rewrite updates SQLite rows only; retained transcripts
+ * keep the legacy spelling, so exact equality misreports heading-only normalization as a
+ * content mismatch. Return the rewritten serialization of a staged source payload, or undefined
+ * when no recognized rewrite applies. Every other textual difference stays a genuine conflict.
+ */
+function legacyHeadingEquivalentSourceJson(sourceEventJson: string): string | undefined {
+  // Cheap decoded-spelling gate: only rows that can carry legacy labels reach the decoder.
+  if (!mayContainLegacyInboundContextLabels(sourceEventJson)) {
+    return undefined;
+  }
+  let event: unknown;
+  try {
+    event = JSON.parse(sourceEventJson);
+  } catch {
+    return undefined;
+  }
+  // Serialized key order is preserved by parse/stringify, so a repaired SQLite row that went
+  // through the same rewrite compares byte-for-byte.
+  if (!normalizeLegacyInboundContextLabels(event)) {
+    return undefined;
+  }
+  return JSON.stringify(event);
+}
 
 export function verifyTranscriptEvents(
   database: EngineConnection,
@@ -44,6 +74,19 @@ export function verifyTranscriptEvents(
     )!.count;
     const sourceRows = stage.rows(0)[Symbol.iterator]();
     let expected = sourceRows.next();
+    // Lazily computed per expected row; reset whenever the source cursor advances.
+    let expectedHeadingJson: string | undefined = undefined;
+    let expectedHeadingComputed = false;
+    const matchesExpected = (sqliteJson: string): boolean => {
+      if (sqliteJson === expected.value.eventJson) {
+        return true;
+      }
+      if (!expectedHeadingComputed) {
+        expectedHeadingJson = legacyHeadingEquivalentSourceJson(expected.value.eventJson);
+        expectedHeadingComputed = true;
+      }
+      return expectedHeadingJson !== undefined && sqliteJson === expectedHeadingJson;
+    };
     try {
       for (const event of iterateSqliteQuerySync(
         database,
@@ -59,8 +102,10 @@ export function verifyTranscriptEvents(
             stage.addSeen(`id\0${entry.id}`);
           }
         }
-        if (!expected.done && event.event_json === expected.value.eventJson) {
+        if (!expected.done && matchesExpected(event.event_json)) {
           expected = sourceRows.next();
+          expectedHeadingJson = undefined;
+          expectedHeadingComputed = false;
           if (expected.done) {
             break;
           }
@@ -79,7 +124,12 @@ export function verifyTranscriptEvents(
       const entry: unknown = JSON.parse(row.eventJson);
       const id = isRecord(entry) && typeof entry.id === "string" ? entry.id : `row ${row.seq + 1}`;
       // Exact payloads include identity and parent links; physical SQLite order may differ.
-      if (stage.contains(row.eventJson)) {
+      // Recognized heading rewrites are equivalent content, not missing history.
+      const headingJson = legacyHeadingEquivalentSourceJson(row.eventJson);
+      if (
+        stage.contains(row.eventJson) ||
+        (headingJson !== undefined && stage.contains(headingJson))
+      ) {
         if (firstMissing !== undefined) {
           throw new Error(
             `Missing legacy event ${firstMissing} precedes existing event ${id}; only a missing suffix can be appended`,
