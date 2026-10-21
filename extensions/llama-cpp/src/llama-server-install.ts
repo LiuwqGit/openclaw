@@ -370,12 +370,40 @@ async function runServerCommand(
   });
 }
 
+const MISSING_SHARED_LIBRARY_PATTERN = /error while loading shared libraries: ([^\s:]+)/u;
+
+const OPENMP_RUNTIME_ADVICE =
+  "Install the OpenMP runtime (for example libgomp1 on Debian/Ubuntu or libgomp on Fedora), then rerun llama.cpp setup.";
+
+/**
+ * Maps a loader-reported missing shared library to install guidance for the host.
+ * Returns null when the failure did not name a missing shared library, leaving
+ * the caller's platform-specific fallback advice in charge.
+ */
+function missingSharedLibraryAdvice(missingLibrary: string | undefined): string | null {
+  if (!missingLibrary) {
+    return null;
+  }
+  if (missingLibrary === "libgomp.so.1") {
+    return OPENMP_RUNTIME_ADVICE;
+  }
+  if (missingLibrary === "libssl.so.3" || missingLibrary === "libcrypto.so.3") {
+    return "Install the OpenSSL 3 runtime (for example libssl3t64 on Ubuntu 24.04 and later, libssl3 on Debian 12, or openssl-libs on Fedora), then rerun llama.cpp setup.";
+  }
+  return `Install the system package that provides ${missingLibrary}, then rerun llama.cpp setup.`;
+}
+
 function formatRuntimeDependencyError(error: unknown): Error {
   const detail = error instanceof Error ? error.message : String(error);
-  if (process.platform === "linux") {
+  const advice =
+    missingSharedLibraryAdvice(MISSING_SHARED_LIBRARY_PATTERN.exec(detail)?.[1]) ??
+    (process.platform === "linux" ? OPENMP_RUNTIME_ADVICE : null);
+  if (advice) {
     return new Error(
-      `The verified llama-server build could not start. Install the OpenMP runtime (for example libgomp1 on Debian/Ubuntu or libgomp on Fedora), then rerun llama.cpp setup. Detail: ${detail}`,
-      { cause: error },
+      `The verified llama-server build could not start. ${advice} Detail: ${detail}`,
+      {
+        cause: error,
+      },
     );
   }
   if (process.platform === "win32") {

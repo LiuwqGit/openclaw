@@ -121,8 +121,11 @@ async function createDestination(): Promise<{ destination: string; root: string 
 }
 
 async function createInstalledServer(): Promise<string> {
+  return await createInstalledServerForAsset(selectLlamaServerAsset());
+}
+
+async function createInstalledServerForAsset(asset: LlamaServerAsset): Promise<string> {
   await createRoot("llama-server-installed-");
-  const asset = selectLlamaServerAsset();
   const { command } = resolveManagedLlamaServerPaths(asset);
   await fs.mkdir(path.dirname(command), { recursive: true });
   await fs.writeFile(command, "");
@@ -529,6 +532,72 @@ describe("ensureLlamaServerInstalled", () => {
     );
     expect(expandCalls()).toHaveLength(runtime.files.length + 1);
     expect(await fs.readdir(root)).toEqual([]);
+  });
+
+  it.each([
+    {
+      missing: "libssl.so.3",
+      advice: /OpenSSL 3 runtime[^]*libssl3t64 on Ubuntu 24\.04/u,
+      wrongAdvice: /OpenMP runtime/u,
+    },
+    {
+      missing: "libcrypto.so.3",
+      advice: /OpenSSL 3 runtime[^]*libssl3t64 on Ubuntu 24\.04/u,
+      wrongAdvice: /OpenMP runtime/u,
+    },
+    {
+      missing: "libgomp.so.1",
+      advice: /OpenMP runtime[^]*libgomp1 on Debian\/Ubuntu/u,
+      wrongAdvice: /OpenSSL 3 runtime/u,
+    },
+    {
+      missing: "libtorch_cpu.so.2",
+      advice: /system package that provides libtorch_cpu\.so\.2/u,
+      wrongAdvice: /OpenMP runtime/u,
+    },
+  ])(
+    "names the missing shared library when the server cannot start: %s",
+    async ({ missing, advice, wrongAdvice }) => {
+      // A darwin asset reaches the shared version probe on every host without the
+      // Linux glibc floor or a Windows Visual C++ runtime fallback in between.
+      const asset = selectLlamaServerAsset("darwin", "arm64", { kind: "metal" });
+      const command = await createInstalledServerForAsset(asset);
+      mockCommand((file) => {
+        if (file === "/usr/bin/sw_vers") {
+          return "26.0\n";
+        }
+        throw Object.assign(
+          new Error(
+            `Command failed: ${file} --version\n${file}: error while loading shared libraries: ${missing}: cannot open shared object file: No such file or directory`,
+          ),
+          { cmd: `${file} --version`, code: 127 },
+        );
+      });
+
+      const failure = ensureLlamaServerInstalled({ asset });
+      await expect(failure).rejects.toThrow(advice);
+      await expect(failure).rejects.not.toThrow(wrongAdvice);
+      await expect(failure).rejects.toThrow(
+        /Detail: [^]*error while loading shared libraries: [^]*cannot open shared object file/u,
+      );
+      expect(mocks.execFile.mock.calls.filter(([file]) => file === command)).toHaveLength(1);
+    },
+  );
+
+  it("keeps the platform launch-failure guidance when no shared library is missing", async () => {
+    const asset = selectLlamaServerAsset("darwin", "arm64", { kind: "metal" });
+    const command = await createInstalledServerForAsset(asset);
+    mockCommand((file) => {
+      if (file === "/usr/bin/sw_vers") {
+        return "26.0\n";
+      }
+      throw Object.assign(new Error("exited with code 1"), { cmd: `${file} --version`, code: 1 });
+    });
+
+    await expect(ensureLlamaServerInstalled({ asset })).rejects.toThrow(
+      /The verified llama-server build could not start[^]*exited with code 1/u,
+    );
+    expect(mocks.execFile.mock.calls.filter(([file]) => file === command)).toHaveLength(1);
   });
 
   it("aborts fresh validation and removes the unpublished CPU ZIP files", async () => {
