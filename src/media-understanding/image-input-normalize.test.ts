@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { ImageOptimizationLimitError } from "../media/image-optimization-error.js";
-import { readImageMetadataFromHeader } from "../media/media-services.js";
 import type { ImageCompressionModelPolicy } from "../media/web-media.js";
 
 const mocks = vi.hoisted(() => ({
@@ -9,16 +8,40 @@ const mocks = vi.hoisted(() => ({
     maxSidePx: 32,
     preferredSidePx: 32,
   })),
+  convertHeicToJpeg: vi.fn(async () => Buffer.from("jpeg-normalized")),
+  convertImageToJpeg: vi.fn(async () => Buffer.from("jpeg-normalized")),
 }));
 
 vi.mock("../agents/image-compression-policy.js", () => ({
   resolveImageCompressionModelPolicy: mocks.resolveImageCompressionModelPolicy,
 }));
 
-import { optimizeImageDescriptionInput } from "./image-input-normalize.js";
+vi.mock("../media/media-services.js", async () => {
+  const actual = await vi.importActual<typeof import("../media/media-services.js")>(
+    "../media/media-services.js",
+  );
+  return {
+    ...actual,
+    convertHeicToJpeg: mocks.convertHeicToJpeg,
+    convertImageToJpeg: mocks.convertImageToJpeg,
+  };
+});
+
+import { readImageMetadataFromHeader } from "../media/media-services.js";
+import {
+  optimizeImageDescriptionInput,
+  normalizeImageDescriptionInput,
+} from "./image-input-normalize.js";
+
+// Minimal ISO-BMFF ftyp box with the avif brand; real byte sniffing classifies
+// this header as image/avif, mirroring the shipped HEIC test fixtures.
+const AVIF_HEADER_BYTES = Buffer.from("0000000c667479706176696600000000", "hex");
+const HEIF_HEADER_BYTES = Buffer.from("00000018667479706d736631000000000000000000000000", "hex");
 
 afterEach(() => {
   mocks.resolveImageCompressionModelPolicy.mockClear();
+  mocks.convertHeicToJpeg.mockClear();
+  mocks.convertImageToJpeg.mockClear();
 });
 
 describe("image description input optimization", () => {
@@ -69,5 +92,52 @@ describe("image description input optimization", () => {
       maxBytes: buffer.length - 1,
     });
     expect(mocks.resolveImageCompressionModelPolicy).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("image description input normalization", () => {
+  it("converts AVIF inputs to JPEG before provider execution", async () => {
+    await expect(
+      normalizeImageDescriptionInput({
+        buffer: AVIF_HEADER_BYTES,
+        fileName: "photo.avif",
+        mime: "image/avif",
+      }),
+    ).resolves.toEqual({ buffer: Buffer.from("jpeg-normalized"), mime: "image/jpeg" });
+    expect(mocks.convertImageToJpeg).toHaveBeenCalledTimes(1);
+    expect(mocks.convertImageToJpeg).toHaveBeenCalledWith(AVIF_HEADER_BYTES);
+    expect(mocks.convertHeicToJpeg).not.toHaveBeenCalled();
+  });
+
+  it("converts AVIF inputs matched only by filename when the MIME is absent", async () => {
+    await expect(
+      normalizeImageDescriptionInput({
+        buffer: AVIF_HEADER_BYTES,
+        fileName: "photo.avif",
+      }),
+    ).resolves.toEqual({ buffer: Buffer.from("jpeg-normalized"), mime: "image/jpeg" });
+    expect(mocks.convertImageToJpeg).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps converting HEIC/HEIF inputs to JPEG", async () => {
+    await expect(
+      normalizeImageDescriptionInput({
+        buffer: HEIF_HEADER_BYTES,
+        fileName: "photo.heic",
+        mime: "image/heic",
+      }),
+    ).resolves.toEqual({ buffer: Buffer.from("jpeg-normalized"), mime: "image/jpeg" });
+    expect(mocks.convertHeicToJpeg).toHaveBeenCalledTimes(1);
+    expect(mocks.convertHeicToJpeg).toHaveBeenCalledWith(HEIF_HEADER_BYTES);
+    expect(mocks.convertImageToJpeg).not.toHaveBeenCalled();
+  });
+
+  it("passes common images through unchanged", async () => {
+    const buffer = createSolidPngBuffer(64, 48, { r: 24, g: 96, b: 208 });
+    await expect(
+      normalizeImageDescriptionInput({ buffer, fileName: "photo.png", mime: "image/png" }),
+    ).resolves.toEqual({ buffer, mime: "image/png" });
+    expect(mocks.convertImageToJpeg).not.toHaveBeenCalled();
+    expect(mocks.convertHeicToJpeg).not.toHaveBeenCalled();
   });
 });

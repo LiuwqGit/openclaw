@@ -1,4 +1,4 @@
-// Image input normalization converts HEIC/HEIF payloads through the shared
+// Image input normalization converts AVIF/HEIC/HEIF payloads through the shared
 // input-file media path before provider execution.
 import { mimeTypeFromFilePath, normalizeMimeType } from "@openclaw/media-core/mime";
 import { resolveImageCompressionModelPolicy } from "../agents/image-compression-policy.js";
@@ -9,11 +9,11 @@ import { readImageMetadataFromHeader } from "../media/media-services.js";
 import { effectiveImageBytesCap, optimizeImageBufferForWebMedia } from "../media/web-media.js";
 import { MEDIA_CAPABILITY_DEFAULTS } from "./defaults.constants.js";
 
-const HEIC_MIME_RE = /^image\/hei[cf](?:-sequence)?$/i;
-const HEIC_EXT_RE = /\.(heic|heif)$/i;
+const CONVERTIBLE_MIME_RE = /^(?:image\/hei[cf]|image\/avif)(?:-sequence)?$/i;
+const CONVERTIBLE_EXT_RE = /\.(heic|heif|avif)$/i;
 const MEDIA_UNDERSTANDING_MAX_SOURCE_PIXELS = 40_000_000;
 
-/** Normalizes image bytes before provider execution, converting HEIC/HEIF inputs to JPEG. */
+/** Normalizes image bytes before provider execution, converting AVIF/HEIC/HEIF inputs to JPEG. */
 export async function normalizeImageDescriptionInput(params: {
   buffer: Buffer;
   fileName?: string;
@@ -21,16 +21,19 @@ export async function normalizeImageDescriptionInput(params: {
   maxBytes?: number;
 }): Promise<{ buffer: Buffer; mime?: string }> {
   const mime = normalizeMimeType(params.mime);
-  if (!(mime && HEIC_MIME_RE.test(mime)) && !HEIC_EXT_RE.test(params.fileName?.trim() ?? "")) {
+  if (
+    !(mime && CONVERTIBLE_MIME_RE.test(mime)) &&
+    !CONVERTIBLE_EXT_RE.test(params.fileName?.trim() ?? "")
+  ) {
     return { buffer: params.buffer, mime: params.mime };
   }
-  const sourceMime = mime ?? "image/heic";
+  const sourceMime = mime ?? mimeTypeFromFilePath(params.fileName) ?? "image/heic";
   // Keep owned bytes through the shared MIME and size guards; only API content needs base64.
   const image = await normalizeInputImageBuffer({
     buffer: params.buffer,
     mimeType: sourceMime,
     limits: {
-      allowedMimes: new Set([sourceMime, "image/heic", "image/heif", "image/jpeg"]),
+      allowedMimes: new Set([sourceMime, "image/avif", "image/heic", "image/heif", "image/jpeg"]),
       maxBytes: params.maxBytes ?? MEDIA_CAPABILITY_DEFAULTS.image.maxBytes,
     },
   });
