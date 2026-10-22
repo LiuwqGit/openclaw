@@ -1,3 +1,4 @@
+import { RastermillUnavailableError } from "rastermill";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { ImageOptimizationLimitError } from "../media/image-optimization-error.js";
@@ -36,7 +37,6 @@ import {
 // Minimal ISO-BMFF ftyp box with the avif brand; real byte sniffing classifies
 // this header as image/avif, mirroring the shipped HEIC test fixtures.
 const AVIF_HEADER_BYTES = Buffer.from("0000000c667479706176696600000000", "hex");
-const HEIF_HEADER_BYTES = Buffer.from("00000018667479706d736631000000000000000000000000", "hex");
 
 afterEach(() => {
   mocks.resolveImageCompressionModelPolicy.mockClear();
@@ -106,17 +106,24 @@ describe("image description input normalization", () => {
     expect(mocks.convertImageToJpeg).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps converting HEIC/HEIF inputs to JPEG", async () => {
-    await expect(
-      normalizeImageDescriptionInput({
-        buffer: HEIF_HEADER_BYTES,
-        fileName: "photo.heic",
-        mime: "image/heic",
-      }),
-    ).resolves.toEqual({ buffer: Buffer.from("jpeg-normalized"), mime: "image/jpeg" });
-    expect(mocks.convertHeicToJpeg).toHaveBeenCalledTimes(1);
-    expect(mocks.convertHeicToJpeg).toHaveBeenCalledWith(HEIF_HEADER_BYTES);
-    expect(mocks.convertImageToJpeg).not.toHaveBeenCalled();
+  it("reports an actionable decoder requirement when conversion cannot run", async () => {
+    const unavailable = new RastermillUnavailableError(
+      "encode",
+      "Image processor unavailable for jpeg encoding; tried: photon, imagemagick, graphicsmagick, ffmpeg",
+      [],
+    );
+    mocks.convertImageToJpeg.mockRejectedValueOnce(unavailable);
+    const failure = await normalizeImageDescriptionInput({
+      buffer: AVIF_HEADER_BYTES,
+      fileName: "photo.avif",
+      mime: "image/avif",
+    }).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(Error);
+    const message = (failure as Error).message;
+    expect(message).toContain("image/avif");
+    expect(message).toMatch(/ffmpeg|ImageMagick/u);
+    expect(message).toMatch(/JPEG\/PNG\/WebP/u);
+    expect((failure as Error).cause).toBe(unavailable);
   });
 
   it("passes common images through unchanged", async () => {

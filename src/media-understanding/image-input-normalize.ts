@@ -3,6 +3,7 @@
 import { mimeTypeFromFilePath, normalizeMimeType } from "@openclaw/media-core/mime";
 import { resolveImageCompressionModelPolicy } from "../agents/image-compression-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isImageProcessorUnavailableError } from "../media/image-ops.js";
 import { ImageOptimizationLimitError } from "../media/image-optimization-error.js";
 import { normalizeInputImageBuffer } from "../media/input-files.js";
 import { readImageMetadataFromHeader } from "../media/media-services.js";
@@ -29,14 +30,27 @@ export async function normalizeImageDescriptionInput(params: {
   }
   const sourceMime = mime ?? mimeTypeFromFilePath(params.fileName) ?? "image/heic";
   // Keep owned bytes through the shared MIME and size guards; only API content needs base64.
-  const image = await normalizeInputImageBuffer({
-    buffer: params.buffer,
-    mimeType: sourceMime,
-    limits: {
-      allowedMimes: new Set([sourceMime, "image/avif", "image/heic", "image/heif", "image/jpeg"]),
-      maxBytes: params.maxBytes ?? MEDIA_CAPABILITY_DEFAULTS.image.maxBytes,
-    },
-  });
+  let image: { buffer: Buffer; mimeType?: string };
+  try {
+    image = await normalizeInputImageBuffer({
+      buffer: params.buffer,
+      mimeType: sourceMime,
+      limits: {
+        allowedMimes: new Set([sourceMime, "image/avif", "image/heic", "image/heif", "image/jpeg"]),
+        maxBytes: params.maxBytes ?? MEDIA_CAPABILITY_DEFAULTS.image.maxBytes,
+      },
+    });
+  } catch (error) {
+    if (!isImageProcessorUnavailableError(error)) {
+      throw error;
+    }
+    // Hosts without a decoder for this format must surface a way forward instead of
+    // the bare backend list, because normalization is now mandatory for these inputs.
+    throw new Error(
+      `${sourceMime} input needs a local image decoder; install an AVIF/HEIF-capable backend (ffmpeg, or ImageMagick 7 with libheif) or resend the image as JPEG/PNG/WebP`,
+      { cause: error },
+    );
+  }
   return {
     buffer: image.buffer,
     mime: image.mimeType,
