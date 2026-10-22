@@ -2,7 +2,6 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import JSON5 from "json5";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
@@ -82,11 +81,10 @@ describe("config observe recovery promotion", () => {
     return {
       deps: {
         fs,
-        json5: JSON5,
         env: {} as NodeJS.ProcessEnv,
         homedir: () => home,
         logger: { warn },
-      } as unknown as ObserveRecoveryDeps,
+      } satisfies ObserveRecoveryDeps,
       configPath,
       warn,
     };
