@@ -16,6 +16,7 @@ import type {
   ConfigHealthFingerprint,
   ConfigHealthSnapshot,
   ConfigHealthState,
+  ConfigHealthUpdateResult,
 } from "./io.health-state.types.js";
 import {
   createConfigHealthFingerprint,
@@ -194,13 +195,17 @@ async function settleConfigHealthTransition(
   transition: (
     store: ReturnType<typeof captureConfigHealthStateStore>,
     snapshot: ConfigHealthSnapshot,
-  ) => Promise<"settled" | "retry">,
+  ) => Promise<ConfigHealthUpdateResult>,
 ): Promise<boolean> {
   for (let attempt = 0; attempt < CONFIG_HEALTH_TRANSITION_ATTEMPTS; attempt += 1) {
     const store = captureConfigHealthStateStore(deps, configPath);
     const healthSnapshot = await store.read();
-    if ((await transition(store, healthSnapshot)) === "settled") {
-      return true;
+    if (healthSnapshot.basis === null) {
+      return false;
+    }
+    const result = await transition(store, healthSnapshot);
+    if (result.status !== "conflict") {
+      return result.status === "applied";
     }
   }
   return false;
@@ -308,28 +313,18 @@ export async function advanceConfigHealthBaselineForAcceptedWrite(
           persisted.hash !== baseline.previousLastKnownGood.hash &&
           persisted.hash !== current.hash
         ) {
-          return "settled";
+          return { status: "applied" };
         }
         if (
           persisted?.hash === nextBaseline.hash &&
           (entry.lastObservedSuspiciousSignature ?? null) === nextSignature
         ) {
-          return "settled";
+          return { status: "applied" };
         }
-        await store.updateAfterFileCommit(
+        return store.updateAfterFileCommit(
           { lastKnownGood: nextBaseline, lastObservedSuspiciousSignature: nextSignature },
           healthSnapshot,
         );
-        // The worker returns no conditional-write receipt; reread to detect a lost update.
-        const after = await store.read();
-        if (!after) {
-          return "retry";
-        }
-        const afterEntry = readConfigHealthEntry(after.state, baseline.configPath);
-        return afterEntry.lastKnownGood?.hash === nextBaseline.hash &&
-          (afterEntry.lastObservedSuspiciousSignature ?? null) === nextSignature
-          ? "settled"
-          : "retry";
       },
     );
     if (!settled) {
@@ -370,10 +365,10 @@ export async function restoreConfigHealthBaselineForRolledBackWrite(
           entry.lastKnownGood?.hash !== record.candidate.hash &&
           !(entry.lastKnownGood?.hash === record.previousLastKnownGood.hash && inheritedMarker)
         ) {
-          return "settled";
+          return { status: "applied" };
         }
         const restoreMarker = entry.lastObservedSuspiciousSignature == null || inheritedMarker;
-        await store.updateAfterFileCommit(
+        return store.updateAfterFileCommit(
           {
             lastKnownGood: record.previousLastKnownGood,
             // Only rewind the anomaly marker when nothing newer recorded one.
@@ -383,17 +378,6 @@ export async function restoreConfigHealthBaselineForRolledBackWrite(
           },
           healthSnapshot,
         );
-        const after = await store.read();
-        if (!after) {
-          return "retry";
-        }
-        const restored = readConfigHealthEntry(after.state, record.configPath);
-        return restored.lastKnownGood?.hash === record.previousLastKnownGood.hash &&
-          (!restoreMarker ||
-            (restored.lastObservedSuspiciousSignature ?? null) ===
-              record.previousSuspiciousSignature)
-          ? "settled"
-          : "retry";
       },
     );
     if (!settled) {

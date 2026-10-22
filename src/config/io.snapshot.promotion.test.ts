@@ -5,11 +5,13 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
+import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import * as worker from "../state/openclaw-state-worker-store.js";
 import { createConfigIO } from "./io.factory.js";
 import { readConfigHealthStateFromStore } from "./io.health-state.js";
 import * as healthOwner from "./io.health-state.js";
@@ -36,6 +38,7 @@ import type { ConfigFileSnapshot } from "./types.js";
 // over the 1000-line test budget; the promotion suites keep their own home.
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
+    vi.restoreAllMocks();
     clearPluginMetadataLifecycleCaches();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
@@ -386,6 +389,24 @@ describe("last-known-good promotion after accepted writes", () => {
     return raw;
   }
 
+  function trackHealthReads(configPath: string) {
+    const capture = healthOwner.captureConfigHealthStateStore;
+    const read = vi.fn();
+    vi.spyOn(healthOwner, "captureConfigHealthStateStore").mockImplementation((...args) => {
+      const store = capture(...args);
+      return {
+        ...store,
+        read() {
+          if (args[1] === configPath) {
+            read();
+          }
+          return store.read();
+        },
+      };
+    });
+    return read;
+  }
+
   it.each([
     { anomaly: "size", proxies: 80 },
     { anomaly: "metadata-only", proxies: 1 },
@@ -465,11 +486,14 @@ describe("last-known-good promotion after accepted writes", () => {
     await expect(io.promoteConfigSnapshotToLastKnownGood(healthySnapshot)).resolves.toBe(true);
     expect(fs.readFileSync(lastGoodPath, "utf8")).toBe(healthySnapshot.raw);
 
+    const healthReads = trackHealthReads(configPath);
     const acceptedWrite = await io.writeConfigFile(
       { meta: { lastTouchedVersion: "2026.4.22" }, gateway: { mode: "local" } },
       { allowConfigSizeDrop: true, baseSnapshot: healthySnapshot },
     );
     expect(acceptedWrite.persistedConfig.gateway).toEqual({ mode: "local" });
+    // One pre-publication capture and one transition read; no read to certify the write.
+    expect(healthReads).toHaveBeenCalledTimes(2);
 
     const reducedSnapshot = await io.readConfigFileSnapshot();
     await expect(io.promoteConfigSnapshotToLastKnownGood(reducedSnapshot)).resolves.toBe(true);
@@ -480,6 +504,77 @@ describe("last-known-good promotion after accepted writes", () => {
     await expect(io.promoteConfigSnapshotToLastKnownGood(truncatedSnapshot)).resolves.toBe(false);
     expect(fs.readFileSync(lastGoodPath, "utf8")).toBe(reducedSnapshot.raw);
   });
+
+  it.each(["read failure", "write failure", "lost reply"] as const)(
+    "does not retry accepted-write health bookkeeping after %s",
+    async (fault) => {
+      const { configPath, env, io, root } = acceptedWriteFixture();
+      seedConfig(configPath, {
+        meta: { lastTouchedVersion: "2026.4.22" },
+        gateway: { mode: "local", port: 18789 },
+      });
+      const before = await io.readConfigFileSnapshot();
+      await expect(io.promoteConfigSnapshotToLastKnownGood(before)).resolves.toBe(true);
+      const deps = { env, homedir: () => root, logger: console };
+      const prior = readConfigHealthStateFromStore(deps).entries?.[configPath];
+      const capture = healthOwner.captureConfigHealthStateStore;
+      let reads = 0;
+      const outcomes: unknown[] = [];
+      vi.spyOn(healthOwner, "captureConfigHealthStateStore").mockImplementation((...args) => {
+        const store = capture(...args);
+        return {
+          ...store,
+          async read() {
+            reads += 1;
+            const failure =
+              fault === "read failure" && fs.readFileSync(configPath, "utf8") !== before.raw
+                ? vi
+                    .spyOn(stateReads, "getActiveOpenClawStateDatabaseReadSnapshotAsync")
+                    .mockRejectedValueOnce(new Error("synthetic health read failure"))
+                : undefined;
+            try {
+              return await store.read();
+            } finally {
+              failure?.mockRestore();
+            }
+          },
+          async updateAfterFileCommit(...updateArgs) {
+            const execute = worker.runOpenClawStateWorkerOperation;
+            const failure = vi.spyOn(worker, "runOpenClawStateWorkerOperation").mockImplementation(
+              new Proxy(execute, {
+                async apply(target, receiver, operationArgs) {
+                  if (fault === "lost reply") {
+                    await Reflect.apply(target, receiver, operationArgs);
+                  }
+                  throw new Error("synthetic health write transport failure");
+                },
+              }),
+            );
+            try {
+              const result = await store.updateAfterFileCommit(...updateArgs);
+              outcomes.push(result);
+              return result;
+            } finally {
+              failure.mockRestore();
+            }
+          },
+        };
+      });
+      await io.writeConfigFile(
+        { ...before.config, gateway: { mode: "local", port: 19187 } },
+        { baseSnapshot: before },
+      );
+      expect(JSON.parse(fs.readFileSync(configPath, "utf8")).gateway.port).toBe(19187);
+      expect(reads).toBe(2);
+      expect(outcomes).toEqual(fault === "read failure" ? [] : [{ status: "unavailable" }]);
+      const after = readConfigHealthStateFromStore(deps).entries?.[configPath];
+      if (fault === "lost reply") {
+        expect(after?.lastKnownGood?.hash).not.toBe(prior?.lastKnownGood?.hash);
+      } else {
+        expect(after).toEqual(prior);
+      }
+    },
+  );
 
   it("promotes an accepted formatting normalization over the verbose baseline", async () => {
     const { configPath, io } = acceptedWriteFixture();
@@ -570,6 +665,8 @@ describe("last-known-good promotion after accepted writes", () => {
     });
     const capture = healthOwner.captureConfigHealthStateStore;
     let observedDuringAdvance = false;
+    let transitionReads = 0;
+    const outcomes: unknown[] = [];
     const spy = vi
       .spyOn(healthOwner, "captureConfigHealthStateStore")
       .mockImplementation((...args) => {
@@ -577,9 +674,12 @@ describe("last-known-good promotion after accepted writes", () => {
         return {
           ...store,
           async read() {
-            // An ordinary observed read lands while the writer's baseline
-            // advance awaits its worker read: it records the published canonical
-            // candidate as a size-drop anomaly before the accepted-write update.
+            const snapshot = await store.read();
+            if (fs.readFileSync(configPath, "utf8") !== verboseRaw) {
+              transitionReads += 1;
+            }
+            // Commit an ordinary observation after the actual snapshot, forcing
+            // the worker's conditional patch to miss rather than faking a conflict.
             if (
               !observedDuringAdvance &&
               args[1] === configPath &&
@@ -588,7 +688,12 @@ describe("last-known-good promotion after accepted writes", () => {
               observedDuringAdvance = true;
               observeConfigSnapshotSync(healthDeps, await io.readConfigFileSnapshot());
             }
-            return store.read();
+            return snapshot;
+          },
+          async updateAfterFileCommit(...updateArgs) {
+            const outcome = await store.updateAfterFileCommit(...updateArgs);
+            outcomes.push(outcome);
+            return outcome;
           },
         };
       });
@@ -603,6 +708,8 @@ describe("last-known-good promotion after accepted writes", () => {
 
     const canonicalRaw = fs.readFileSync(configPath, "utf8");
     expect(observedDuringAdvance).toBe(true);
+    expect(outcomes).toEqual([{ status: "conflict" }, { status: "applied" }]);
+    expect(transitionReads).toBe(2);
     // The accepted edit stays promotable despite the intervening observation.
     const editedSnapshot = await io.readConfigFileSnapshot();
     await expect(io.promoteConfigSnapshotToLastKnownGood(editedSnapshot)).resolves.toBe(true);
@@ -684,6 +791,7 @@ describe("last-known-good promotion after accepted writes", () => {
       expect(fs.readFileSync(lastGoodPath, "utf8")).toBe(originalRaw);
       const baselineBefore = readLastKnownGood();
       expect(baselineBefore?.bytes).toBe(Buffer.byteLength(originalRaw, "utf-8"));
+      const healthReads = trackHealthReads(configPath);
 
       // Grow the config beyond twice its size, then fail runtime activation after
       // the commit so the write rolls back to the original bytes.
@@ -721,6 +829,9 @@ describe("last-known-good promotion after accepted writes", () => {
         resetConfigRuntimeState();
       }
 
+      // The runtime writer also observes its input and canonical reread. The
+      // capture, advance, and restore each read once, without write verification.
+      expect(healthReads).toHaveBeenCalledTimes(5);
       // The rollback restored the original bytes and the pre-write baseline, so
       // the restored config is not a size drop against the baseline.
       await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(originalRaw);
