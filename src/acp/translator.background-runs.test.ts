@@ -308,3 +308,103 @@ describe("ACP background session updates between prompts", () => {
     ]);
   });
 });
+
+// Chunk delivery awaits the client notification and its ledger record, so
+// session closure, reassignment, or a newly started prompt during that await
+// must revoke delivery authority before the remaining snapshot is emitted.
+async function startBlockedThoughtDelivery(
+  h: Awaited<ReturnType<typeof createBackgroundHarness>>,
+  runId: string,
+) {
+  const thoughtDelivered = createDeferred<void>();
+  let sessionUpdateCalls = 0;
+  h.sessionUpdate.mockImplementation(async () => {
+    if (++sessionUpdateCalls === 1) {
+      await thoughtDelivered.promise;
+    }
+  });
+  const delivery = h.send("chat", {
+    sessionKey: h.sessionKey,
+    runId,
+    state: "delta",
+    message: {
+      content: [
+        { type: "thinking", thinking: "thinking about the reply" },
+        { type: "text", text: "Sub-agent finished: PINEAPPLE" },
+      ],
+    },
+  });
+  // Wait until the thought chunk delivery is suspended inside the emit await.
+  await vi.waitFor(() => {
+    expect(h.sessionUpdate).toHaveBeenCalledTimes(1);
+  });
+  return { thoughtDelivered, delivery };
+}
+
+async function expectTextNeverDelivered(
+  h: Awaited<ReturnType<typeof createBackgroundHarness>>,
+  delivery: Promise<void>,
+) {
+  await delivery;
+  const deliveredTexts = h.sessionUpdate.mock.calls.flatMap(([{ update }]): string[] => {
+    if (update.sessionUpdate === "agent_message_chunk" && update.content.type === "text") {
+      return [update.content.text];
+    }
+    return [];
+  });
+  expect(deliveredTexts).toEqual([]);
+  const replay = await h.eventLedger.readReplayBySessionId({ sessionId: h.sessionId });
+  const recordedTexts = replay.events.flatMap(({ update }): string[] => {
+    if (update.sessionUpdate === "agent_message_chunk" && update.content.type === "text") {
+      return [update.content.text];
+    }
+    return [];
+  });
+  expect(recordedTexts).toEqual([]);
+}
+
+describe("ACP background delivery authority across awaited chunks", () => {
+  it("stops the remaining text when the session closes during thought delivery", async () => {
+    const h = await createBackgroundHarness();
+    const { thoughtDelivered, delivery } = await startBlockedThoughtDelivery(h, "background-run-8");
+    await h.agent.closeSession({ sessionId: h.sessionId });
+    thoughtDelivered.resolve();
+    await expectTextNeverDelivered(h, delivery);
+  });
+
+  it("stops the remaining text when the session rebinds during thought delivery", async () => {
+    const h = await createBackgroundHarness();
+    const { thoughtDelivered, delivery } = await startBlockedThoughtDelivery(h, "background-run-9");
+    // session/resume or session/load can rebind the same session id to
+    // another gateway key while the thought chunk is still being delivered.
+    h.sessionStore.createSession({
+      sessionId: h.sessionId,
+      sessionKey: "agent:main:other",
+      cwd: "/tmp",
+    });
+    thoughtDelivered.resolve();
+    await expectTextNeverDelivered(h, delivery);
+  });
+
+  it("stops the remaining text while a later prompt owns the session", async () => {
+    const h = await createBackgroundHarness();
+    const { thoughtDelivered, delivery } = await startBlockedThoughtDelivery(
+      h,
+      "background-run-10",
+    );
+    const secondPrompt = promptAgent(h.agent);
+    await vi.waitFor(() => {
+      expect(h.chatSendRunIds.length).toBeGreaterThanOrEqual(2);
+    });
+    thoughtDelivered.resolve();
+    await expectTextNeverDelivered(h, delivery);
+    const secondRunId = h.chatSendRunIds[h.chatSendRunIds.length - 1]!;
+    await h.send("chat", {
+      sessionKey: h.sessionKey,
+      runId: secondRunId,
+      state: "final",
+      stopReason: "stop",
+    });
+    await expect(secondPrompt).resolves.toEqual({ stopReason: "end_turn" });
+  });
+});

@@ -58,35 +58,7 @@ export class AcpBackgroundRunRegistry {
     }
     const existing = this.runs.get(runId);
     if (existing) {
-      // Delivery authority is the session store's current binding, not the
-      // retained route: closure or reassignment (session/resume, session/load)
-      // revokes delivery even for an already attached run. Events must also
-      // arrive under the same key the run attached under; a foreign key never
-      // re-targets a cached context into a session now bound elsewhere.
-      const session = this.sessionStore.getSession(existing.sessionId);
-      if (!session || session.sessionKey !== sessionKey || existing.sessionKey !== sessionKey) {
-        this.runs.delete(runId);
-        if (session) {
-          this.log(
-            `background run revoked: ${existing.sessionId} rebound from ${existing.sessionKey} to ${session.sessionKey}`,
-          );
-          this.rememberRevokedRun(runId);
-        }
-        return undefined;
-      }
-      // A prompt that started after attachment owns the session now; retained
-      // contexts follow the same no-pending-prompt rule as fresh attaches so a
-      // foreign run can never interleave into the active prompt stream. The
-      // context is retained (not deleted) so post-prompt deltas still dedupe.
-      if (this.pendingPrompts.has(existing.sessionId)) {
-        return undefined;
-      }
-      if (session.ledgerSessionId) {
-        existing.ledgerSessionId = session.ledgerSessionId;
-      } else {
-        delete existing.ledgerSessionId;
-      }
-      return existing;
+      return this.revalidateDeliveryAuthority(existing, sessionKey);
     }
     // Late events from a run this bridge started as a prompt must not be
     // re-delivered through a fresh background context after settlement.
@@ -118,6 +90,48 @@ export class AcpBackgroundRunRegistry {
   }
 
   owns(run: AcpBackgroundRun): boolean {
-    return this.runs.get(run.idempotencyKey) === run;
+    if (this.runs.get(run.idempotencyKey) !== run) {
+      return false;
+    }
+    // Continuation checks after awaited chunk delivery reuse the same live
+    // binding and pending-prompt validation as event admission: authority
+    // must still hold before any further output, not just the map entry.
+    return this.revalidateDeliveryAuthority(run, run.sessionKey) !== undefined;
+  }
+
+  /**
+   * Live delivery authority for a retained background run: the session
+   * store's current binding, not the retained route. Closure or reassignment
+   * (session/resume, session/load) revokes delivery even for an already
+   * attached run; events must also arrive under the same key the run attached
+   * under, so a foreign key never re-targets a cached context into a session
+   * now bound elsewhere. A prompt that started after attachment owns the
+   * session now; the context is retained (not deleted) so post-prompt deltas
+   * still dedupe.
+   */
+  private revalidateDeliveryAuthority(
+    run: AcpBackgroundRun,
+    sessionKey: string,
+  ): AcpBackgroundRun | undefined {
+    const session = this.sessionStore.getSession(run.sessionId);
+    if (!session || session.sessionKey !== sessionKey || run.sessionKey !== sessionKey) {
+      this.runs.delete(run.idempotencyKey);
+      if (session) {
+        this.log(
+          `background run revoked: ${run.sessionId} rebound from ${run.sessionKey} to ${session.sessionKey}`,
+        );
+        this.rememberRevokedRun(run.idempotencyKey);
+      }
+      return undefined;
+    }
+    if (this.pendingPrompts.has(run.sessionId)) {
+      return undefined;
+    }
+    if (session.ledgerSessionId) {
+      run.ledgerSessionId = session.ledgerSessionId;
+    } else {
+      delete run.ledgerSessionId;
+    }
+    return run;
   }
 }

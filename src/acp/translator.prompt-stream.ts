@@ -702,6 +702,10 @@ export class AcpTranslatorPromptStream {
     if (this.isPendingPrompt(stream)) {
       return this.getPendingPrompt(stream.sessionId, stream.idempotencyKey) === stream;
     }
+    // Continuation checks for background runs revalidate the live session
+    // binding and prompt ownership: authority must still hold after awaited
+    // chunk delivery (client notification then ledger record), not just the
+    // retained registry entry.
     return this.backgroundRuns.owns(stream);
   }
 
