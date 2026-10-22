@@ -247,7 +247,7 @@ describe("config observe recovery promotion", () => {
     );
   });
 
-  it("keeps pre-upgrade health-state rows working without schema or shape drift", async () => {
+  it("preserves stored health rows through promotion and baseline compensation", async () => {
     const home = tempDirs.make("openclaw-config-lgg-compat-");
     const configPath = path.join(home, ".openclaw", "openclaw.json");
     const deps = normalizeConfigIoDeps({
@@ -265,18 +265,15 @@ describe("config observe recovery promotion", () => {
     };
     const healthy = await makeSnapshot(configPath, healthyConfig);
 
-    // Seed the row exactly as the pre-change build persisted it: the same
-    // columns (verified below) and the fingerprint shape the unchanged
-    // promotion path writes. This change adds no schema or fingerprint
-    // fields, so rows written by the previous version upgrade in place
-    // without a migration.
-    const legacyFingerprint = createConfigHealthFingerprint({
+    // Seed a stored row with the current fingerprint producer. This exercises
+    // row continuity, not a historical release's serialized fingerprint shape.
+    const storedFingerprint = createConfigHealthFingerprint({
       raw: healthy.raw,
       parsed: healthy.parsed,
       resolved: healthy.resolved,
       stat: fs.statSync(configPath),
     });
-    const legacyRow = JSON.stringify(legacyFingerprint);
+    const storedRow = JSON.stringify(storedFingerprint);
     const databasePath = openOpenClawStateDatabase({ env: { HOME: home, USERPROFILE: home } }).path;
     closeOpenClawStateDatabaseForTest();
     const seeder = new DatabaseSync(databasePath);
@@ -288,7 +285,7 @@ describe("config observe recovery promotion", () => {
               last_observed_suspicious_signature, updated_at_ms)
            VALUES (?, ?, ?, NULL, ?)`,
         )
-        .run(configPath, legacyRow, legacyRow, Date.now());
+        .run(configPath, storedRow, storedRow, Date.now());
       expect(
         seeder
           .prepare("PRAGMA table_info(config_health_entries)")
@@ -305,8 +302,7 @@ describe("config observe recovery promotion", () => {
       seeder.close();
     }
 
-    // The pre-upgrade baseline drives the new promotion guard: the matching
-    // healthy config still promotes, the truncation stub is still refused.
+    // The stored baseline permits matching healthy config and refuses truncation.
     await expect(
       promoteConfigSnapshotToLastKnownGoodCore({ deps, snapshot: healthy, logger: deps.logger }),
     ).resolves.toBe(true);
@@ -319,8 +315,7 @@ describe("config observe recovery promotion", () => {
       }),
     ).resolves.toBe(false);
 
-    // The accepted-write baseline advance reads the legacy row and overwrites
-    // it in place, publishing the legacy fingerprint as the compensation.
+    // Advancing the stored baseline retains its prior fingerprint for compensation.
     const grown = await makeSnapshot(configPath, {
       ...healthyConfig,
       gateway: {
@@ -335,28 +330,13 @@ describe("config observe recovery promotion", () => {
       parsed: grown.parsed,
       resolved: grown.resolved,
     });
-    expect(compensation?.previousLastKnownGood.hash).toBe(legacyFingerprint.hash);
+    expect(compensation?.previousLastKnownGood.hash).toBe(storedFingerprint.hash);
 
-    // The rolled-back-write restore rewinds to the pre-upgrade baseline.
+    // Rollback restores the stored baseline.
     await restoreConfigHealthBaselineForRolledBackWrite(deps, compensation);
     expect(readConfigHealthStateFromStore(deps).entries?.[configPath]?.lastKnownGood?.hash).toBe(
-      legacyFingerprint.hash,
+      storedFingerprint.hash,
     );
-
-    // The persisted shape stays legacy-compatible: the fingerprint JSON keys
-    // match what the previous build wrote, so a downgraded build decodes the
-    // row unchanged (the read contract is permissive and shared).
-    const persistedRow = new DatabaseSync(databasePath);
-    try {
-      const row = persistedRow
-        .prepare("SELECT last_known_good_json FROM config_health_entries WHERE config_path = ?")
-        .get(configPath) as { last_known_good_json: string };
-      expect(Object.keys(JSON.parse(row.last_known_good_json)).toSorted()).toEqual(
-        Object.keys(legacyFingerprint).toSorted(),
-      );
-    } finally {
-      persistedRow.close();
-    }
   });
 });
 
