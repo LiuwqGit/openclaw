@@ -96,19 +96,6 @@ describe("image description input optimization", () => {
 });
 
 describe("image description input normalization", () => {
-  it("converts AVIF inputs to JPEG before provider execution", async () => {
-    await expect(
-      normalizeImageDescriptionInput({
-        buffer: AVIF_HEADER_BYTES,
-        fileName: "photo.avif",
-        mime: "image/avif",
-      }),
-    ).resolves.toEqual({ buffer: Buffer.from("jpeg-normalized"), mime: "image/jpeg" });
-    expect(mocks.convertImageToJpeg).toHaveBeenCalledTimes(1);
-    expect(mocks.convertImageToJpeg).toHaveBeenCalledWith(AVIF_HEADER_BYTES);
-    expect(mocks.convertHeicToJpeg).not.toHaveBeenCalled();
-  });
-
   it("converts AVIF inputs matched only by filename when the MIME is absent", async () => {
     await expect(
       normalizeImageDescriptionInput({

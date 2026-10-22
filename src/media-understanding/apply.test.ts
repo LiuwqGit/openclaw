@@ -206,6 +206,7 @@ describe("applyMediaUnderstanding", () => {
         readRemoteMediaBufferWithHeaders: readRemoteMediaBufferMock,
       };
     });
+    // mock-isolation: External media commands and header probes are fixture-supplied; no host codecs run.
     vi.doMock("../media/media-services.js", () => ({
       runFfmpeg: runFfmpegMock,
       convertHeicToJpeg: convertHeicToJpegMock,

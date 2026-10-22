@@ -66,6 +66,7 @@ vi.mock("./image-runtime.js", () => ({
   describeImageWithModel: mocks.describeImageWithModel,
 }));
 
+// mock-isolation: Keep real media services (host codec/exec discovery) out of this runtime matrix.
 vi.mock("../media/media-services.js", () => ({
   convertHeicToJpeg: mocks.convertHeicToJpeg,
   convertImageToJpeg: mocks.convertImageToJpeg,

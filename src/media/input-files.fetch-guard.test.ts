@@ -11,6 +11,7 @@ vi.mock("../infra/net/fetch-guard.js", () => ({
   fetchWithSsrFGuard: (...args: unknown[]) => fetchWithSsrFGuardMock(...args),
 }));
 
+// mock-isolation: Conversion must stay synthetic; fetch-guard tests never invoke host codecs.
 vi.mock("./media-services.js", () => ({
   convertHeicToJpeg: (...args: unknown[]) => convertHeicToJpegMock(...args),
   convertImageToJpeg: (...args: unknown[]) => convertImageToJpegMock(...args),

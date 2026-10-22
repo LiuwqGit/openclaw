@@ -76,7 +76,6 @@ export const DEFAULT_INPUT_IMAGE_MIMES = [
   "image/png",
   "image/gif",
   "image/webp",
-  "image/avif",
   "image/heic",
   "image/heif",
 ];
