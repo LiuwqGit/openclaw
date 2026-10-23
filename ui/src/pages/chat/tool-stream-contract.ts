@@ -65,7 +65,7 @@ export type ProviderPolicyNotice = {
 };
 
 export type CompactionStatus = {
-  phase: "active" | "retrying" | "complete";
+  phase: "active" | "retrying" | "complete" | "bounded";
   runId: string | null;
   itemId?: string;
   startedAt: number | null;

@@ -110,6 +110,38 @@ describe("chat run registration lifecycle", () => {
     },
   );
 
+  it("delivers the hidden bounded-context warning to its session subscribers", async () => {
+    const h = createHarness();
+    const runId = "hidden-bounded-context";
+    const sessionKey = "agent:main:hidden-bounded-context";
+    h.register(runId, sessionKey, "client-bounded");
+    registerAgentRunContext(runId, {
+      sessionKey,
+      isControlUiVisible: false,
+      projectSessionMessages: true,
+      projectSessionLifecycle: false,
+    });
+    h.sessionMessageSubscribers.subscribe("selected-reader", sessionKey);
+    h.sessionMessageSubscribers.subscribe("foreign-reader", "agent:main:other");
+    await h.emit(runId, "compaction", { phase: "context_bounded" });
+
+    const deliveries = h.targetedAgent();
+    expect(deliveries.map(([, payload]) => payload)).toEqual([
+      expect.objectContaining({
+        runId: "client-bounded",
+        sessionKey,
+        stream: "compaction",
+        data: { phase: "context_bounded" },
+      }),
+    ]);
+    for (const delivery of deliveries) {
+      expect(delivery[2]).toEqual(new Set(["selected-reader"]));
+    }
+    expect(h.broadcast).not.toHaveBeenCalled();
+    expect(h.nodeSendToSession).not.toHaveBeenCalled();
+    expect(h.targetedChat()).toHaveLength(0);
+  });
+
   it.each(["none", "other-session", "projection-disabled"] as const)(
     "keeps hidden compaction excluded with %s message subscribers",
     async (audience) => {

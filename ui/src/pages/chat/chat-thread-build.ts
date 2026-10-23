@@ -28,6 +28,7 @@ import {
 import { pluginInlineViewItems } from "../../lib/chat/plugin-inline-views.ts";
 import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
 import {
+  buildBoundedContextDividerItem,
   buildCompactionDividerItem,
   buildGuardianNoticeItem,
   buildResetDividerItem,
@@ -436,15 +437,18 @@ export function buildChatItems(
   if (compaction && compactionKey && !hasPersistedCompaction) {
     const timestamp = compaction.startedAt ?? compaction.completedAt ?? Date.now();
     projections.push({
-      item: {
-        ...buildCompactionDividerItem(
-          {},
-          timestamp,
-          0,
-          compaction.phase === "complete" ? "complete" : "active",
-        ),
-        key: compactionKey,
-      },
+      item:
+        compaction.phase === "bounded"
+          ? buildBoundedContextDividerItem(compactionKey, timestamp)
+          : {
+              ...buildCompactionDividerItem(
+                {},
+                timestamp,
+                0,
+                compaction.phase === "complete" ? "complete" : "active",
+              ),
+              key: compactionKey,
+            },
     });
   }
   const keyedSegments = segments.filter(streamSegmentHasItemId);

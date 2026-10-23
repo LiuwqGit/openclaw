@@ -25,6 +25,9 @@ const catalog = {
       runStatus: "Run status: {status}",
       compactingContext: "Compacting context...",
       contextCompacted: "Context compacted",
+      boundedContext: "⚠️ Continuing with bounded recent context",
+      boundedContextDetail:
+        "Older history outside that window is omitted for this turn; resend any earlier details needed for your request. Full history remains saved.",
       fallbackActive: "Fallback active: {model}",
       modelFallbackEvent: "Model fallback: {from} → {to}",
       modelRestoredEvent: "Returned to selected model: {from} → {to}",

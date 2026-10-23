@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { ChatItem } from "../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./chat-thread-build.ts";
@@ -302,5 +303,47 @@ describe("live terminal continuity with pending collaborators", () => {
       message,
       messageId: groups[0]!.messages[0]!.key,
     });
+  });
+});
+
+describe("live bounded-context warning projection", () => {
+  it("projects the bounded compaction status as a host status divider", () => {
+    const items = build({
+      sessionKey: "agent:main:bounded-live",
+      compactionStatus: {
+        phase: "bounded",
+        runId: "active",
+        startedAt: 100,
+        completedAt: null,
+      },
+    });
+    const divider = items.find(
+      (item): item is Extract<ChatItem, { kind: "divider" }> =>
+        item.kind === "divider" && item.label.includes("bounded recent context"),
+    );
+    expect(divider).toBeDefined();
+    expect(divider?.description).toContain("Full history remains saved");
+    // Host status, not model-authored text: presented without a compaction glyph row.
+    expect(divider?.compaction).toBeUndefined();
+    expect(divider?.systemEvent).toBe("info");
+    expect(divider?.key).toContain("divider:compaction:live:active");
+  });
+
+  it("keeps the ordinary live compaction divider unchanged", () => {
+    const items = build({
+      sessionKey: "agent:main:compaction-live",
+      compactionStatus: {
+        phase: "active",
+        runId: "active",
+        startedAt: 100,
+        completedAt: null,
+      },
+    });
+    const divider = items.find(
+      (item): item is Extract<ChatItem, { kind: "divider" }> =>
+        item.kind === "divider" && item.compaction === "active",
+    );
+    expect(divider?.label).toBe("Compacting context...");
+    expect(divider?.description).toBeUndefined();
   });
 });

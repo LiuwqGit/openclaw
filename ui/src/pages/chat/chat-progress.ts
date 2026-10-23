@@ -133,6 +133,20 @@ export function buildCompactionDividerItem(
   };
 }
 
+export function buildBoundedContextDividerItem(
+  key: string,
+  timestamp: number,
+): Extract<ChatItem, { kind: "divider" }> {
+  return {
+    kind: "divider",
+    key,
+    systemEvent: "info",
+    label: t("chat.composer.boundedContext"),
+    description: t("chat.composer.boundedContextDetail"),
+    timestamp,
+  };
+}
+
 export function buildResetDividerItem(
   marker: Record<string, unknown>,
   timestamp: number,

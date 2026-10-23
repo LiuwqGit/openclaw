@@ -168,7 +168,9 @@ function setCompactionStatus(
   phase: CompactionStatus["phase"],
   itemId?: string,
 ) {
-  const completed = phase === "complete";
+  // Completed and bounded statuses persist until a later operation replaces
+  // them; only in-progress phases rely on the stale-clear timer.
+  const settled = phase === "complete" || phase === "bounded";
   const previous = host.compactionStatus;
   const sameOperation =
     previous?.runId === runId && (!itemId || !previous.itemId || previous.itemId === itemId);
@@ -179,9 +181,9 @@ function setCompactionStatus(
     runId,
     ...(currentItemId ? { itemId: currentItemId } : {}),
     startedAt: sameOperation ? previous.startedAt : Date.now(),
-    completedAt: completed ? Date.now() : null,
+    completedAt: settled ? Date.now() : null,
   };
-  if (!completed) {
+  if (!settled) {
     host.compactionClearTimer = window.setTimeout(() => {
       const current = host.compactionStatus;
       if (current?.phase !== phase || (runId && current?.runId !== runId)) {
@@ -230,6 +232,13 @@ export function handleSessionOperationEvent(
 function handleCompactionEvent(host: ToolStreamHost, payload: AgentEventPayload) {
   const data = payload.data ?? {};
   const phase = typeof data.phase === "string" ? data.phase : "";
+  if (phase === "context_bounded") {
+    // Bounded-seed turns omit older history from the model context; surface the
+    // same host warning channels receive instead of dropping the phase here.
+    clearCompactionTimer(host);
+    setCompactionStatus(host, payload.runId, "bounded", toTrimmedString(data.itemId) ?? undefined);
+    return;
+  }
   if (phase !== "start" && phase !== "end") {
     return;
   }

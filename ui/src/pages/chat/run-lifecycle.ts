@@ -446,7 +446,8 @@ function clearRunIndicators(host: RunLifecycleHost, runId?: string | null) {
   }
   if (
     (!runId || host.compactionStatus?.runId === runId) &&
-    host.compactionStatus?.phase !== "complete"
+    host.compactionStatus?.phase !== "complete" &&
+    host.compactionStatus?.phase !== "bounded"
   ) {
     clearTimer(host.compactionClearTimer);
     host.compactionClearTimer = null;

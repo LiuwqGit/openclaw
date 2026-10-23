@@ -462,6 +462,26 @@ describe("app-tool-stream throttled projections", () => {
   });
 });
 
+it("surfaces the compaction context_bounded phase as a host warning status", () => {
+  useToolStreamFakeTimers();
+  const host = createHost({ chatRunId: "run-1" });
+  emitEvent(host, "run-1", 1, "compaction", { phase: "start" });
+  expect(host.compactionStatus).toMatchObject({ phase: "active", runId: "run-1" });
+
+  // A new bounded-seed turn replaces the completed compaction indicator.
+  emitEvent(host, "run-1", 2, "compaction", { phase: "end", completed: true });
+  expect(host.compactionStatus).toMatchObject({ phase: "complete", runId: "run-1" });
+
+  emitEvent(host, "run-2", 1, "compaction", { phase: "context_bounded" });
+  expect(host.compactionStatus).toMatchObject({ phase: "bounded", runId: "run-2" });
+  // Bounded warnings persist like completed compactions: no stale-clear timer.
+  expect(host.compactionClearTimer).toBeNull();
+
+  // A later live compaction for the same viewer still supersedes the warning.
+  emitEvent(host, "run-2", 2, "compaction", { phase: "start", itemId: "compact-item" });
+  expect(host.compactionStatus).toMatchObject({ phase: "active", runId: "run-2" });
+});
+
 it("does not render Codex reasoning items as tool calls", () => {
   const host = createHost({ chatRunId: "run-1" });
   const reasoning = {
