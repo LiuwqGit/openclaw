@@ -299,6 +299,23 @@ export function resolveAssistantTextChunk(params: {
   return accumulatedText.includes(content) ? "" : content;
 }
 
+// Word-boundary deltas end in whitespace, which the visible trim owner holds
+// back and prepends to the next content delta, so the raw directive parse of a
+// chunk ("def ") and its projected delta (" def") can differ by boundary
+// whitespace only. That difference cannot carry or complete a directive, and
+// the projection confirmed the appended delta byte-for-byte by length, so it
+// proves the same plain chunk the byte-equality check accepts (#181507).
+const matchesVisibleAppend = (params: {
+  parsedText: string;
+  visibleDelta: string;
+  appendDelta: string;
+  previousText: string;
+  next: string;
+}): boolean =>
+  params.parsedText === params.visibleDelta ||
+  (params.next.length === params.previousText.length + params.appendDelta.length &&
+    params.parsedText.trim() === params.visibleDelta.trim());
+
 export function createStreamingReplyResolver(): StreamingReplyResolver {
   const rawProjection = createTextProjection([
     downgradedToolCallTextFilter(),
@@ -357,8 +374,14 @@ export function createStreamingReplyResolver(): StreamingReplyResolver {
       params.parsedStreamDirectives &&
       !hasReplyDirectiveMetadata(params.parsedStreamDirectives) &&
       !/(?:^|\n)[^\S\n]*MEDIA:\s*\S[^\n]*(?:\n|$)/i.test(params.visibleDelta) &&
-      params.parsedStreamDirectives.text === params.visibleDelta &&
       params.appendDelta !== null &&
+      matchesVisibleAppend({
+        parsedText: params.parsedStreamDirectives.text,
+        visibleDelta: params.visibleDelta,
+        appendDelta: params.appendDelta,
+        previousText: params.previousText,
+        next: params.next,
+      }) &&
       params.previousText === params.previousCleaned &&
       (directiveCodePrefix || !hasDirectiveMarker)
     ) {
@@ -377,8 +400,14 @@ export function createStreamingReplyResolver(): StreamingReplyResolver {
       text === undefined &&
       params.evtType !== "text_end" &&
       params.parsedStreamDirectives &&
-      params.parsedStreamDirectives.text === params.visibleDelta &&
       params.appendDelta !== null &&
+      matchesVisibleAppend({
+        parsedText: params.parsedStreamDirectives.text,
+        visibleDelta: params.visibleDelta,
+        appendDelta: params.appendDelta,
+        previousText: params.previousText,
+        next: params.next,
+      }) &&
       params.previousCleaned &&
       params.previousText.length > params.previousCleaned.length &&
       !/(?:^|\n)[^\S\n]*MEDIA:\s*\S[^\n]*(?:\n|$)/i.test(params.visibleDelta)
