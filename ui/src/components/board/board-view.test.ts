@@ -567,6 +567,18 @@ describe("openclaw-board-view", () => {
     expect(tooltip?.content).toContain("Tool: health");
   });
 
+  it("makes the granted capabilities chip a keyboard focus target with an accessible label", async () => {
+    const view = await mountWidget({
+      grantState: "granted",
+      declared: { netOrigins: ["https://api.example.com"], tools: ["health"] },
+    });
+    const chip = testId(view, "board-capabilities-granted");
+
+    expect(chip?.getAttribute("tabindex")).toBe("0");
+    expect(chip?.getAttribute("aria-label")).toContain("Network: https://api.example.com");
+    expect(chip?.getAttribute("aria-label")).toContain("Tool: health");
+  });
+
   it("serializes pending approval decisions while the callback is in flight", async () => {
     const pending = deferred();
     const grant = vi.fn(() => pending.promise);

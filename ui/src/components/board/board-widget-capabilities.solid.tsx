@@ -96,15 +96,23 @@ export function BoardGrantedCapabilities(props: {
       t("board.widget.toolCapability", { capability: tool }),
     ),
   ]);
+  const capabilitiesText = createMemo(
+    () => `${t("board.widget.activeCapabilities")}\n${capabilities().join("\n")}`,
+  );
   return (
     <Show when={props.widget.grantState === "granted" && capabilities().length > 0}>
       <Show
         when={props.presentation === "details"}
         fallback={
-          <openclaw-tooltip
-            prop:content={`${t("board.widget.activeCapabilities")}\n${capabilities().join("\n")}`}
-          >
-            <span class="board-widget__capabilities" data-test-id="board-capabilities-granted">
+          <openclaw-tooltip prop:content={capabilitiesText()}>
+            {/* tabindex lets keyboard users focus the chip to reveal the tooltip;
+                aria-label exposes the full capability list that sighted users get on hover. */}
+            <span
+              class="board-widget__capabilities"
+              data-test-id="board-capabilities-granted"
+              tabindex="0"
+              aria-label={capabilitiesText()}
+            >
               {t("board.widget.granted")}
             </span>
           </openclaw-tooltip>
