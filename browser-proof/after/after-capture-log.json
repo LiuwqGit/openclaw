@@ -1,0 +1,371 @@
+[
+  {
+    "step": "chip-facts",
+    "chipFacts": {
+      "tag": "span",
+      "tabindex": "0",
+      "ariaLabel": "Active widget capabilities\nNetwork: https://api.example.com\nTool: health"
+    }
+  },
+  {
+    "step": "tab-walk",
+    "chipReachedAt": 24,
+    "sequence": [
+      {
+        "tab": 1,
+        "tag": "a",
+        "testId": null,
+        "role": null,
+        "text": "Skip to main content",
+        "label": null
+      },
+      {
+        "tab": 2,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "OpenClaw",
+        "label": "OpenClaw · Agent menu"
+      },
+      {
+        "tab": 3,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Pages"
+      },
+      {
+        "tab": 4,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Sessions"
+      },
+      {
+        "tab": 5,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Users"
+      },
+      {
+        "tab": 6,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Command palette"
+      },
+      {
+        "tab": 7,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "1",
+        "label": "1 inbox item"
+      },
+      {
+        "tab": 8,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "OOwner",
+        "label": "Identity and app menu for Owner: git@0123456 · 105d ago"
+      },
+      {
+        "tab": 9,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Filter & sort"
+      },
+      {
+        "tab": 10,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Collapse sidebar"
+      },
+      {
+        "tab": 11,
+        "tag": "a",
+        "testId": null,
+        "role": null,
+        "text": "Release overview",
+        "label": null
+      },
+      {
+        "tab": 12,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Pin session"
+      },
+      {
+        "tab": 13,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Dismiss and don't show again"
+      },
+      {
+        "tab": 14,
+        "tag": "a",
+        "testId": null,
+        "role": null,
+        "text": "Join",
+        "label": "Join the OpenClaw community on Reddit"
+      },
+      {
+        "tab": 15,
+        "tag": "a",
+        "testId": null,
+        "role": null,
+        "text": "Join",
+        "label": "Join the OpenClaw community on Discord"
+      },
+      {
+        "tab": 16,
+        "tag": "a",
+        "testId": null,
+        "role": null,
+        "text": "Follow",
+        "label": "Follow OpenClaw on X"
+      },
+      {
+        "tab": 17,
+        "tag": "resizable-divider",
+        "testId": null,
+        "role": "separator",
+        "text": "",
+        "label": "Resize sidebar"
+      },
+      {
+        "tab": 18,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Actions for Release overview"
+      },
+      {
+        "tab": 19,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Details"
+      },
+      {
+        "tab": 20,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Panels"
+      },
+      {
+        "tab": 21,
+        "tag": "resizable-divider",
+        "testId": null,
+        "role": "separator",
+        "text": "",
+        "label": "Resize side panel"
+      },
+      {
+        "tab": 22,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Dashboard options"
+      },
+      {
+        "tab": 23,
+        "tag": "section",
+        "testId": "board-widget",
+        "role": "listitem",
+        "text": "⠿Release statusHTMLGranted⋮Move to tabNo other tabsResizeSM3",
+        "label": "Dashboard widget: Release status. Use arrow keys to navigate. Hold Alt and press an arrow key to move it."
+      },
+      {
+        "tab": 24,
+        "tag": "span",
+        "testId": "board-capabilities-granted",
+        "role": null,
+        "text": "Granted",
+        "label": "Active widget capabilities\nNetwork: https://api.example.com\nTool: health"
+      }
+    ]
+  },
+  {
+    "step": "chip-focused",
+    "tooltipOpened": true,
+    "focusFacts": {
+      "isDocumentActiveElement": true,
+      "outlineStyle": "solid",
+      "outlineWidth": "2px",
+      "outlineColor": "rgb(189, 69, 49)",
+      "boxShadow": "none",
+      "rect": {
+        "x": 626,
+        "y": 71,
+        "w": 64,
+        "h": 17
+      }
+    },
+    "tooltipsWhileFocused": [
+      {
+        "phase": "hidden",
+        "text": ""
+      },
+      {
+        "phase": "hidden",
+        "text": ""
+      },
+      {
+        "phase": "hidden",
+        "text": ""
+      },
+      {
+        "phase": "hidden",
+        "text": ""
+      },
+      {
+        "phase": "hidden",
+        "text": "Sessions"
+      },
+      {
+        "phase": "hidden",
+        "text": "Users"
+      },
+      {
+        "phase": "hidden",
+        "text": ""
+      },
+      {
+        "phase": "hidden",
+        "text": ""
+      },
+      {
+        "phase": "hidden",
+        "text": ""
+      },
+      {
+        "phase": "hidden",
+        "text": "Panels"
+      },
+      {
+        "phase": "hidden",
+        "text": ""
+      },
+      {
+        "phase": "hidden",
+        "text": ""
+      },
+      {
+        "phase": "hidden",
+        "text": ""
+      },
+      {
+        "phase": "hidden",
+        "text": ""
+      },
+      {
+        "phase": "hidden",
+        "text": ""
+      },
+      {
+        "phase": "open",
+        "text": "Active widget capabilities Network: https://api.example.com Tool: health"
+      }
+    ]
+  },
+  {
+    "step": "after-escape",
+    "tooltipDismissed": true,
+    "tooltipsAfterEscape": [
+      {
+        "phase": "hidden",
+        "text": ""
+      },
+      {
+        "phase": "hidden",
+        "text": ""
+      },
+      {
+        "phase": "hidden",
+        "text": ""
+      },
+      {
+        "phase": "hidden",
+        "text": ""
+      },
+      {
+        "phase": "hidden",
+        "text": "Sessions"
+      },
+      {
+        "phase": "hidden",
+        "text": "Users"
+      },
+      {
+        "phase": "hidden",
+        "text": ""
+      },
+      {
+        "phase": "hidden",
+        "text": ""
+      },
+      {
+        "phase": "hidden",
+        "text": ""
+      },
+      {
+        "phase": "hidden",
+        "text": "Panels"
+      },
+      {
+        "phase": "hidden",
+        "text": ""
+      },
+      {
+        "phase": "hidden",
+        "text": ""
+      },
+      {
+        "phase": "hidden",
+        "text": ""
+      },
+      {
+        "phase": "hidden",
+        "text": ""
+      },
+      {
+        "phase": "hidden",
+        "text": ""
+      },
+      {
+        "phase": "hidden",
+        "text": "Active widget capabilities Network: https://api.example.com Tool: health"
+      }
+    ]
+  },
+  {
+    "step": "onward-tab",
+    "next": {
+      "tag": "button",
+      "testId": null,
+      "role": null,
+      "text": "⋮",
+      "label": "Widget options"
+    }
+  }
+]

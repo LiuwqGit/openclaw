@@ -1,0 +1,1364 @@
+[
+  {
+    "step": "chip-facts",
+    "chipFacts": {
+      "tag": "span",
+      "tabindex": null,
+      "ariaLabel": null
+    }
+  },
+  {
+    "step": "tab-walk",
+    "chipReachedAt": null,
+    "sequence": [
+      {
+        "tab": 1,
+        "tag": "a",
+        "testId": null,
+        "role": null,
+        "text": "Skip to main content",
+        "label": null
+      },
+      {
+        "tab": 2,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "OpenClaw",
+        "label": "OpenClaw · Agent menu"
+      },
+      {
+        "tab": 3,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Pages"
+      },
+      {
+        "tab": 4,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Sessions"
+      },
+      {
+        "tab": 5,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Users"
+      },
+      {
+        "tab": 6,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Command palette"
+      },
+      {
+        "tab": 7,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "1",
+        "label": "1 inbox item"
+      },
+      {
+        "tab": 8,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "OOwner",
+        "label": "Identity and app menu for Owner: git@0123456 · 105d ago"
+      },
+      {
+        "tab": 9,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Filter & sort"
+      },
+      {
+        "tab": 10,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Collapse sidebar"
+      },
+      {
+        "tab": 11,
+        "tag": "a",
+        "testId": null,
+        "role": null,
+        "text": "Release overview",
+        "label": null
+      },
+      {
+        "tab": 12,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Pin session"
+      },
+      {
+        "tab": 13,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Dismiss and don't show again"
+      },
+      {
+        "tab": 14,
+        "tag": "a",
+        "testId": null,
+        "role": null,
+        "text": "Join",
+        "label": "Join the OpenClaw community on Reddit"
+      },
+      {
+        "tab": 15,
+        "tag": "a",
+        "testId": null,
+        "role": null,
+        "text": "Join",
+        "label": "Join the OpenClaw community on Discord"
+      },
+      {
+        "tab": 16,
+        "tag": "a",
+        "testId": null,
+        "role": null,
+        "text": "Follow",
+        "label": "Follow OpenClaw on X"
+      },
+      {
+        "tab": 17,
+        "tag": "resizable-divider",
+        "testId": null,
+        "role": "separator",
+        "text": "",
+        "label": "Resize sidebar"
+      },
+      {
+        "tab": 18,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Actions for Release overview"
+      },
+      {
+        "tab": 19,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Details"
+      },
+      {
+        "tab": 20,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Panels"
+      },
+      {
+        "tab": 21,
+        "tag": "resizable-divider",
+        "testId": null,
+        "role": "separator",
+        "text": "",
+        "label": "Resize side panel"
+      },
+      {
+        "tab": 22,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Dashboard options"
+      },
+      {
+        "tab": 23,
+        "tag": "section",
+        "testId": "board-widget",
+        "role": "listitem",
+        "text": "⠿Release statusHTMLGranted⋮Move to tabNo other tabsResizeSM3",
+        "label": "Dashboard widget: Release status. Use arrow keys to navigate. Hold Alt and press an arrow key to move it."
+      },
+      {
+        "tab": 24,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "⋮",
+        "label": "Widget options"
+      },
+      {
+        "tab": 25,
+        "tag": "body",
+        "testId": null,
+        "text": ""
+      },
+      {
+        "tab": 26,
+        "tag": "a",
+        "testId": null,
+        "role": null,
+        "text": "Skip to main content",
+        "label": null
+      },
+      {
+        "tab": 27,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "OpenClaw",
+        "label": "OpenClaw · Agent menu"
+      },
+      {
+        "tab": 28,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Pages"
+      },
+      {
+        "tab": 29,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Sessions"
+      },
+      {
+        "tab": 30,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Users"
+      },
+      {
+        "tab": 31,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Command palette"
+      },
+      {
+        "tab": 32,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "1",
+        "label": "1 inbox item"
+      },
+      {
+        "tab": 33,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "OOwner",
+        "label": "Identity and app menu for Owner: git@0123456 · 105d ago"
+      },
+      {
+        "tab": 34,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Filter & sort"
+      },
+      {
+        "tab": 35,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Collapse sidebar"
+      },
+      {
+        "tab": 36,
+        "tag": "a",
+        "testId": null,
+        "role": null,
+        "text": "Release overview",
+        "label": null
+      },
+      {
+        "tab": 37,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Pin session"
+      },
+      {
+        "tab": 38,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Dismiss and don't show again"
+      },
+      {
+        "tab": 39,
+        "tag": "a",
+        "testId": null,
+        "role": null,
+        "text": "Join",
+        "label": "Join the OpenClaw community on Reddit"
+      },
+      {
+        "tab": 40,
+        "tag": "a",
+        "testId": null,
+        "role": null,
+        "text": "Join",
+        "label": "Join the OpenClaw community on Discord"
+      },
+      {
+        "tab": 41,
+        "tag": "a",
+        "testId": null,
+        "role": null,
+        "text": "Follow",
+        "label": "Follow OpenClaw on X"
+      },
+      {
+        "tab": 42,
+        "tag": "resizable-divider",
+        "testId": null,
+        "role": "separator",
+        "text": "",
+        "label": "Resize sidebar"
+      },
+      {
+        "tab": 43,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Actions for Release overview"
+      },
+      {
+        "tab": 44,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Details"
+      },
+      {
+        "tab": 45,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Panels"
+      },
+      {
+        "tab": 46,
+        "tag": "resizable-divider",
+        "testId": null,
+        "role": "separator",
+        "text": "",
+        "label": "Resize side panel"
+      },
+      {
+        "tab": 47,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Dashboard options"
+      },
+      {
+        "tab": 48,
+        "tag": "section",
+        "testId": "board-widget",
+        "role": "listitem",
+        "text": "⠿Release statusHTMLGranted⋮Move to tabNo other tabsResizeSM3",
+        "label": "Dashboard widget: Release status. Use arrow keys to navigate. Hold Alt and press an arrow key to move it."
+      },
+      {
+        "tab": 49,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "⋮",
+        "label": "Widget options"
+      },
+      {
+        "tab": 50,
+        "tag": "body",
+        "testId": null,
+        "text": ""
+      },
+      {
+        "tab": 51,
+        "tag": "a",
+        "testId": null,
+        "role": null,
+        "text": "Skip to main content",
+        "label": null
+      },
+      {
+        "tab": 52,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "OpenClaw",
+        "label": "OpenClaw · Agent menu"
+      },
+      {
+        "tab": 53,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Pages"
+      },
+      {
+        "tab": 54,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Sessions"
+      },
+      {
+        "tab": 55,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Users"
+      },
+      {
+        "tab": 56,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Command palette"
+      },
+      {
+        "tab": 57,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "1",
+        "label": "1 inbox item"
+      },
+      {
+        "tab": 58,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "OOwner",
+        "label": "Identity and app menu for Owner: git@0123456 · 105d ago"
+      },
+      {
+        "tab": 59,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Filter & sort"
+      },
+      {
+        "tab": 60,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Collapse sidebar"
+      },
+      {
+        "tab": 61,
+        "tag": "a",
+        "testId": null,
+        "role": null,
+        "text": "Release overview",
+        "label": null
+      },
+      {
+        "tab": 62,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Pin session"
+      },
+      {
+        "tab": 63,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Dismiss and don't show again"
+      },
+      {
+        "tab": 64,
+        "tag": "a",
+        "testId": null,
+        "role": null,
+        "text": "Join",
+        "label": "Join the OpenClaw community on Reddit"
+      },
+      {
+        "tab": 65,
+        "tag": "a",
+        "testId": null,
+        "role": null,
+        "text": "Join",
+        "label": "Join the OpenClaw community on Discord"
+      },
+      {
+        "tab": 66,
+        "tag": "a",
+        "testId": null,
+        "role": null,
+        "text": "Follow",
+        "label": "Follow OpenClaw on X"
+      },
+      {
+        "tab": 67,
+        "tag": "resizable-divider",
+        "testId": null,
+        "role": "separator",
+        "text": "",
+        "label": "Resize sidebar"
+      },
+      {
+        "tab": 68,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Actions for Release overview"
+      },
+      {
+        "tab": 69,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Details"
+      },
+      {
+        "tab": 70,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Panels"
+      },
+      {
+        "tab": 71,
+        "tag": "resizable-divider",
+        "testId": null,
+        "role": "separator",
+        "text": "",
+        "label": "Resize side panel"
+      },
+      {
+        "tab": 72,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Dashboard options"
+      },
+      {
+        "tab": 73,
+        "tag": "section",
+        "testId": "board-widget",
+        "role": "listitem",
+        "text": "⠿Release statusHTMLGranted⋮Move to tabNo other tabsResizeSM3",
+        "label": "Dashboard widget: Release status. Use arrow keys to navigate. Hold Alt and press an arrow key to move it."
+      },
+      {
+        "tab": 74,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "⋮",
+        "label": "Widget options"
+      },
+      {
+        "tab": 75,
+        "tag": "body",
+        "testId": null,
+        "text": ""
+      },
+      {
+        "tab": 76,
+        "tag": "a",
+        "testId": null,
+        "role": null,
+        "text": "Skip to main content",
+        "label": null
+      },
+      {
+        "tab": 77,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "OpenClaw",
+        "label": "OpenClaw · Agent menu"
+      },
+      {
+        "tab": 78,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Pages"
+      },
+      {
+        "tab": 79,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Sessions"
+      },
+      {
+        "tab": 80,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Users"
+      },
+      {
+        "tab": 81,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Command palette"
+      },
+      {
+        "tab": 82,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "1",
+        "label": "1 inbox item"
+      },
+      {
+        "tab": 83,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "OOwner",
+        "label": "Identity and app menu for Owner: git@0123456 · 105d ago"
+      },
+      {
+        "tab": 84,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Filter & sort"
+      },
+      {
+        "tab": 85,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Collapse sidebar"
+      },
+      {
+        "tab": 86,
+        "tag": "a",
+        "testId": null,
+        "role": null,
+        "text": "Release overview",
+        "label": null
+      },
+      {
+        "tab": 87,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Pin session"
+      },
+      {
+        "tab": 88,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Dismiss and don't show again"
+      },
+      {
+        "tab": 89,
+        "tag": "a",
+        "testId": null,
+        "role": null,
+        "text": "Join",
+        "label": "Join the OpenClaw community on Reddit"
+      },
+      {
+        "tab": 90,
+        "tag": "a",
+        "testId": null,
+        "role": null,
+        "text": "Join",
+        "label": "Join the OpenClaw community on Discord"
+      },
+      {
+        "tab": 91,
+        "tag": "a",
+        "testId": null,
+        "role": null,
+        "text": "Follow",
+        "label": "Follow OpenClaw on X"
+      },
+      {
+        "tab": 92,
+        "tag": "resizable-divider",
+        "testId": null,
+        "role": "separator",
+        "text": "",
+        "label": "Resize sidebar"
+      },
+      {
+        "tab": 93,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Actions for Release overview"
+      },
+      {
+        "tab": 94,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Details"
+      },
+      {
+        "tab": 95,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Panels"
+      },
+      {
+        "tab": 96,
+        "tag": "resizable-divider",
+        "testId": null,
+        "role": "separator",
+        "text": "",
+        "label": "Resize side panel"
+      },
+      {
+        "tab": 97,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Dashboard options"
+      },
+      {
+        "tab": 98,
+        "tag": "section",
+        "testId": "board-widget",
+        "role": "listitem",
+        "text": "⠿Release statusHTMLGranted⋮Move to tabNo other tabsResizeSM3",
+        "label": "Dashboard widget: Release status. Use arrow keys to navigate. Hold Alt and press an arrow key to move it."
+      },
+      {
+        "tab": 99,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "⋮",
+        "label": "Widget options"
+      },
+      {
+        "tab": 100,
+        "tag": "body",
+        "testId": null,
+        "text": ""
+      },
+      {
+        "tab": 101,
+        "tag": "a",
+        "testId": null,
+        "role": null,
+        "text": "Skip to main content",
+        "label": null
+      },
+      {
+        "tab": 102,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "OpenClaw",
+        "label": "OpenClaw · Agent menu"
+      },
+      {
+        "tab": 103,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Pages"
+      },
+      {
+        "tab": 104,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Sessions"
+      },
+      {
+        "tab": 105,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Users"
+      },
+      {
+        "tab": 106,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Command palette"
+      },
+      {
+        "tab": 107,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "1",
+        "label": "1 inbox item"
+      },
+      {
+        "tab": 108,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "OOwner",
+        "label": "Identity and app menu for Owner: git@0123456 · 105d ago"
+      },
+      {
+        "tab": 109,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Filter & sort"
+      },
+      {
+        "tab": 110,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Collapse sidebar"
+      },
+      {
+        "tab": 111,
+        "tag": "a",
+        "testId": null,
+        "role": null,
+        "text": "Release overview",
+        "label": null
+      },
+      {
+        "tab": 112,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Pin session"
+      },
+      {
+        "tab": 113,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Dismiss and don't show again"
+      },
+      {
+        "tab": 114,
+        "tag": "a",
+        "testId": null,
+        "role": null,
+        "text": "Join",
+        "label": "Join the OpenClaw community on Reddit"
+      },
+      {
+        "tab": 115,
+        "tag": "a",
+        "testId": null,
+        "role": null,
+        "text": "Join",
+        "label": "Join the OpenClaw community on Discord"
+      },
+      {
+        "tab": 116,
+        "tag": "a",
+        "testId": null,
+        "role": null,
+        "text": "Follow",
+        "label": "Follow OpenClaw on X"
+      },
+      {
+        "tab": 117,
+        "tag": "resizable-divider",
+        "testId": null,
+        "role": "separator",
+        "text": "",
+        "label": "Resize sidebar"
+      },
+      {
+        "tab": 118,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Actions for Release overview"
+      },
+      {
+        "tab": 119,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Details"
+      },
+      {
+        "tab": 120,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Panels"
+      },
+      {
+        "tab": 121,
+        "tag": "resizable-divider",
+        "testId": null,
+        "role": "separator",
+        "text": "",
+        "label": "Resize side panel"
+      },
+      {
+        "tab": 122,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Dashboard options"
+      },
+      {
+        "tab": 123,
+        "tag": "section",
+        "testId": "board-widget",
+        "role": "listitem",
+        "text": "⠿Release statusHTMLGranted⋮Move to tabNo other tabsResizeSM3",
+        "label": "Dashboard widget: Release status. Use arrow keys to navigate. Hold Alt and press an arrow key to move it."
+      },
+      {
+        "tab": 124,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "⋮",
+        "label": "Widget options"
+      },
+      {
+        "tab": 125,
+        "tag": "body",
+        "testId": null,
+        "text": ""
+      },
+      {
+        "tab": 126,
+        "tag": "a",
+        "testId": null,
+        "role": null,
+        "text": "Skip to main content",
+        "label": null
+      },
+      {
+        "tab": 127,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "OpenClaw",
+        "label": "OpenClaw · Agent menu"
+      },
+      {
+        "tab": 128,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Pages"
+      },
+      {
+        "tab": 129,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Sessions"
+      },
+      {
+        "tab": 130,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Users"
+      },
+      {
+        "tab": 131,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Command palette"
+      },
+      {
+        "tab": 132,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "1",
+        "label": "1 inbox item"
+      },
+      {
+        "tab": 133,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "OOwner",
+        "label": "Identity and app menu for Owner: git@0123456 · 105d ago"
+      },
+      {
+        "tab": 134,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Filter & sort"
+      },
+      {
+        "tab": 135,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Collapse sidebar"
+      },
+      {
+        "tab": 136,
+        "tag": "a",
+        "testId": null,
+        "role": null,
+        "text": "Release overview",
+        "label": null
+      },
+      {
+        "tab": 137,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Pin session"
+      },
+      {
+        "tab": 138,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Dismiss and don't show again"
+      },
+      {
+        "tab": 139,
+        "tag": "a",
+        "testId": null,
+        "role": null,
+        "text": "Join",
+        "label": "Join the OpenClaw community on Reddit"
+      },
+      {
+        "tab": 140,
+        "tag": "a",
+        "testId": null,
+        "role": null,
+        "text": "Join",
+        "label": "Join the OpenClaw community on Discord"
+      },
+      {
+        "tab": 141,
+        "tag": "a",
+        "testId": null,
+        "role": null,
+        "text": "Follow",
+        "label": "Follow OpenClaw on X"
+      },
+      {
+        "tab": 142,
+        "tag": "resizable-divider",
+        "testId": null,
+        "role": "separator",
+        "text": "",
+        "label": "Resize sidebar"
+      },
+      {
+        "tab": 143,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Actions for Release overview"
+      },
+      {
+        "tab": 144,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Details"
+      },
+      {
+        "tab": 145,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Panels"
+      },
+      {
+        "tab": 146,
+        "tag": "resizable-divider",
+        "testId": null,
+        "role": "separator",
+        "text": "",
+        "label": "Resize side panel"
+      },
+      {
+        "tab": 147,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Dashboard options"
+      },
+      {
+        "tab": 148,
+        "tag": "section",
+        "testId": "board-widget",
+        "role": "listitem",
+        "text": "⠿Release statusHTMLGranted⋮Move to tabNo other tabsResizeSM3",
+        "label": "Dashboard widget: Release status. Use arrow keys to navigate. Hold Alt and press an arrow key to move it."
+      },
+      {
+        "tab": 149,
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "⋮",
+        "label": "Widget options"
+      },
+      {
+        "tab": 150,
+        "tag": "a",
+        "testId": null,
+        "role": null,
+        "text": "Skip to main content",
+        "label": null
+      },
+      {
+        "tab": "cell+1",
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "⋮",
+        "label": "Widget options"
+      },
+      {
+        "tab": "cell+2",
+        "tag": "body",
+        "testId": null,
+        "text": ""
+      },
+      {
+        "tab": "cell+3",
+        "tag": "a",
+        "testId": null,
+        "role": null,
+        "text": "Skip to main content",
+        "label": null
+      },
+      {
+        "tab": "cell+4",
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "OpenClaw",
+        "label": "OpenClaw · Agent menu"
+      },
+      {
+        "tab": "cell+5",
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Pages"
+      },
+      {
+        "tab": "cell+6",
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Sessions"
+      },
+      {
+        "tab": "cell+7",
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Users"
+      },
+      {
+        "tab": "cell+8",
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "",
+        "label": "Command palette"
+      },
+      {
+        "tab": "cell+9",
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "1",
+        "label": "1 inbox item"
+      },
+      {
+        "tab": "cell+10",
+        "tag": "button",
+        "testId": null,
+        "role": null,
+        "text": "OOwner",
+        "label": "Identity and app menu for Owner: git@0123456 · 105d ago"
+      }
+    ]
+  },
+  {
+    "step": "focus-passed-widget-bar",
+    "info": {
+      "tag": "button",
+      "testId": null,
+      "role": null,
+      "text": "⋮",
+      "label": "Widget options"
+    },
+    "tooltips": [
+      {
+        "phase": "hidden",
+        "text": ""
+      },
+      {
+        "phase": "hidden",
+        "text": ""
+      },
+      {
+        "phase": "hidden",
+        "text": ""
+      },
+      {
+        "phase": "hidden",
+        "text": "Pages"
+      },
+      {
+        "phase": "hidden",
+        "text": "Sessions"
+      },
+      {
+        "phase": "hidden",
+        "text": "Users"
+      },
+      {
+        "phase": "hidden",
+        "text": ""
+      },
+      {
+        "phase": "hidden",
+        "text": ""
+      },
+      {
+        "phase": "hidden",
+        "text": ""
+      },
+      {
+        "phase": "hidden",
+        "text": "Panels"
+      },
+      {
+        "phase": "hidden",
+        "text": ""
+      },
+      {
+        "phase": "hidden",
+        "text": ""
+      },
+      {
+        "phase": "hidden",
+        "text": ""
+      },
+      {
+        "phase": "hidden",
+        "text": ""
+      },
+      {
+        "phase": "hidden",
+        "text": ""
+      },
+      {
+        "phase": "hidden",
+        "text": ""
+      },
+      {
+        "phase": "open",
+        "text": "Widget options"
+      }
+    ]
+  }
+]
