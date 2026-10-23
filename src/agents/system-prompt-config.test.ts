@@ -366,3 +366,51 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     expect(prompt.includes("- Subagents: `sessions_spawn`")).toBe(!expected);
   });
 });
+
+describe("command availability projection", () => {
+  function renderCommandPrompt(config: OpenClawConfig, toolNames?: string[]) {
+    return buildConfiguredAgentSystemPrompt({
+      config,
+      workspaceDir: "/tmp/openclaw",
+      ...(toolNames ? { toolNames } : {}),
+    });
+  }
+
+  it("omits chat /update guidance when commands.restart=false", () => {
+    const config: OpenClawConfig = { commands: { restart: false } };
+    const prompt = renderCommandPrompt(config);
+    expect(prompt).not.toContain("owner can send `/update`");
+    expect(prompt).not.toContain("commands.restart enabled");
+    expect(prompt).not.toContain("direct the user to `/update`");
+    expect(prompt).toContain(
+      "Control UI or ask the operator to run `openclaw update` in a terminal",
+    );
+  });
+
+  it("omits chat /restart guidance when commands.restart=false with the gateway tool", () => {
+    const config: OpenClawConfig = { commands: { restart: false } };
+    const prompt = renderCommandPrompt(config, ["gateway"]);
+    expect(prompt).not.toContain("owner can send `/update`");
+    expect(prompt).not.toContain("`/restart` in chat");
+    expect(prompt).toContain("Update OpenClaw: `gateway` action update.run");
+  });
+
+  it("keeps the reasoning toggle hint with commands.text=false (surface routes stay resolvable)", () => {
+    const config: OpenClawConfig = { commands: { text: false } };
+    const prompt = renderCommandPrompt(config);
+    expect(prompt).toContain("Toggle /reasoning; /status shows when enabled.");
+    expect(prompt).toContain("owner can send `/update`");
+  });
+
+  it("keeps the reasoning toggle hint with all command flags disabled (channel adapters own route availability)", () => {
+    const config: OpenClawConfig = { commands: { text: false, native: false } };
+    const prompt = renderCommandPrompt(config);
+    expect(prompt).toContain("Toggle /reasoning; /status shows when enabled.");
+  });
+
+  it("keeps default command guidance for unconfigured deployments", () => {
+    const prompt = renderCommandPrompt({});
+    expect(prompt).toContain("owner can send `/update`");
+    expect(prompt).toContain("Toggle /reasoning; /status shows when enabled.");
+  });
+});
