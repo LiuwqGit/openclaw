@@ -188,3 +188,89 @@ test.each<[string, string, string, SelectionOptions]>([
     );
   });
 });
+
+test.each<[string, Partial<SessionEntry>, boolean]>([
+  [
+    "self-origin",
+    { modelOverrideFallbackOriginProvider: "openai", modelOverrideFallbackOriginModel: "gpt-x" },
+    false,
+  ],
+  [
+    "trimmed self-origin",
+    {
+      modelOverrideFallbackOriginProvider: " openai ",
+      modelOverrideFallbackOriginModel: " gpt-x ",
+    },
+    false,
+  ],
+  ["missing origin", {}, true],
+  [
+    "foreign provider",
+    { modelOverrideFallbackOriginProvider: "retired", modelOverrideFallbackOriginModel: "gpt-x" },
+    true,
+  ],
+  [
+    "foreign model",
+    { modelOverrideFallbackOriginProvider: "openai", modelOverrideFallbackOriginModel: "gpt-old" },
+    true,
+  ],
+  [
+    "model case mismatch",
+    { modelOverrideFallbackOriginProvider: "openai", modelOverrideFallbackOriginModel: "gpt-X" },
+    true,
+  ],
+  ["provider-only origin", { modelOverrideFallbackOriginProvider: "openai" }, true],
+  ["model-only origin", { modelOverrideFallbackOriginModel: "gpt-x" }, true],
+  [
+    "blank origin",
+    { modelOverrideFallbackOriginProvider: " ", modelOverrideFallbackOriginModel: "gpt-x" },
+    true,
+  ],
+  [
+    "missing override provider",
+    {
+      providerOverride: undefined,
+      modelOverrideFallbackOriginProvider: "retired",
+      modelOverrideFallbackOriginModel: "gpt-x",
+    },
+    true,
+  ],
+  [
+    "blank override provider",
+    {
+      providerOverride: " ",
+      modelOverrideFallbackOriginProvider: "retired",
+      modelOverrideFallbackOriginModel: "gpt-x",
+    },
+    true,
+  ],
+])(
+  "Codex legacy cleanup preserves only complete self-origin selections: %s",
+  async (_name, origin, stale) => {
+    await withStateDirEnv("reply-codex-self-origin-", async () => {
+      const entry: SessionEntry = {
+        sessionId: "child",
+        updatedAt: 1,
+        providerOverride: "openai",
+        modelOverride: "gpt-x",
+        modelOverrideSource: "auto",
+        ...origin,
+      };
+      const selection = await selectModel({
+        cfg: {
+          plugins: { enabled: false },
+          agents: { defaults: { models: { "openai/gpt-x": { agentRuntime: { id: "codex" } } } } },
+        },
+        sessionEntry: entry,
+        sessionStore: { child: entry },
+        sessionKey: "child",
+        defaultProvider: "openai",
+        defaultModel: "gpt-x",
+        provider: "openai",
+        model: "gpt-x",
+      });
+      expect(selection.resetModelOverride).toBe(stale);
+      expect(entry.modelOverride).toBe(stale ? undefined : "gpt-x");
+    });
+  },
+);
