@@ -132,8 +132,14 @@ export type Context = {
   prepared: [string, Awaited<ReturnType<typeof prepareVerifiedSqliteFile>>][];
 };
 export function refuse(ctx: Context, observed: string, required: string): never {
+  // Recovery advice must match the operation state: without a manifest on disk there is
+  // nothing to resume or roll back, so dry-run preflight refusals stay actionable.
+  const manifestPath = databasePortManifestPath(ctx.stateDir);
+  const advice = fs.existsSync(manifestPath)
+    ? `Stop the Gateway first; correct this fact and retry, or use --resume/--rollback with ${manifestPath}.`
+    : "Correct this fact and retry.";
   throw new DatabasePortError(
-    `Database port ${ctx.phase}: ${ctx.target}; observed ${observed}; required ${required}. Stop the Gateway first; correct this fact and retry, or use --resume/--rollback with ${databasePortManifestPath(ctx.stateDir)}.`,
+    `Database port ${ctx.phase}: ${ctx.target}; observed ${observed}; required ${required}. ${advice}`,
   );
 }
 export const digest = (value: unknown) =>

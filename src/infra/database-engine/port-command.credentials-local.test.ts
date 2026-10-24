@@ -170,4 +170,32 @@ describe("database port local credential ownership", () => {
       expect(fs.existsSync(recovery.databasePortManifestPath(state.stateDir))).toBe(false);
     });
   });
+
+  it("refuses a stale shared-database inode with the binding cause, not generic advice", async () => {
+    await fixture(async (state, stores) => {
+      // A tar-extracted or copied shared database keeps its bytes but gains a new inode.
+      const shared = stores[0]!.shared;
+      fs.copyFileSync(shared, `${shared}.rebound`);
+      fs.renameSync(`${shared}.rebound`, shared);
+      const before = bytes(state, stores);
+      const refusal = await doctorDatabasePort({
+        family: "state",
+        to: "sqlite",
+        dryRun: true,
+      }).then(
+        (result) => assert.fail(`expected refusal, got ${JSON.stringify(result.phase)}`),
+        (error: Error) => String(error),
+      );
+      expect(refusal).toContain(stores[0]!.local);
+      expect(refusal).toContain("local client credentials not bound to this shared database");
+      expect(refusal).toContain("openclaw backup restore");
+      expect(refusal).not.toContain("--resume/--rollback");
+      expect(refusal).not.toContain("preserve the recovery directory");
+      expect(bytes(state, stores)).toEqual(before);
+      expect(fs.existsSync(recovery.databasePortManifestPath(state.stateDir))).toBe(false);
+      expect(fs.existsSync(path.dirname(recovery.databasePortManifestPath(state.stateDir)))).toBe(
+        false,
+      );
+    });
+  });
 });

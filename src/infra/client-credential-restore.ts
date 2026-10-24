@@ -53,6 +53,9 @@ function portSharedIdentity(snapshotPath: string, sharedPath: string) {
   return { engine: "sqlite" as const, identity: `${sharedPath}:${createdAt}` };
 }
 
+/** Binding capture failures are safe to surface through the port's refusal vocabulary. */
+export class PortClientCredentialBindingError extends Error {}
+
 /** Capture only receipt metadata; credential rows remain in their existing local owner. */
 export function capturePortClientCredentialBinding(options: {
   env: NodeJS.ProcessEnv;
@@ -73,11 +76,13 @@ export function capturePortClientCredentialBinding(options: {
         stored.receipt.source.engine !== identity.engine ||
         stored.receipt.source.identity !== identity.identity))
   ) {
-    throw new Error("Database port credentials do not match the captured shared database.");
+    throw new PortClientCredentialBindingError(
+      "Database port credentials do not match the captured shared database.",
+    );
   }
   const localFile = readClientCredentialFileIdentity(owner.path);
   if (!localFile) {
-    throw new Error("Database port local credentials disappeared.");
+    throw new PortClientCredentialBindingError("Database port local credentials disappeared.");
   }
   return { localFile, receipt: JSON.stringify(stored.receipt) };
 }

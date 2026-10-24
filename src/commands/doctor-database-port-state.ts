@@ -1,11 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
+import { formatCliCommand } from "../cli/command-format.js";
 import { runWithLocalStateOwner } from "../cli/local-state-owner.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveStateClientCredentialEnvironment } from "../infra/client-credential-paths.js";
 import { readClientCredentialFileIdentity } from "../infra/client-credential-receipt.js";
-import { capturePortClientCredentialBinding } from "../infra/client-credential-restore.js";
+import {
+  capturePortClientCredentialBinding,
+  PortClientCredentialBindingError,
+} from "../infra/client-credential-restore.js";
 import { resolveDatabaseEngineInput } from "../infra/database-engine/config.js";
 import { withDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import {
@@ -32,12 +36,28 @@ export function assertLocalCredentialPortCompanion(
   privatePaths(ctx, [file]);
   const sourceFile = readClientCredentialFileIdentity(sharedPath);
   const env = resolveStateClientCredentialEnvironment({ path: sharedPath, env: ctx.env });
+  let binding: ReturnType<typeof capturePortClientCredentialBinding> = null;
+  if (env && sourceFile) {
+    try {
+      binding = capturePortClientCredentialBinding({ env, sourcePath: sharedPath, sourceFile });
+    } catch (error) {
+      if (error instanceof PortClientCredentialBindingError) {
+        // Keep the binding cause out of the command's generic validation/I/O refusal.
+        refuse(
+          ctx,
+          "local client credentials not bound to this shared database",
+          `a matching receipt (restore the archive with ${formatCliCommand("openclaw backup restore")} to rebind it)`,
+        );
+      }
+      throw error;
+    }
+  }
   if (
     sharedFamily !== "state" ||
     readBackupEngine(file).engine !== "sqlite" ||
     !sourceFile ||
     !env ||
-    !capturePortClientCredentialBinding({ env, sourcePath: sharedPath, sourceFile })
+    !binding
   ) {
     refuse(
       ctx,
