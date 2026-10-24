@@ -339,6 +339,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       retireChatMetadataRequests(state, { keepPresentation: !metadataOwnerChanged });
     }
     if (sourceChanged) {
+      this.retireDetailsOutputs();
       this.resetSessionReadAcknowledgements();
       this.headerPresentation.continueInTerminalDialog = null;
       cancelChatScroll(state);
@@ -402,8 +403,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     }
     state.client = snapshot.client;
     state.connected = snapshot.phase === "connected";
+    state.gatewayWorkPaused = state.connected && !readsAvailable;
     synchronizeInitialChatSnapshotConnection(state);
-    const recoveryReady = state.connected && Boolean(state.client?.recoveryScopeReady);
+    const recoveryReady = readsAvailable && Boolean(state.client?.recoveryScopeReady);
     const resumeOutboxes = recoveryReady && (clientChanged || !this.outboxRecoveryReady);
     this.outboxRecoveryReady = recoveryReady;
     state.connectionEpoch = this.connectionGeneration;

@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import * as ttsSettings from "../tts/tts-settings.js";
 import * as preparedModelCatalog from "./prepared-model-catalog.js";
 import { prepareConfiguredModelAliases } from "./prepared-model-runtime.configured-completion.js";
@@ -100,6 +102,74 @@ function buildPrompt(config: OpenClawConfig, agentId = "main", sessionKey?: stri
 }
 
 describe("buildConfiguredAgentSystemPrompt", () => {
+  it.each<[string, string, OpenClawConfig, boolean]>([
+    ["disabled routes", "discord", { commands: { text: false, native: false } }, false],
+    [
+      "channel disables native",
+      "discord",
+      {
+        commands: { text: false, native: true },
+        channels: { discord: { commands: { native: false } } },
+      },
+      false,
+    ],
+    [
+      "channel enables native",
+      "discord",
+      {
+        commands: { text: false, native: false },
+        channels: { discord: { commands: { native: true } } },
+      },
+      true,
+    ],
+    ["native auto on", "discord", { commands: { text: false } }, true],
+    ["native auto off", "slack", { commands: { text: false } }, false],
+    ["text enabled", "discord", { commands: { native: false } }, true],
+    ["text-only surface", "webchat", { commands: { text: false, native: false } }, true],
+  ])("renders reasoning command guidance for %s", (_name, channel, config, enabled) => {
+    const registry = createTestRegistry(
+      ["discord", "slack"].map((id) => ({
+        pluginId: id,
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({
+            id,
+            capabilities: { nativeCommands: true, chatTypes: ["direct"] },
+          }),
+          commands: { nativeCommandsAutoEnabled: id === "discord" },
+        },
+      })),
+    );
+    const prompt = withPluginRuntimeRegistryScope(registry, () =>
+      buildConfiguredAgentSystemPrompt({
+        config,
+        workspaceDir: "/tmp/openclaw",
+        runtimeInfo: { channel },
+        reasoningLevel: "stream",
+      }),
+    );
+    expect(prompt).toContain("Reasoning=stream; hidden unless on/stream.");
+    expect(prompt.includes("Toggle /reasoning")).toBe(enabled);
+    expect(prompt.includes("/status shows when enabled.")).toBe(enabled);
+  });
+
+  it.each([{ toolNames: [] }, { toolNames: ["gateway"] }])(
+    "does not recommend disabled update or restart commands with tools $toolNames",
+    ({ toolNames }) => {
+      const params = { workspaceDir: "/tmp/openclaw", toolNames };
+      const disabled = buildConfiguredAgentSystemPrompt({
+        ...params,
+        config: { commands: { restart: false } },
+      });
+      expect(disabled).not.toContain("`/update`");
+      expect(disabled).not.toContain("`/restart`");
+      expect(disabled).toContain("openclaw update");
+      expect(disabled).toContain("Toggle /reasoning; /status shows when enabled.");
+      const enabled = buildConfiguredAgentSystemPrompt({ ...params, config: {} });
+      expect(enabled).toContain("`/update`");
+    },
+  );
+
   it.each(["minimal", "none"] as const)(
     "skips full-only preparation in %s mode and refreshes the next full prompt",
     (promptMode) => {
@@ -364,53 +434,5 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     const prompt = buildPrompt(config, agentId ?? "main", sessionKey);
     expect(prompt.includes("## Delegation")).toBe(expected);
     expect(prompt.includes("- Subagents: `sessions_spawn`")).toBe(!expected);
-  });
-});
-
-describe("command availability projection", () => {
-  function renderCommandPrompt(config: OpenClawConfig, toolNames?: string[]) {
-    return buildConfiguredAgentSystemPrompt({
-      config,
-      workspaceDir: "/tmp/openclaw",
-      ...(toolNames ? { toolNames } : {}),
-    });
-  }
-
-  it("omits chat /update guidance when commands.restart=false", () => {
-    const config: OpenClawConfig = { commands: { restart: false } };
-    const prompt = renderCommandPrompt(config);
-    expect(prompt).not.toContain("owner can send `/update`");
-    expect(prompt).not.toContain("commands.restart enabled");
-    expect(prompt).not.toContain("direct the user to `/update`");
-    expect(prompt).toContain(
-      "Control UI or ask the operator to run `openclaw update` in a terminal",
-    );
-  });
-
-  it("omits chat /restart guidance when commands.restart=false with the gateway tool", () => {
-    const config: OpenClawConfig = { commands: { restart: false } };
-    const prompt = renderCommandPrompt(config, ["gateway"]);
-    expect(prompt).not.toContain("owner can send `/update`");
-    expect(prompt).not.toContain("`/restart` in chat");
-    expect(prompt).toContain("Update OpenClaw: `gateway` action update.run");
-  });
-
-  it("keeps the reasoning toggle hint with commands.text=false (surface routes stay resolvable)", () => {
-    const config: OpenClawConfig = { commands: { text: false } };
-    const prompt = renderCommandPrompt(config);
-    expect(prompt).toContain("Toggle /reasoning; /status shows when enabled.");
-    expect(prompt).toContain("owner can send `/update`");
-  });
-
-  it("keeps the reasoning toggle hint with all command flags disabled (channel adapters own route availability)", () => {
-    const config: OpenClawConfig = { commands: { text: false, native: false } };
-    const prompt = renderCommandPrompt(config);
-    expect(prompt).toContain("Toggle /reasoning; /status shows when enabled.");
-  });
-
-  it("keeps default command guidance for unconfigured deployments", () => {
-    const prompt = renderCommandPrompt({});
-    expect(prompt).toContain("owner can send `/update`");
-    expect(prompt).toContain("Toggle /reasoning; /status shows when enabled.");
   });
 });

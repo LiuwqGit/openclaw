@@ -4,7 +4,10 @@
  * This module gathers agent/config knobs before rendering the canonical system
  * prompt so callers do not duplicate owner, TTS, alias, memory, or FS policy.
  */
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { shouldHandleTextCommands } from "../auto-reply/commands-text-routing.js";
 import { isRestartEnabled } from "../config/commands.flags.js";
+import { resolveNativeCommandsEnabled } from "../config/commands.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { classifyAgentToolSource } from "../plugins/tool-metadata.js";
 import type { PreparedTtsPreferences } from "../tts/tts-preferences.js";
@@ -30,15 +33,6 @@ function buildModelAliasLines(owner: ConfiguredAgentSystemPromptParams["prepared
     .toSorted((a, b) => a.alias.localeCompare(b.alias))
     .map(({ alias, provider, model }) => `- ${alias}: ${provider}/${model}`);
 }
-
-/**
- * Resolves whether slash/native chat commands are parsed on the prompt's surface.
- *
- * Deliberately not derived here: whether a native-capable surface actually parses
- * commands is resolved inside channel adapters at connection time (account-level
- * native overrides, channel-specific single-command routes). Hiding hints based on
- * an incomplete view would suppress guidance for command paths that work.
- */
 
 /** Builds the agent system prompt after applying config-derived prompt fields. */
 export function buildConfiguredAgentSystemPrompt(params: ConfiguredAgentSystemPromptParams) {
@@ -77,10 +71,20 @@ export function buildConfiguredAgentSystemPrompt(params: ConfiguredAgentSystemPr
   if (!config) {
     return buildAgentSystemPrompt(renderParams);
   }
+  const channel = normalizeOptionalLowercaseString(renderParams.runtimeInfo?.channel) ?? "";
   const includeFullSections =
     renderParams.promptMode !== "minimal" && renderParams.promptMode !== "none";
   return buildAgentSystemPrompt({
     ...renderParams,
+    restartCommandsEnabled: isRestartEnabled(config),
+    reasoningCommandsEnabled:
+      shouldHandleTextCommands({ cfg: config, surface: channel }) ||
+      resolveNativeCommandsEnabled({
+        providerId: channel,
+        providerSetting: config.channels?.[channel]?.commands?.native,
+        globalSetting: config.commands?.native,
+        config,
+      }),
     ownerDisplay: "raw",
     ownerDisplaySecret: undefined,
     subagentDelegationMode: resolveMainSessionDelegationMode({
@@ -97,6 +101,5 @@ export function buildConfiguredAgentSystemPrompt(params: ConfiguredAgentSystemPr
     modelAliasLines: includeFullSections ? buildModelAliasLines(preparedModelRuntime) : [],
     memoryCitationsMode: config.memory?.citations,
     fsWorkspaceOnly: resolveEffectiveToolFsWorkspaceOnly({ cfg: config, agentId }),
-    commandsRestartEnabled: isRestartEnabled(config),
   });
 }

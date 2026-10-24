@@ -58,7 +58,6 @@ import {
   buildSkillWorkshopPromptSection,
   SKILL_WORKSHOP_TOOL_NAME,
 } from "./skill-workshop-prompt.js";
-import * as chatCommandGuidance from "./system-prompt-command-guidance.js";
 import {
   buildProjectContextSection,
   isBootstrapContextFile,
@@ -68,6 +67,7 @@ import type {
   ProviderSystemPromptContribution,
   ProviderSystemPromptSectionId,
 } from "./system-prompt-contribution.js";
+import { buildOpenClawControlSection } from "./system-prompt-control.js";
 import { buildDocumentationSection } from "./system-prompt-documentation.js";
 import {
   buildAssistantOutputDirectivesSection,
@@ -291,6 +291,10 @@ export function buildAgentSystemPrompt(params: {
   workspaceDir: string;
   runtimeCwd?: string;
   reasoningLevel?: ReasoningLevel;
+  /** Config-derived availability of the owner /restart and /update commands. */
+  restartCommandsEnabled?: boolean;
+  /** Session/config-derived availability of /reasoning and /status guidance. */
+  reasoningCommandsEnabled?: boolean;
   extraSystemPrompt?: string;
   ownerNumbers?: string[];
   ownerDisplay?: OwnerIdDisplay;
@@ -349,8 +353,6 @@ export function buildAgentSystemPrompt(params: {
   memoryCitationsMode?: MemoryCitationsMode;
   /** Immutable memory state prepared before synchronous prompt assembly. */
   preparedMemoryPrompt?: PreparedMemoryPromptSection;
-  /** Whether chat /restart and /update commands are enabled (commands.restart defaults to true). */
-  commandsRestartEnabled?: boolean;
   /** Watched same-agent group sessions prepared before synchronous prompt assembly. */
   preparedWatchedSessions?: PreparedWatchedSessionsPrompt;
   /** Per-turn repository facts rendered below the cache boundary, separate from recall instructions. */
@@ -415,7 +417,7 @@ export function buildAgentSystemPrompt(params: {
   const hasProcess = availableTools.has("process");
   const hasGateway = availableTools.has("gateway");
   const hasOpenClaw = availableTools.has("openclaw");
-  const commandsRestartEnabled = chatCommandGuidance.resolveCommandsRestartEnabled(params);
+  const restartCommandsEnabled = params.restartCommandsEnabled !== false;
   const messageToolAvailable = availableTools.has("message");
   const hasAutomations = availableTools.has(AUTOMATIONS_TOOL_NAME);
   const readToolName = resolveToolName("read");
@@ -734,17 +736,7 @@ export function buildAgentSystemPrompt(params: {
         "",
       ]),
     ...careSection,
-    "## OpenClaw Control",
-    "Do not invent commands.",
-    hasOpenClaw
-      ? "Gateway restart, config, channels, plugins, agents, models/providers: ask `openclaw`."
-      : hasGateway
-        ? chatCommandGuidance.buildGatewayConfigReadGuidance(commandsRestartEnabled)
-        : "",
-    chatCommandGuidance.buildGatewayUpdateGuidance({ hasGateway, commandsRestartEnabled }),
-    hasExec &&
-      "For a user-requested update on another host, verify it is not this Gateway, then use exec/SSH with `openclaw update --yes`; normal exec approvals still apply.",
-    "",
+    ...buildOpenClawControlSection({ hasOpenClaw, hasGateway, hasExec, restartCommandsEnabled }),
     ...skillsSection,
     ...skillWorkshopSection,
     ...memorySection,
@@ -940,7 +932,7 @@ export function buildAgentSystemPrompt(params: {
     "## Runtime",
     runtimeInfo?.gitCoauthorPrompt,
     modelIdentityLine,
-    `Reasoning=${reasoningLevel}; hidden unless on/stream. Toggle /reasoning; /status shows when enabled.`,
+    `Reasoning=${reasoningLevel}; hidden unless on/stream.${params.reasoningCommandsEnabled === false ? "" : " Toggle /reasoning; /status shows when enabled."}`,
     // Only Runtime facts may move behind tools. Close the region before callers
     // append hook instructions or permission notices that must retain their role.
     SYSTEM_PROMPT_RELOCATABLE_BOUNDARY,
