@@ -411,12 +411,19 @@ export async function applySessionEntryLifecycleMutation(
     const archivedTranscriptDirectories = uniqueStrings(
       archivedTranscripts.map((transcript) => path.dirname(transcript.archivedPath)),
     ).toSorted();
-    if (archivedTranscriptDirectories.length > 0 && params.cleanupArchivedTranscripts) {
+    if (params.cleanupArchivedTranscripts) {
+      // Retention sweeps must not require new archive publication from this
+      // commit: maintenance owners like sessions cleanup age archives that
+      // earlier commits published, so fall back to the store's archive directory.
+      const retentionDirectories =
+        archivedTranscriptDirectories.length > 0
+          ? archivedTranscriptDirectories
+          : [resolveSqliteTranscriptArchiveDirectory(resolved)];
       try {
         const { cleanupArchivedSessionTranscripts } =
           await import("../../gateway/session-archive.runtime.js");
         await cleanupArchivedSessionTranscripts({
-          directories: archivedTranscriptDirectories,
+          directories: retentionDirectories,
           rules: params.cleanupArchivedTranscripts.rules,
           nowMs: params.cleanupArchivedTranscripts.nowMs,
         });

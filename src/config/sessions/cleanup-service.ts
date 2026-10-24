@@ -390,11 +390,29 @@ export async function runSessionsCleanup(params: {
             // Let queued I/O run between preview/repair work and the lifecycle commit.
             await yieldToEventLoop();
             owner.assertCurrent();
+            // Session cleanup owns the archive retention policy when the cron
+            // reaper is not running: an explicit cutoff must age published
+            // archives even when this run removes no sessions and publishes no
+            // new archives. Warn mode reports without applying, matching the
+            // file-backed maintenance path.
+            const archiveRetentionRules =
+              maintenance.resetArchiveRetentionMs == null || mode === "warn"
+                ? undefined
+                : [
+                    {
+                      reason: "deleted" as const,
+                      olderThanMs: maintenance.resetArchiveRetentionMs,
+                    },
+                    { reason: "reset" as const, olderThanMs: maintenance.resetArchiveRetentionMs },
+                  ];
             const lifecycleResult = await applySessionEntryLifecycleMutation(
               {
                 agentId: target.agentId,
                 storePath: target.storePath,
                 removals,
+                ...(archiveRetentionRules
+                  ? { cleanupArchivedTranscripts: { rules: archiveRetentionRules } }
+                  : {}),
                 commitGuard: () => {
                   owner.assertCurrent();
                   params.commitGuard?.();

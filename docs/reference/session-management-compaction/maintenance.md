@@ -40,7 +40,9 @@ file is not its only copy. Runtimes without zstd support write plain JSONL
 reset/deletion archives. Optional [cold transcript storage](/reference/session-management-compaction/maintenance#cold-transcript-storage)
 moves inactive transcript payloads entirely out of SQLite; `pruneAfter`
 controls session retention, and `resetArchiveRetention` controls reset/deletion
-archive deletion.
+archive deletion. Archive retention runs during cron session-reaper sweeps and
+`openclaw sessions cleanup` runs (in `enforce` mode); with `cron.enabled: false`,
+run `openclaw sessions cleanup --enforce` to apply the cutoff.
 
 `maxDiskBytes` enforcement uses physical bytes: the per-agent SQLite main file, its `-wal` file, and counted files in the agent sessions directory. It never estimates row JSON sizes or subtracts logical row sizes from that total. This is a cleanup budget, not a guaranteed physical ceiling: protected history and database pages that cannot yet be reclaimed can keep usage above the target.
 
