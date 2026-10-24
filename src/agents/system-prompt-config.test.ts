@@ -1,7 +1,11 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
-import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import * as ttsSettings from "../tts/tts-settings.js";
 import * as preparedModelCatalog from "./prepared-model-catalog.js";
@@ -140,14 +144,16 @@ describe("buildConfiguredAgentSystemPrompt", () => {
         },
       })),
     );
-    const prompt = withPluginRuntimeRegistryScope(registry, () =>
-      buildConfiguredAgentSystemPrompt({
-        config,
-        workspaceDir: "/tmp/openclaw",
-        runtimeInfo: { channel },
-        reasoningLevel: "stream",
-      }),
-    );
+    const previous = captureActivePluginRegistrySnapshot();
+    onTestFinished(() => restoreActivePluginRegistrySnapshot(previous));
+    // Command routing consumes process-level channel metadata.
+    setActivePluginRegistry(registry);
+    const prompt = buildConfiguredAgentSystemPrompt({
+      config,
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: { channel },
+      reasoningLevel: "stream",
+    });
     expect(prompt).toContain("Reasoning=stream; hidden unless on/stream.");
     expect(prompt.includes("Toggle /reasoning")).toBe(enabled);
     expect(prompt.includes("/status shows when enabled.")).toBe(enabled);
