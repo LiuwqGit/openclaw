@@ -53,9 +53,8 @@ import { collectErrorGraphCandidates, formatErrorMessage } from "./errors.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import {
-  hasSqliteDatabaseHeader,
   isAppleDoubleMetadataFile,
-  prefetchSqliteDatabaseHeaders,
+  probeSqliteDatabaseHeaders,
   resolveSqliteDatabaseFilePaths,
   SQLITE_SIDECAR_SUFFIXES,
 } from "./sqlite-files.js";
@@ -92,40 +91,21 @@ type CanonicalSqliteSource = {
   sourcePath: string;
 } & ({ role: "global" | "quarantine" | "client" } | { role: "agent"; agentId: string });
 
+// The sealed inventory also bounds header answers to one backup capture.
+const sqliteHeaderAnswers = new WeakMap<BackupResourceInventory, Map<string, boolean>>();
+
 function stripSqliteSidecarSuffix(sourcePath: string): string {
-  for (const suffix of SQLITE_SIDECAR_SUFFIXES) {
-    if (sourcePath.endsWith(suffix)) {
-      return sourcePath.slice(0, -suffix.length);
-    }
+  const sidecarSuffix = SQLITE_SIDECAR_SUFFIXES.find((suffix) => sourcePath.endsWith(suffix));
+  return sidecarSuffix ? sourcePath.slice(0, -sidecarSuffix.length) : sourcePath;
+}
+
+function headerAnswers(inventory: BackupResourceInventory): Map<string, boolean> {
+  let answers = sqliteHeaderAnswers.get(inventory);
+  if (!answers) {
+    answers = new Map();
+    sqliteHeaderAnswers.set(inventory, answers);
   }
-  return sourcePath;
-}
-
-/**
- * The path whose header decides classification, when the (sidecar-stripped)
- * name alone cannot. `.sqlite` names stay trusted by policy; every other
- * candidate must prove it is a SQLite database through its on-disk header.
- */
-function resolveSqliteHeaderProbePath(sourcePath: string): string | undefined {
-  const databasePath = stripSqliteSidecarSuffix(sourcePath);
-  return databasePath.endsWith(".sqlite") ? undefined : databasePath;
-}
-
-/**
- * Cheap pathname gate shared by discovery and classification: everything here
- * is pure string/prefix work, so it never pays for the per-path privacy
- * admission probes behind `isPackageContent`/`isIncluded`.
- */
-function isWithinBackupOwnedRoot(
-  resolvedSourcePath: string,
-  inventory: BackupResourceInventory,
-): boolean {
-  return (
-    isPathInside(inventory.stateDir, resolvedSourcePath) ||
-    inventory.agentRoots.some(({ sourcePath: agentRoot }) =>
-      isPathInside(agentRoot, resolvedSourcePath),
-    )
-  );
+  return answers;
 }
 
 export function classifyBackupSqliteSource(
@@ -133,26 +113,28 @@ export function classifyBackupSqliteSource(
   inventory: BackupResourceInventory,
 ): "excluded" | "sqlite" | "opaque" | "opaque-skip" | undefined {
   const resolvedSourcePath = path.resolve(sourcePath);
-  const transient = isTransientSqliteBackupPath(resolvedSourcePath);
-  if (!isWithinBackupOwnedRoot(resolvedSourcePath, inventory)) {
+  const withinOwnedRoot =
+    isPathInside(inventory.stateDir, resolvedSourcePath) ||
+    inventory.agentRoots.some(({ sourcePath: agentRoot }) =>
+      isPathInside(agentRoot, resolvedSourcePath),
+    );
+  if (!withinOwnedRoot) {
     return undefined;
   }
+  const transient = isTransientSqliteBackupPath(resolvedSourcePath);
   const databasePath = stripSqliteSidecarSuffix(resolvedSourcePath);
   const nameTrusted = databasePath.endsWith(".sqlite");
-  // `.sqlite` names stay trusted by policy; every other candidate must prove
-  // it is a SQLite database through its on-disk header. The name/header gate
-  // runs before the admission policy below because the policy pays per-path
-  // privacy-marker probes: the vast majority of files are neither
-  // `.sqlite`-named nor SQLite-headered and must leave classification here
-  // (header answers come from the batched prefetch cache, so this gate adds
-  // no per-file process or policy work). Only name-trusted SQLite families
-  // keep the historical "excluded" classification when the include policy
-  // rejects a path: directories and ordinary files under excluded-but-
-  // protected trees must stay "undefined" so the archive walker's
-  // include-over-exclude policy and directory traversal decide them, exactly
-  // as before this change.
-  if (!transient && !nameTrusted && !hasSqliteDatabaseHeader(databasePath)) {
-    return undefined;
+  if (!transient && !nameTrusted) {
+    const answers = headerAnswers(inventory);
+    if (!answers.has(databasePath)) {
+      for (const [pathname, sqlite] of probeSqliteDatabaseHeaders([databasePath])) {
+        answers.set(pathname, sqlite);
+      }
+    }
+    // Ordinary files must leave before the per-path privacy admission probes.
+    if (!answers.get(databasePath)) {
+      return undefined;
+    }
   }
   if (inventory.isPackageContent(resolvedSourcePath)) {
     return undefined;
@@ -180,7 +162,7 @@ async function discoverBackupSqliteSources(params: {
   const snapshotPaths = new Set<string>();
   const discoveredSourcePaths = new Set<string>();
   const visitedDirectories = new Set<string>();
-  const candidateEntries: Array<{ entryPath: string; name: string }> = [];
+  const candidates: Array<{ path: string; name: string }> = [];
   const gatewayLockDir = resolveGatewayLockDir(params.inventory.stateDir);
 
   const isRetainedPath = (pathname: string) =>
@@ -224,27 +206,26 @@ async function discoverBackupSqliteSources(params: {
       throw failure.error;
     }
     for (const entry of entries) {
-      candidateEntries.push({ entryPath: entry.path, name: entry.name });
+      candidates.push(entry);
     }
   }
 
-  // One child process answers every header probe the classification below
-  // needs, so discovery never opens raw descriptors in this process.
-  prefetchSqliteDatabaseHeaders(
-    candidateEntries.flatMap(({ entryPath }) => {
-      const probePath = resolveSqliteHeaderProbePath(path.resolve(entryPath));
-      return probePath ? [probePath] : [];
-    }),
-  );
-  for (const { entryPath, name } of candidateEntries) {
-    if (classifyBackupSqliteSource(entryPath, params.inventory) !== "sqlite") {
+  // One isolated read batch serves discovery and archive traversal. Include
+  // visited directories so traversal never launches a probe for each directory.
+  const answers = headerAnswers(params.inventory);
+  const probePaths = [...candidates.map((entry) => entry.path), ...visitedDirectories]
+    .map(stripSqliteSidecarSuffix)
+    .filter((pathname) => !pathname.endsWith(".sqlite"));
+  for (const [pathname, sqlite] of probeSqliteDatabaseHeaders(probePaths)) {
+    answers.set(pathname, sqlite);
+  }
+  for (const entry of candidates) {
+    if (classifyBackupSqliteSource(entry.path, params.inventory) !== "sqlite") {
       continue;
     }
-    discoveredSourcePaths.add(entryPath);
-    // Sidecar-suffixed names belong to their main database's snapshot;
-    // every other discovered source is a main database file.
-    if (!SQLITE_SIDECAR_SUFFIXES.some((suffix) => name.endsWith(suffix))) {
-      snapshotPaths.add(entryPath);
+    discoveredSourcePaths.add(entry.path);
+    if (!SQLITE_SIDECAR_SUFFIXES.some((suffix) => entry.name.endsWith(suffix))) {
+      snapshotPaths.add(entry.path);
     }
   }
 
@@ -485,7 +466,7 @@ export async function createBackupSqliteSnapshotPlan(params: {
         throw stateChange;
       }
       throw new Error(
-        `SQLite database cannot be compacted safely for backup: ${archiveSourcePath}. ${formatErrorMessage(error)}. The source must pass full integrity checks, online SQLite backup, and offline compaction with its required SQLite capabilities; a direct file copy was refused because it can retain deleted data.`,
+        `SQLite database cannot be compacted safely for backup: ${archiveSourcePath}. ${formatErrorMessage(error)}. The source must pass full integrity checks, online SQLite backup, and offline compaction with its required SQLite capabilities; a direct file copy was refused because it can retain deleted data. For a plugin-owned database, restore the required SQLite capabilities or use the plugin's own backup procedure before retrying.`,
         { cause: error },
       );
     }

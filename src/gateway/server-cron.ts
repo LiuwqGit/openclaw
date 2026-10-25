@@ -60,7 +60,7 @@ import {
   createScheduledGatewayRunner,
   fenceScheduledGatewayContextResolver,
 } from "./scheduled-run-gateway-context.js";
-import { createGatewayCronAgentJobRunner } from "./server-cron-agent-run.js";
+import { createGatewayCronAgentDeps } from "./server-cron-agent-run.js";
 import { finalizeCronCompletionAnnouncement, pickDefined } from "./server-cron-completion.js";
 import type { GatewayCronServiceContract } from "./server-cron-contract.js";
 import {
@@ -354,7 +354,7 @@ export function buildGatewayCronService(params: {
     const revision = ++legacyProjectionRevision;
     const cfg = getRuntimeConfig();
     try {
-      const jobs = await readHeartbeatSummarySnapshot(cfg);
+      const jobs = await readHeartbeatSummarySnapshot(cfg, storePath);
       if (
         legacyProjectionClosed ||
         revision !== legacyProjectionRevision ||
@@ -376,7 +376,7 @@ export function buildGatewayCronService(params: {
       await Promise.all([
         reconcileExitWatchers(),
         reconcileStreamWatchers(),
-        refreshLegacyMonitorProjection(),
+        started ? refreshLegacyMonitorProjection() : undefined,
       ]);
     },
     isExecutionIdle: (job, ownSessionKey, ownReplyOperation) => {
@@ -433,7 +433,7 @@ export function buildGatewayCronService(params: {
     runSchedulerOwned,
     enqueueSessionEvent,
     deferSessionEvent,
-    runIsolatedAgentJob: createGatewayCronAgentJobRunner({
+    ...createGatewayCronAgentDeps({
       deps: params.deps,
       storePath,
       resolveCronAgent,
@@ -617,8 +617,8 @@ export function buildGatewayCronService(params: {
         jobSnapshot?.sessionKey ??
         evt.sessionKey;
       const scopedAgentId = jobSnapshot?.owner?.agentId ?? jobSnapshot?.agentId;
-      // Views fetch definitions and run details on demand; the sidebar only needs
-      // attention state. Keep the full event for hooks and notifications below.
+      // Views fetch definitions and run details on demand; the sidebar needs
+      // bounded status and freshness. Keep the full event for hooks and notifications below.
       const {
         job: eventJob,
         summary: _summary,
@@ -635,6 +635,9 @@ export function buildGatewayCronService(params: {
                 state: pickDefined(eventJob.state, [
                   "nextRunAtMs",
                   "lastRunAtMs",
+                  "lastDurationMs",
+                  "lastTriggerEvalAtMs",
+                  "lastMeaningfulResult",
                   "lastRunStatus",
                   "lastStatus",
                   "runningAtMs",
