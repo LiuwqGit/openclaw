@@ -3,6 +3,7 @@ import { normalizeOptionalString as normalizeString } from "@openclaw/normalizat
 import { normalizeStringEntriesLower } from "@openclaw/normalization-core/string-normalization";
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import {
+  resolveAgentConfig,
   resolveAgentModelFallbacksOverride,
   resolveAgentWorkspaceDir,
   tryResolveDefaultAgentId,
@@ -77,9 +78,16 @@ function resolveConfiguredDoctorSessionStateRoute(params: {
     agentId,
     sessionKey: params.sessionKey,
   }).runtime;
+  const agentModels = resolveAgentConfig(params.cfg, agentId)?.models;
+  const allowedModelKeys = new Set(
+    Object.keys({ ...params.cfg.agents?.defaults?.models, ...agentModels })
+      .map((key) => key.trim().toLowerCase())
+      .filter((key) => key.length > 0),
+  );
   return {
     defaultProvider: primary.provider,
     configuredModelRefs: [...configuredModelRefs],
+    allowedModelKeys,
     runtime,
   };
 }
@@ -221,7 +229,18 @@ function scanEntryForOwner(params: {
 
   if (directOverrideIsOwned && !directOverrideIsConfigured) {
     if (directOverrideSource === "auto") {
-      addReason(reasons, "auto model override");
+      const overrideHasFallbackOrigin =
+        normalizeString(params.entry.modelOverrideFallbackOriginProvider) !== undefined ||
+        normalizeString(params.entry.modelOverrideFallbackOriginModel) !== undefined;
+      const overrideAllowed =
+        directOverrideKey !== undefined && params.route.allowedModelKeys.has(directOverrideKey);
+      // An automatic selection from the allowed-model map without fallback provenance is a
+      // legitimate child-session pick; it must not be cleared just for leaving the
+      // configured primary/fallback chain. Fallback-origin residue and models that are no
+      // longer allowed anywhere stay repairable.
+      if (overrideHasFallbackOrigin || !overrideAllowed) {
+        addReason(reasons, "auto model override");
+      }
     } else if (!routeAllowsOwner) {
       return {
         manualReview: {

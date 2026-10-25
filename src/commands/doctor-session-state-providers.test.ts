@@ -375,6 +375,63 @@ it("clears ignored legacy claude-cli residue after switching to openai-codex", a
   expect(result.row).not.toHaveProperty("agentRuntimeOverride");
 });
 
+it("preserves an allowed automatic child-session model selection", async () => {
+  const cfg = modelConfig("openai/example-primary");
+  cfg.agents!.defaults!.models = {
+    "openai/example-primary": { agentRuntime: { id: "openclaw" } },
+    "openai/example-secondary": { agentRuntime: { id: "openclaw" } },
+  };
+  const selected = entry({
+    providerOverride: "openai",
+    modelOverride: "example-secondary",
+    modelOverrideSource: "auto",
+  });
+
+  const result = await runEntry(selected, cfg);
+
+  expect(result.row).toEqual(selected);
+  expect(result.warnings).toEqual([]);
+  expect(result.confirmRuntimeRepair).not.toHaveBeenCalled();
+});
+
+it.each([
+  [
+    "stale fallback origin",
+    {
+      modelOverrideFallbackOriginProvider: "openai",
+      modelOverrideFallbackOriginModel: "example-primary",
+    } as Record<string, unknown>,
+    true,
+  ],
+  ["model outside the allowed map", {} as Record<string, unknown>, false],
+])("clears an automatic child-session override with %s", async (label, patch, secondaryAllowed) => {
+  const cfg = modelConfig("openai/example-primary");
+  cfg.agents!.defaults!.models = {
+    "openai/example-primary": { agentRuntime: { id: "openclaw" } },
+    ...(secondaryAllowed
+      ? { "openai/example-secondary": { agentRuntime: { id: "openclaw" } } }
+      : {}),
+  };
+
+  const result = await runEntry(
+    entry({
+      providerOverride: "openai",
+      modelOverride: "example-secondary",
+      modelOverrideSource: "auto",
+      ...patch,
+    }),
+    cfg,
+  );
+
+  expect(result.confirmRuntimeRepair).toHaveBeenCalledOnce();
+  expect(result.warnings.join("\n")).toContain("stale OpenAI session routing state");
+  expect(result.row?.providerOverride).toBeUndefined();
+  expect(result.row?.modelOverride).toBeUndefined();
+  expect(result.row?.modelOverrideSource).toBeUndefined();
+  expect(result.row?.modelOverrideFallbackOriginProvider).toBeUndefined();
+  expect(result.row?.modelOverrideFallbackOriginModel).toBeUndefined();
+});
+
 it.each(["user", "configured"] as const)("preserves %s owner model choices", async (choice) => {
   const selected = codexEntry({ modelOverrideSource: choice === "user" ? "user" : "auto" });
   const result = await runEntry(
