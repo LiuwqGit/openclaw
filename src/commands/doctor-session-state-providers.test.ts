@@ -394,6 +394,92 @@ it("preserves an allowed automatic child-session model selection", async () => {
   expect(result.confirmRuntimeRepair).not.toHaveBeenCalled();
 });
 
+it("preserves an allowed automatic child-session selection with self-origin provenance", async () => {
+  const cfg = modelConfig("openai/example-primary");
+  cfg.agents!.defaults!.models = {
+    "openai/example-primary": { agentRuntime: { id: "openclaw" } },
+    "openai/example-secondary": { agentRuntime: { id: "openclaw" } },
+  };
+  // Production spawn plans persist self-origin provenance for configured child selections.
+  const selected = entry({
+    providerOverride: "openai",
+    modelOverride: "example-secondary",
+    modelOverrideSource: "auto",
+    modelOverrideRouteResolution: "resolved",
+    modelOverrideFallbackOriginProvider: "openai",
+    modelOverrideFallbackOriginModel: "example-secondary",
+    modelProvider: "openai",
+    model: "example-secondary",
+  });
+
+  const result = await runEntry(selected, cfg);
+
+  expect(result.row).toEqual(selected);
+  expect(result.warnings).toEqual([]);
+  expect(result.confirmRuntimeRepair).not.toHaveBeenCalled();
+});
+
+it.each([
+  ["exact policy entries", ["openai/example-primary", "openai/example-secondary"]] as const,
+  ["provider wildcard", ["openai/*"]] as const,
+])("preserves an automatic child-session selection permitted by %s", async (label, allow) => {
+  const cfg = modelConfig("openai/example-primary");
+  cfg.agents!.defaults!.modelPolicy = { allow: [...allow] };
+  const selected = entry({
+    providerOverride: "openai",
+    modelOverride: "example-secondary",
+    modelOverrideSource: "auto",
+    modelOverrideFallbackOriginProvider: "openai",
+    modelOverrideFallbackOriginModel: "example-secondary",
+  });
+
+  const result = await runEntry(selected, cfg);
+
+  expect(result.row).toEqual(selected);
+  expect(result.warnings).toEqual([]);
+  expect(result.confirmRuntimeRepair).not.toHaveBeenCalled();
+});
+
+it.each([
+  [
+    "an explicit default model policy",
+    (cfg: OpenClawConfig) => {
+      cfg.agents!.defaults!.modelPolicy = { allow: ["openai/example-primary"] };
+    },
+  ],
+  [
+    "a per-agent model policy replacing the default map",
+    (cfg: OpenClawConfig) => {
+      cfg.agents!.entries = { main: { modelPolicy: { allow: ["openai/example-primary"] } } };
+    },
+  ],
+])(
+  "clears an automatic child-session override permitted only by model metadata (%s)",
+  async (label, restrictPolicy) => {
+    const cfg = modelConfig("openai/example-primary");
+    cfg.agents!.defaults!.models = {
+      "openai/example-primary": { agentRuntime: { id: "openclaw" } },
+      "openai/example-secondary": { agentRuntime: { id: "openclaw" } },
+    };
+    restrictPolicy(cfg);
+
+    const result = await runEntry(
+      entry({
+        providerOverride: "openai",
+        modelOverride: "example-secondary",
+        modelOverrideSource: "auto",
+      }),
+      cfg,
+    );
+
+    expect(result.confirmRuntimeRepair).toHaveBeenCalledOnce();
+    expect(result.warnings.join("\n")).toContain("stale OpenAI session routing state");
+    expect(result.row?.providerOverride).toBeUndefined();
+    expect(result.row?.modelOverride).toBeUndefined();
+    expect(result.row?.modelOverrideSource).toBeUndefined();
+  },
+);
+
 it.each([
   [
     "stale fallback origin",
@@ -402,6 +488,14 @@ it.each([
       modelOverrideFallbackOriginModel: "example-primary",
     } as Record<string, unknown>,
     true,
+  ],
+  [
+    "self-origin provenance on a policy-disallowed model",
+    {
+      modelOverrideFallbackOriginProvider: "openai",
+      modelOverrideFallbackOriginModel: "example-secondary",
+    } as Record<string, unknown>,
+    false,
   ],
   ["model outside the allowed map", {} as Record<string, unknown>, false],
 ])("clears an automatic child-session override with %s", async (label, patch, secondaryAllowed) => {

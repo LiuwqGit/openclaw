@@ -3,13 +3,13 @@ import { normalizeOptionalString as normalizeString } from "@openclaw/normalizat
 import { normalizeStringEntriesLower } from "@openclaw/normalization-core/string-normalization";
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import {
-  resolveAgentConfig,
   resolveAgentModelFallbacksOverride,
   resolveAgentWorkspaceDir,
   tryResolveDefaultAgentId,
 } from "../agents/agent-scope.js";
 import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
 import type { ModelRef } from "../agents/model-ref-shared.js";
+import { buildAllowedModelSet, isModelKeyAllowedBySet } from "../agents/model-selection-shared.js";
 import {
   modelKey,
   normalizeProviderId,
@@ -18,6 +18,7 @@ import {
 } from "../agents/model-selection.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { hasSessionActiveAutoModelFallback } from "../config/sessions/model-override-provenance.js";
 import { applySessionEntryReplacements } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { updateLegacySessionStore } from "../infra/state-migrations.legacy-session-store.js";
@@ -78,16 +79,21 @@ function resolveConfiguredDoctorSessionStateRoute(params: {
     agentId,
     sessionKey: params.sessionKey,
   }).runtime;
-  const agentModels = resolveAgentConfig(params.cfg, agentId)?.models;
-  const allowedModelKeys = new Set(
-    Object.keys({ ...params.cfg.agents?.defaults?.models, ...agentModels })
-      .map((key) => key.trim().toLowerCase())
-      .filter((key) => key.length > 0),
-  );
+  // Permission for automatic selections comes from the canonical model policy owner
+  // (`agents.*.modelPolicy.allow`, with the legacy `agents.defaults.models` map as its
+  // unmarked-config fallback). Model maps are settings metadata, not authorization, so
+  // they must not be merged in as a second policy interpretation.
+  const modelPolicy = buildAllowedModelSet({
+    cfg: params.cfg,
+    catalog: [],
+    agentId,
+    defaultProvider: primary.provider,
+    defaultModel: primary,
+  });
   return {
     defaultProvider: primary.provider,
     configuredModelRefs: [...configuredModelRefs],
-    allowedModelKeys,
+    modelPolicyAllowedKeys: modelPolicy.allowedKeys,
     runtime,
   };
 }
@@ -229,16 +235,30 @@ function scanEntryForOwner(params: {
 
   if (directOverrideIsOwned && !directOverrideIsConfigured) {
     if (directOverrideSource === "auto") {
-      const overrideHasFallbackOrigin =
-        normalizeString(params.entry.modelOverrideFallbackOriginProvider) !== undefined ||
-        normalizeString(params.entry.modelOverrideFallbackOriginModel) !== undefined;
+      const overrideIsActiveFallback = hasSessionActiveAutoModelFallback({
+        providerOverride: normalizeString(params.entry.providerOverride),
+        modelOverride: normalizeString(params.entry.modelOverride),
+        modelOverrideSource: "auto",
+        modelOverrideFallbackOriginProvider: normalizeString(
+          params.entry.modelOverrideFallbackOriginProvider,
+        ),
+        modelOverrideFallbackOriginModel: normalizeString(
+          params.entry.modelOverrideFallbackOriginModel,
+        ),
+      });
       const overrideAllowed =
-        directOverrideKey !== undefined && params.route.allowedModelKeys.has(directOverrideKey);
-      // An automatic selection from the allowed-model map without fallback provenance is a
-      // legitimate child-session pick; it must not be cleared just for leaving the
-      // configured primary/fallback chain. Fallback-origin residue and models that are no
-      // longer allowed anywhere stay repairable.
-      if (overrideHasFallbackOrigin || !overrideAllowed) {
+        directOverride !== null &&
+        isModelKeyAllowedBySet(
+          params.route.modelPolicyAllowedKeys,
+          modelKey(directOverride.provider, directOverride.model),
+        );
+      // Configured child sessions pick models through the agent's model policy and persist
+      // self-origin provenance (origin equals the selection); only an origin that moved the
+      // effective route is fallback residue. Automatic selections the canonical policy still
+      // permits are legitimate child-session picks and must not be cleared just for leaving
+      // the configured primary/fallback chain. Active fallbacks and models the policy no
+      // longer permits stay repairable.
+      if (overrideIsActiveFallback || !overrideAllowed) {
         addReason(reasons, "auto model override");
       }
     } else if (!routeAllowsOwner) {
