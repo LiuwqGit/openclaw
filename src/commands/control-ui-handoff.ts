@@ -307,6 +307,13 @@ export async function waitForControlUiDocument(params: {
         };
       }
       lastTransientError = error instanceof Error ? error : new Error(String(error));
+      // Timeout recovery can wait out the whole readiness deadline; surface the
+      // shared pending notification once so callers show their waiting indicator
+      // instead of leaving users without an explanation that retries are underway.
+      if (!pendingReported) {
+        pendingReported = true;
+        params.onPending?.();
+      }
       await sleep(
         Math.min(CONTROL_UI_DOCUMENT_TRANSIENT_RETRY_DELAY_MS, Math.max(0, deadline - Date.now())),
       );

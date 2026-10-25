@@ -215,6 +215,38 @@ it("reports fetch unavailability after transient timeouts exhaust the deadline",
   expect(fetch.mock.calls.length).toBeGreaterThan(1);
 });
 
+it("notifies pending once when timeout-only retries begin", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(0);
+  const transientTimeout = new Error("request timed out");
+  transientTimeout.name = "TimeoutError";
+  const onPending = vi.fn();
+  mockFetch().mockRejectedValue(transientTimeout);
+  const pending = probe({ onPending, timeoutMs: 5_000 });
+  await vi.runAllTimersAsync();
+  await expect(pending).resolves.toEqual({
+    ready: false,
+    reason: "Control UI dashboard is unavailable: request timed out",
+  });
+  expect(onPending).toHaveBeenCalledTimes(1);
+});
+
+it("does not re-notify pending after a preparing response when timeouts retry", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(0);
+  const transientTimeout = new Error("request timed out");
+  transientTimeout.name = "TimeoutError";
+  const onPending = vi.fn();
+  mockFetch()
+    .mockResolvedValueOnce(preparingResponse())
+    .mockRejectedValueOnce(transientTimeout)
+    .mockResolvedValueOnce(guardedResponse());
+  const pending = probe({ onPending, timeoutMs: 5_000 });
+  await vi.runAllTimersAsync();
+  await expect(pending).resolves.toEqual({ ready: true });
+  expect(onPending).toHaveBeenCalledTimes(1);
+});
+
 it("fails fast on a transient timeout when the caller skips pending waits", async () => {
   const transientTimeout = new Error("request timed out");
   transientTimeout.name = "TimeoutError";
