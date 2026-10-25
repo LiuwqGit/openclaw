@@ -24,6 +24,15 @@ import { resolveControlUiLinks } from "./onboard-helpers.js";
 
 const CONTROL_UI_DOCUMENT_REQUEST_TIMEOUT_MS = 2_000;
 const CONTROL_UI_DOCUMENT_ERROR_MAX_BYTES = 2_048;
+const CONTROL_UI_DOCUMENT_TRANSIENT_RETRY_DELAY_MS = 500;
+
+/** Transient per-request timeouts (e.g. a cold-start dashboard fetch) stay retryable. */
+function isTransientDocumentFetchTimeout(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error.name === "TimeoutError" || /\btimed out\b|\btimeout\b/i.test(error.message))
+  );
+}
 
 /** One canonical target keeps advertised identity, local browser delivery, and document probes distinct. */
 export async function resolveControlUiHandoffTarget(params: {
@@ -199,6 +208,7 @@ export async function waitForControlUiDocument(params: {
   }
 
   let pendingReported = false;
+  let lastTransientError: Error | undefined;
   const origin = new URL(params.url).origin;
   const requestDocument = async (method: "HEAD" | "GET", remainingMs: number) =>
     await fetchConfiguredLocalOriginWithSsrFGuard({
@@ -218,7 +228,12 @@ export async function waitForControlUiDocument(params: {
   while (true) {
     const remainingMs = deadline - Date.now();
     if (remainingMs <= 0) {
-      return { ready: false, reason: "Control UI assets did not finish preparing in time." };
+      return lastTransientError
+        ? {
+            ready: false,
+            reason: `Control UI dashboard is unavailable: ${lastTransientError.message}`,
+          }
+        : { ready: false, reason: "Control UI assets did not finish preparing in time." };
     }
     try {
       const request = await requestDocument("HEAD", remainingMs);
@@ -282,10 +297,19 @@ export async function waitForControlUiDocument(params: {
       }
       await sleep(Math.min(pendingDelayMs, Math.max(0, deadline - Date.now())));
     } catch (error) {
-      return {
-        ready: false,
-        reason: `Control UI dashboard is unavailable: ${error instanceof Error ? error.message : String(error)}`,
-      };
+      // A thrown fetch is usually terminal (policy, TLS, URL), but a per-request
+      // timeout during Gateway cold start recovers; keep the readiness deadline
+      // authoritative instead of abandoning the handoff on one slow request.
+      if (params.waitForPending === false || !isTransientDocumentFetchTimeout(error)) {
+        return {
+          ready: false,
+          reason: `Control UI dashboard is unavailable: ${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
+      lastTransientError = error instanceof Error ? error : new Error(String(error));
+      await sleep(
+        Math.min(CONTROL_UI_DOCUMENT_TRANSIENT_RETRY_DELAY_MS, Math.max(0, deadline - Date.now())),
+      );
     }
   }
 }

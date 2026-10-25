@@ -186,6 +186,46 @@ it.each(["ready", "timeout", "immediate"])("handles preparing dashboards: %s", a
   expect(ready.release).toHaveBeenCalledTimes(outcome === "ready" ? 1 : 0);
 });
 
+it("retries a transient document fetch timeout until the dashboard responds", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(0);
+  const transientTimeout = new Error("request timed out");
+  transientTimeout.name = "TimeoutError";
+  const ready = guardedResponse();
+  const fetch = mockFetch().mockRejectedValueOnce(transientTimeout).mockResolvedValueOnce(ready);
+  const pending = probe({ timeoutMs: 5_000 });
+  await vi.runAllTimersAsync();
+  await expect(pending).resolves.toEqual({ ready: true });
+  expect(fetch).toHaveBeenCalledTimes(2);
+  expect(ready.release).toHaveBeenCalledOnce();
+});
+
+it("reports fetch unavailability after transient timeouts exhaust the deadline", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(0);
+  const transientTimeout = new Error("request timed out");
+  transientTimeout.name = "TimeoutError";
+  const fetch = mockFetch().mockRejectedValue(transientTimeout);
+  const pending = probe({ timeoutMs: 5_000 });
+  await vi.runAllTimersAsync();
+  await expect(pending).resolves.toEqual({
+    ready: false,
+    reason: "Control UI dashboard is unavailable: request timed out",
+  });
+  expect(fetch.mock.calls.length).toBeGreaterThan(1);
+});
+
+it("fails fast on a transient timeout when the caller skips pending waits", async () => {
+  const transientTimeout = new Error("request timed out");
+  transientTimeout.name = "TimeoutError";
+  const fetch = mockFetch().mockRejectedValueOnce(transientTimeout);
+  await expect(probe({ timeoutMs: 5_000, waitForPending: false })).resolves.toEqual({
+    ready: false,
+    reason: "Control UI dashboard is unavailable: request timed out",
+  });
+  expect(fetch).toHaveBeenCalledTimes(1);
+});
+
 it.each(["fails", "becomes HTML"])("keeps HTTP failure: diagnostic %s", async (outcome) => {
   const head = guardedResponse(503, {});
   const fetch = mockFetch().mockResolvedValueOnce(head);
