@@ -407,6 +407,58 @@ describe("google video generation provider", () => {
     expect(result.videos[0]?.buffer).toEqual(Buffer.from("out"));
   });
 
+  it("keeps a stored retired Veo model pin loadable and recovers via the new default", async () => {
+    mockGoogleApiKeyAuth();
+    vi.spyOn(providerAuth, "isProviderApiKeyConfiguredAsync").mockResolvedValue(true);
+    const warn = vi.fn();
+    interactionsCreateMock.mockImplementation(async (request: { model?: string }) => {
+      if (request?.model?.includes("veo-")) {
+        throw new ApiError({ status: 404, message: "model not found: retired" });
+      }
+      return completedInteraction({ data: "b3V0" });
+    });
+
+    // Stored user data (mediaModels.video pinned to a retired Veo id) still
+    // loads after the upgrade: the pin is submitted as-is (single-shot), the
+    // server-side rejection is surfaced with the model ref, and the shared
+    // runtime's auto provider fallback recovers with the new default model.
+    const result = await generateRuntimeVideo(
+      {
+        cfg: {
+          agents: {
+            defaults: {
+              mediaModels: { video: "google/veo-3.1-fast-generate-preview" },
+            },
+          },
+        },
+        prompt: "A tiny robot watering a windowsill garden",
+      },
+      {
+        getProvider: (id) => (id === "google" ? googleVideoGenerationProvider : undefined),
+        listProviders: () => [googleVideoGenerationProvider],
+        getProviderEnvVars: () => [],
+        log: { debug: vi.fn(), warn },
+      },
+    );
+
+    expect(interactionsCreateMock).toHaveBeenCalledTimes(2);
+    expect(interactionsCreateMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ model: "veo-3.1-fast-generate-preview" }),
+      { maxRetries: 0 },
+    );
+    expect(interactionsCreateMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ model: "gemini-omni-1.1-flash" }),
+      { maxRetries: 0 },
+    );
+    expect(result.provider).toBe("google");
+    expect(result.videos[0]?.buffer).toEqual(Buffer.from("out"));
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("google/veo-3.1-fast-generate-preview"),
+    );
+  });
+
   it("disables SDK-internal retries for the paid generation creation", async () => {
     mockGoogleApiKeyAuth();
     interactionsCreateMock.mockResolvedValue(completedInteraction({ data: "b3V0" }));
