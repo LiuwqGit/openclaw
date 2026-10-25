@@ -124,6 +124,9 @@ export function classifyBackupSqliteSource(
   const transient = isTransientSqliteBackupPath(resolvedSourcePath);
   const databasePath = stripSqliteSidecarSuffix(resolvedSourcePath);
   const nameTrusted = databasePath.endsWith(".sqlite");
+  if (!inventory.isIncludedByOwner(resolvedSourcePath)) {
+    return nameTrusted ? "excluded" : undefined;
+  }
   if (!transient && !nameTrusted) {
     const answers = headerAnswers(inventory);
     if (!answers.has(databasePath)) {
@@ -186,7 +189,8 @@ async function discoverBackupSqliteSources(params: {
       include: (entry) =>
         (entry.kind === "file" || entry.kind === "symlink") &&
         isSelectedPath(entry.path) &&
-        isRetainedPath(entry.path),
+        isRetainedPath(entry.path) &&
+        params.inventory.isIncludedByOwner(entry.path),
       descend: (entry) => {
         if (
           visitedDirectories.has(entry.path) ||

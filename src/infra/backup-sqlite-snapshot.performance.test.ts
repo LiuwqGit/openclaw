@@ -42,6 +42,33 @@ afterEach(() => {
 });
 
 describe.skipIf(process.platform === "win32")("backup SQLite discovery performance", () => {
+  it.skipIf(process.getuid?.() === 0)(
+    "skips unreadable excluded siblings of a protected config",
+    async () => {
+      await withBackupFixture({ prefix: "openclaw-backup-excluded-sibling-" }, async (state) => {
+        const configPath = state.statePath("tmp", "openclaw.json");
+        const excludedPath = state.statePath("tmp", "cache.bin");
+        await fs.mkdir(path.dirname(configPath), { recursive: true });
+        await fs.copyFile(state.configPath, configPath);
+        await fs.writeFile(excludedPath, "excluded cache");
+        await fs.chmod(excludedPath, 0);
+        vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+        try {
+          await expect(fs.readFile(excludedPath)).rejects.toMatchObject({ code: "EACCES" });
+          const archive = await createBackupArchive({
+            output: state.path("backup.tar.gz"),
+            includeWorkspace: false,
+          });
+          const entries = await listArchiveEntries(archive.archivePath);
+          expect(entries.some((entry) => entry.endsWith("/tmp/openclaw.json"))).toBe(true);
+          expect(entries.some((entry) => entry.endsWith("/tmp/cache.bin"))).toBe(false);
+        } finally {
+          await fs.chmod(excludedPath, 0o600);
+        }
+      });
+    },
+  );
+
   it("keeps privacy admission proportional to worktree directories while archiving dirty files", async () => {
     await withBackupFixture({ prefix: "openclaw-backup-worktree-discovery-" }, async (state) => {
       openOpenClawStateDatabase({ env: state.env });
