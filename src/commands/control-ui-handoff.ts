@@ -26,14 +26,6 @@ const CONTROL_UI_DOCUMENT_REQUEST_TIMEOUT_MS = 2_000;
 const CONTROL_UI_DOCUMENT_ERROR_MAX_BYTES = 2_048;
 const CONTROL_UI_DOCUMENT_TRANSIENT_RETRY_DELAY_MS = 500;
 
-/** Transient per-request timeouts (e.g. a cold-start dashboard fetch) stay retryable. */
-function isTransientDocumentFetchTimeout(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    (error.name === "TimeoutError" || /\btimed out\b|\btimeout\b/i.test(error.message))
-  );
-}
-
 /** One canonical target keeps advertised identity, local browser delivery, and document probes distinct. */
 export async function resolveControlUiHandoffTarget(params: {
   config: OpenClawConfig;
@@ -169,7 +161,7 @@ type ControlUiDocumentReadiness =
   | { ready: true; tlsFingerprint?: string }
   | { ready: false; reason: string; status?: number };
 
-/** Wait only for an explicitly preparing dashboard; fail immediately for terminal HTTP states. */
+/** Wait for a preparing or temporarily slow dashboard; fail immediately for terminal errors. */
 export async function waitForControlUiDocument(params: {
   url: string;
   tlsConfig?: GatewayTlsConfig;
@@ -235,9 +227,10 @@ export async function waitForControlUiDocument(params: {
           }
         : { ready: false, reason: "Control UI assets did not finish preparing in time." };
     }
+    let pendingDelayMs = CONTROL_UI_DOCUMENT_TRANSIENT_RETRY_DELAY_MS;
     try {
       const request = await requestDocument("HEAD", remainingMs);
-      let pendingDelayMs: number | undefined;
+      lastTransientError = undefined;
       try {
         const mediaType = request.response.headers.get("content-type")?.split(";", 1)[0]?.trim();
         if (request.response.status === 200 && mediaType?.toLowerCase() === "text/html") {
@@ -291,32 +284,23 @@ export async function waitForControlUiDocument(params: {
       } finally {
         await request.release();
       }
-      if (!pendingReported) {
-        pendingReported = true;
-        params.onPending?.();
-      }
-      await sleep(Math.min(pendingDelayMs, Math.max(0, deadline - Date.now())));
     } catch (error) {
-      // A thrown fetch is usually terminal (policy, TLS, URL), but a per-request
-      // timeout during Gateway cold start recovers; keep the readiness deadline
-      // authoritative instead of abandoning the handoff on one slow request.
-      if (params.waitForPending === false || !isTransientDocumentFetchTimeout(error)) {
+      if (
+        params.waitForPending === false ||
+        !(error instanceof Error) ||
+        error.name !== "TimeoutError"
+      ) {
         return {
           ready: false,
           reason: `Control UI dashboard is unavailable: ${error instanceof Error ? error.message : String(error)}`,
         };
       }
-      lastTransientError = error instanceof Error ? error : new Error(String(error));
-      // Timeout recovery can wait out the whole readiness deadline; surface the
-      // shared pending notification once so callers show their waiting indicator
-      // instead of leaving users without an explanation that retries are underway.
-      if (!pendingReported) {
-        pendingReported = true;
-        params.onPending?.();
-      }
-      await sleep(
-        Math.min(CONTROL_UI_DOCUMENT_TRANSIENT_RETRY_DELAY_MS, Math.max(0, deadline - Date.now())),
-      );
+      lastTransientError = error;
     }
+    if (!pendingReported) {
+      pendingReported = true;
+      params.onPending?.();
+    }
+    await sleep(Math.min(pendingDelayMs, Math.max(0, deadline - Date.now())));
   }
 }

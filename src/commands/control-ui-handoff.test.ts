@@ -186,76 +186,68 @@ it.each(["ready", "timeout", "immediate"])("handles preparing dashboards: %s", a
   expect(ready.release).toHaveBeenCalledTimes(outcome === "ready" ? 1 : 0);
 });
 
-it("retries a transient document fetch timeout until the dashboard responds", async () => {
-  vi.useFakeTimers();
-  vi.setSystemTime(0);
-  const transientTimeout = new Error("request timed out");
-  transientTimeout.name = "TimeoutError";
-  const ready = guardedResponse();
-  const fetch = mockFetch().mockRejectedValueOnce(transientTimeout).mockResolvedValueOnce(ready);
-  const pending = probe({ timeoutMs: 5_000 });
-  await vi.runAllTimersAsync();
-  await expect(pending).resolves.toEqual({ ready: true });
-  expect(fetch).toHaveBeenCalledTimes(2);
-  expect(ready.release).toHaveBeenCalledOnce();
-});
-
-it("reports fetch unavailability after transient timeouts exhaust the deadline", async () => {
-  vi.useFakeTimers();
-  vi.setSystemTime(0);
-  const transientTimeout = new Error("request timed out");
-  transientTimeout.name = "TimeoutError";
-  const fetch = mockFetch().mockRejectedValue(transientTimeout);
-  const pending = probe({ timeoutMs: 5_000 });
-  await vi.runAllTimersAsync();
-  await expect(pending).resolves.toEqual({
-    ready: false,
-    reason: "Control UI dashboard is unavailable: request timed out",
-  });
-  expect(fetch.mock.calls.length).toBeGreaterThan(1);
-});
-
-it("notifies pending once when timeout-only retries begin", async () => {
-  vi.useFakeTimers();
-  vi.setSystemTime(0);
-  const transientTimeout = new Error("request timed out");
-  transientTimeout.name = "TimeoutError";
+it("retries a real document timeout and reports pending once", async () => {
+  let requests = 0;
   const onPending = vi.fn();
-  mockFetch().mockRejectedValue(transientTimeout);
-  const pending = probe({ onPending, timeoutMs: 5_000 });
-  await vi.runAllTimersAsync();
-  await expect(pending).resolves.toEqual({
-    ready: false,
-    reason: "Control UI dashboard is unavailable: request timed out",
+  const server = createHttpServer((_request, response) => {
+    requests++;
+    if (requests > 1) {
+      response.writeHead(200, { "content-type": "text/html" });
+      response.end();
+    }
   });
-  expect(onPending).toHaveBeenCalledTimes(1);
-});
+  await withEnvAsync({ no_proxy: "127.0.0.1" }, async () => {
+    await withLoopbackTestServer(server, async (port) => {
+      await expect(
+        waitForControlUiDocument({
+          url: `http://127.0.0.1:${port}/dashboard/`,
+          timeoutMs: 15_000,
+          onPending,
+        }),
+      ).resolves.toEqual({ ready: true });
+    });
+  });
+  expect(requests).toBe(2);
+  expect(onPending).toHaveBeenCalledOnce();
+}, 20_000);
 
-it("does not re-notify pending after a preparing response when timeouts retry", async () => {
-  vi.useFakeTimers();
-  vi.setSystemTime(0);
-  const transientTimeout = new Error("request timed out");
-  transientTimeout.name = "TimeoutError";
-  const onPending = vi.fn();
-  mockFetch()
-    .mockResolvedValueOnce(preparingResponse())
-    .mockRejectedValueOnce(transientTimeout)
-    .mockResolvedValueOnce(guardedResponse());
-  const pending = probe({ onPending, timeoutMs: 5_000 });
-  await vi.runAllTimersAsync();
-  await expect(pending).resolves.toEqual({ ready: true });
-  expect(onPending).toHaveBeenCalledTimes(1);
-});
+it.each(["timeout", "preparing"])(
+  "reports the latest pending state at the deadline: %s",
+  async (state) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const timeout = new Error("request timed out");
+    timeout.name = "TimeoutError";
+    const fetch = mockFetch().mockRejectedValueOnce(timeout);
+    if (state === "preparing") {
+      fetch.mockImplementation(async () => preparingResponse());
+    } else {
+      fetch.mockRejectedValue(timeout);
+    }
+    const onPending = vi.fn();
+    const pending = probe({ onPending, timeoutMs: 5_000 });
+    await vi.runAllTimersAsync();
+    await expect(pending).resolves.toEqual({
+      ready: false,
+      reason:
+        state === "timeout"
+          ? "Control UI dashboard is unavailable: request timed out"
+          : "Control UI assets did not finish preparing in time.",
+    });
+    expect(fetch.mock.calls.length).toBeGreaterThan(1);
+    expect(onPending).toHaveBeenCalledOnce();
+  },
+);
 
 it("fails fast on a transient timeout when the caller skips pending waits", async () => {
-  const transientTimeout = new Error("request timed out");
-  transientTimeout.name = "TimeoutError";
-  const fetch = mockFetch().mockRejectedValueOnce(transientTimeout);
+  const timeout = new Error("request timed out");
+  timeout.name = "TimeoutError";
+  const fetch = mockFetch().mockRejectedValueOnce(timeout);
   await expect(probe({ timeoutMs: 5_000, waitForPending: false })).resolves.toEqual({
     ready: false,
     reason: "Control UI dashboard is unavailable: request timed out",
   });
-  expect(fetch).toHaveBeenCalledTimes(1);
+  expect(fetch).toHaveBeenCalledOnce();
 });
 
 it.each(["fails", "becomes HTML"])("keeps HTTP failure: diagnostic %s", async (outcome) => {
