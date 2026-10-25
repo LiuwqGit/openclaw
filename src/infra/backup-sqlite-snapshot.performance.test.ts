@@ -1,3 +1,4 @@
+import childProcess from "node:child_process";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -140,12 +141,29 @@ describe.skipIf(process.platform === "win32")("backup SQLite discovery performan
           ),
         ).toBe(true);
       }
+      const packageDirectory = state.statePath("node_modules", "root-dep");
+      await fs.mkdir(packageDirectory, { recursive: true });
+      await Promise.all(
+        Array.from({ length: 8 }, (_, index) =>
+          fs.writeFile(path.join(packageDirectory, `module-${index}.js`), "export {};\n"),
+        ),
+      );
+      const spawn = vi.spyOn(childProcess, "spawnSync");
       const { probes: fileProbes, result: archive } = await countProbes(
         (target) => target === durableFile,
         () => createBackupArchive({ output: state.path("backup.tar.gz"), includeWorkspace: false }),
       );
       expect(fileProbes).toBe(1);
+      const headerProbes = spawn.mock.calls.filter(
+        ([, args]) =>
+          Array.isArray(args) && args[0] === "-e" && args[1]?.includes("SQLite format 3"),
+      );
+      // Global capture discovers aliases before the final, registry-backed inventory.
+      expect(headerProbes).toHaveLength(2);
       const entries = await listArchiveEntries(archive.archivePath);
+      expect(entries.some((entry) => entry.endsWith("/node_modules/root-dep/module-7.js"))).toBe(
+        true,
+      );
       const archivedDirtyFile = `/${worktreeRelative}/packages/package-0/src/uncommitted.ts`;
       expect(entries.some((entry) => entry.endsWith(archivedDirtyFile))).toBe(true);
     });

@@ -118,7 +118,7 @@ export function classifyBackupSqliteSource(
     inventory.agentRoots.some(({ sourcePath: agentRoot }) =>
       isPathInside(agentRoot, resolvedSourcePath),
     );
-  if (!withinOwnedRoot) {
+  if (!withinOwnedRoot || inventory.isPackageContent(resolvedSourcePath)) {
     return undefined;
   }
   const transient = isTransientSqliteBackupPath(resolvedSourcePath);
@@ -138,9 +138,6 @@ export function classifyBackupSqliteSource(
     if (!answers.get(databasePath)) {
       return undefined;
     }
-  }
-  if (inventory.isPackageContent(resolvedSourcePath)) {
-    return undefined;
   }
   if (transient) {
     return "excluded";
