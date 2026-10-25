@@ -428,7 +428,7 @@ export async function updateGitInstall(params: {
     return failed("npm-lifecycle-policy-preflight", []);
   }
 
-  const checkSnapshot = async () => {
+  const checkSnapshot = async (activationBackupRoot?: string) => {
     const info = {
       name: "snapshot-space-preflight",
       command: "snapshot-space-preflight",
@@ -442,6 +442,7 @@ export async function updateGitInstall(params: {
       config,
       stateDir: resolveStateDir(env),
       env,
+      ...(activationBackupRoot ? { activationBackupRoot } : {}),
     });
     await reportUpdateStepCompletion(params.progress, { ...snapshot, index: 0, total: 0 });
     assertCurrent?.();
@@ -505,7 +506,12 @@ export async function updateGitInstall(params: {
         beforeGitStaging: params.switchToGit
           ? undefined
           : async () => ({
-              step: await checkSnapshot(),
+              // Activation writes database backups under the checkout's
+              // `.artifacts` (update-command-database-backup.ts), so the
+              // preflight checks that durable destination with the backup
+              // owner's requirement instead of only the disposable candidate
+              // copies.
+              step: await checkSnapshot(path.join(gitRoot, ".artifacts")),
               failureReason: "snapshot-capacity-insufficient",
             }),
         publishGitCheckout,

@@ -15,7 +15,12 @@ import { hasNodeErrorCode } from "./path-guards.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { createPrivateSqliteTempDirectory } from "./sqlite-private-directory.js";
-import { measureUpdateStateFiles, withUpdateCandidateIoBudget } from "./update-candidate-io.js";
+import {
+  measureUpdateStateFiles,
+  requiredUpdateDatabaseBackupBytes,
+  requiredUpdateDatabaseRollbackBytes,
+  withUpdateCandidateIoBudget,
+} from "./update-candidate-io.js";
 import {
   readUpdateCandidatePluginCodeLinks,
   type UpdateCandidatePluginCodeLink,
@@ -114,7 +119,88 @@ type InitialSnapshotParams = {
   config: OpenClawConfig;
   stateDir: string;
   env: NodeJS.ProcessEnv;
+  /**
+   * Directory on the volume that will hold the activation-time update database
+   * backup (for a Git checkout, under the checkout's `.artifacts`). When
+   * provided, the preflight also applies the backup owner's requirement there
+   * so low-space updates are refused before staging and validation instead of
+   * failing after them. Free space that cannot be measured stays advisory: the
+   * activation-time check remains authoritative.
+   */
+  activationBackupRoot?: string;
 };
+
+/**
+ * Mirror the activation-time database backup space check on its durable
+ * destination, sharing the backup owner's sizing. Only measured shortages
+ * refuse; unknown free space keeps the activation-time check authoritative.
+ */
+async function assessActivationBackupCapacity(
+  activationBackupRoot: string | undefined,
+  families: ReadonlyArray<{ path: string; bytes: number }>,
+): Promise<{ diagnostics: string[]; refusals: string[] }> {
+  const diagnostics: string[] = [];
+  const refusals: string[] = [];
+  const bytes = families.reduce((total, family) => total + family.bytes, 0);
+  if (!activationBackupRoot || bytes === 0) {
+    return { diagnostics, refusals };
+  }
+  const largest = families.reduce((peak, family) => Math.max(peak, family.bytes), 0);
+  const requiredBytes = requiredUpdateDatabaseBackupBytes({ bytes, largest });
+  const space = tryReadDiskSpace(activationBackupRoot);
+  diagnostics.push(
+    `Activation database backup destination ${activationBackupRoot}: ${formatDiskSpaceBytes(requiredBytes)} needed; ${space ? `${formatDiskSpaceBytes(space.availableBytes)} free` : "free space unknown"}.`,
+  );
+  if (!space) {
+    return { diagnostics, refusals };
+  }
+  if (space.availableBytes < requiredBytes) {
+    refusals.push(
+      `Activation database backup needs ${formatDiskSpaceBytes(requiredBytes)} near ${activationBackupRoot}, but only ${formatDiskSpaceBytes(space.availableBytes)} is available. Free disk space before retrying the update; the databases have not been migrated.`,
+    );
+    return { diagnostics, refusals };
+  }
+  // Migrated files remain in place during rollback on another volume: reserve
+  // publication scratch and headroom there, mirroring the backup owner.
+  const backupDevice = (await fs.stat(space.checkedPath, { bigint: true })).dev;
+  const sources = new Map<bigint | string, { directory: string; bytes: number; largest: number }>();
+  for (const family of families) {
+    const sourceDirectory = path.dirname(family.path);
+    let device: bigint;
+    try {
+      device = (await fs.stat(sourceDirectory, { bigint: true })).dev;
+    } catch {
+      // An unstatable source cannot be placed on another volume; the
+      // activation-time check still measures it authoritatively.
+      continue;
+    }
+    if (device > 0n && device === backupDevice) {
+      continue;
+    }
+    // Unknown identity cannot prove that the backup volume's allowance covers this destination.
+    const key = device > 0n ? device : sourceDirectory;
+    let source = sources.get(key);
+    if (!source) {
+      source = { directory: sourceDirectory, bytes: 0, largest: 0 };
+      sources.set(key, source);
+    }
+    source.bytes += family.bytes;
+    source.largest = Math.max(source.largest, family.bytes);
+  }
+  for (const source of sources.values()) {
+    const rollbackBytes = requiredUpdateDatabaseRollbackBytes(source);
+    const sourceSpace = tryReadDiskSpace(source.directory);
+    diagnostics.push(
+      `Rollback source ${source.directory}: ${formatDiskSpaceBytes(rollbackBytes)} needed; ${sourceSpace ? `${formatDiskSpaceBytes(sourceSpace.availableBytes)} free` : "free space unknown"}.`,
+    );
+    if (sourceSpace && sourceSpace.availableBytes < rollbackBytes) {
+      refusals.push(
+        `Update database rollback needs ${formatDiskSpaceBytes(rollbackBytes)} near ${source.directory}, but only ${formatDiskSpaceBytes(sourceSpace.availableBytes)} is available. Free disk space before retrying the update; the databases have not been migrated.`,
+      );
+    }
+  }
+  return { diagnostics, refusals };
+}
 
 /** Measure known SQLite families without allocating state or reading the candidate plugin inventory. */
 async function measureInitialUpdateSnapshotState(params: InitialSnapshotParams) {
@@ -147,6 +233,11 @@ export async function assessInitialUpdateSnapshotCapacity(
         (candidate) =>
           candidate.availableBytes !== null && candidate.availableBytes < capacity.requiredBytes,
       );
+    // Activation writes the database backup to a durable destination with its
+    // own, larger requirement. Sharing the backup owner's sizing here refuses
+    // low-space updates before staging and validation instead of failing after
+    // them; unmeasured free space keeps the activation-time check authoritative.
+    const activation = await assessActivationBackupCapacity(params.activationBackupRoot, families);
     const diagnostics = [
       "Snapshot size estimate: plugin copies and registered external databases are measured after staging.",
       `Initial snapshot needs ${formatDiskSpaceBytes(capacity.requiredBytes)} for ${formatDiskSpaceBytes(capacity.sqliteBytes)} of known SQLite files and temporary working space.`,
@@ -158,6 +249,7 @@ export async function assessInitialUpdateSnapshotCapacity(
         (family) =>
           `SQLite family ${family.path}: ${formatDiskSpaceBytes(family.bytes)} (database and supporting files).`,
       ),
+      ...activation.diagnostics,
     ];
     if (refused) {
       return {
@@ -168,6 +260,19 @@ export async function assessInitialUpdateSnapshotCapacity(
           "snapshot-capacity-insufficient: no eligible directory has enough free space for the required state snapshot.",
           ...diagnostics,
           "Free space on a reported filesystem or set TMPDIR to a writable directory with enough space, then retry the update.",
+        ].join("\n"),
+        snapshotCapacity: capacity,
+      };
+    }
+    if (activation.refusals.length > 0) {
+      return {
+        ...step,
+        durationMs: Date.now() - started,
+        exitCode: 1,
+        stderrTail: [
+          `snapshot-capacity-insufficient: ${activation.refusals[0]}`,
+          ...diagnostics,
+          "Free disk space on the activation backup volume, then retry the update.",
         ].join("\n"),
         snapshotCapacity: capacity,
       };

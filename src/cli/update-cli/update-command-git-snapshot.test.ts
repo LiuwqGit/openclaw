@@ -169,3 +169,99 @@ it.each([
     });
   },
 );
+
+it("refuses before staging when only the activation backup volume lacks space", async () => {
+  await withTestDir({ prefix: "git-update-activation-space-" }, async (base) => {
+    const root = path.join(base, "checkout");
+    const stateDir = path.join(base, "state");
+    await fs.mkdir(root);
+    await fs.mkdir(path.join(stateDir, "state"), { recursive: true });
+    const env = {
+      HOME: base,
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+      TMPDIR: base,
+    };
+    await fs.writeFile(env.OPENCLAW_CONFIG_PATH, "{}\n");
+    // One 4 MiB family: the candidate copy needs S + L + 64 MiB = 72 MiB and every
+    // snapshot root reports 200 MiB, so staging is admitted. Activation requires
+    // 2S + 3L + 64 MiB = 84 MiB, but the checkout's .artifacts volume reports 80 MiB.
+    await fs.writeFile(
+      path.join(stateDir, "state", "openclaw.sqlite"),
+      Buffer.alloc(4 * 1024 ** 2),
+    );
+    await fs.writeFile(
+      path.join(root, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.9.1" }),
+    );
+    await fs.writeFile(path.join(root, "openclaw.mjs"), "export {};\n");
+    await fs.writeFile(path.join(root, ".gitignore"), "dist/\nnode_modules/\n.artifacts/\n");
+    await git(root, "init", "--initial-branch=main");
+    await git(root, "config", "user.name", "OpenClaw Test");
+    await git(root, "config", "user.email", "openclaw@example.com");
+    await git(root, "add", ".");
+    await git(root, "commit", "-m", "fixture");
+    const before = await git(root, "rev-parse", "HEAD");
+    await writeOpenClawPackageFixture(root, "2026.9.1", { builtSha: before });
+    await fs.writeFile(path.join(root, "candidate.txt"), "candidate\n");
+    await git(root, "add", "candidate.txt");
+    await git(root, "commit", "-m", "candidate");
+    const target = await git(root, "rev-parse", "HEAD");
+    await git(root, "checkout", "--detach", before);
+    const artifactsRoot = path.join(root, ".artifacts");
+    vi.spyOn(diskSpace, "tryReadDiskSpace").mockImplementation((targetPath) => ({
+      targetPath,
+      checkedPath: targetPath,
+      availableBytes: targetPath.startsWith(artifactsRoot) ? 80 * 1024 ** 2 : 200 * 1024 ** 2,
+      totalBytes: 1024 ** 3,
+    }));
+    const runCommand = processRunner.runCommandWithTimeout;
+    const candidateCommand = vi.fn(() =>
+      createCommandResult({ stderr: "unexpected candidate command", code: 1 }),
+    );
+    vi.spyOn(processRunner, "runCommandWithTimeout").mockImplementation((argv, options) =>
+      argv[0] === "git" ? runCommand(argv, options) : Promise.resolve(candidateCommand()),
+    );
+    const beforeGitMutation = vi.fn();
+    const validateCandidate = vi.fn();
+    const getSnapshotSource = vi.fn(async () => ({ config: {}, env }));
+    vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const originalArgv = process.argv;
+    process.argv = [process.execPath, path.join(root, "openclaw.mjs")];
+    try {
+      const result = await updateGitInstall({
+        root,
+        switchToGit: false,
+        installKind: "git",
+        timeoutMs: undefined,
+        startedAt: Date.now(),
+        progress: {},
+        channel: "dev",
+        devTarget: { mode: "detached", ref: target },
+        beforeGitMutation,
+        validateCandidate,
+        inspectGitTarget: async () => {},
+        getManagedServiceEnv: () => undefined,
+        getSnapshotSource,
+        jsonMode: true,
+      });
+      expect(result).toMatchObject({ status: "error", reason: "snapshot-capacity-insufficient" });
+      expect(result.steps).toContainEqual(
+        expect.objectContaining({
+          name: "snapshot-space-preflight",
+          exitCode: 1,
+          stderrTail: expect.stringMatching(
+            /snapshot-capacity-insufficient[\s\S]*Activation database backup needs 84 MiB/,
+          ),
+        }),
+      );
+      expect(getSnapshotSource).toHaveBeenCalledTimes(1);
+      expect(
+        [candidateCommand, beforeGitMutation, validateCandidate].map((fn) => fn.mock.calls),
+      ).toEqual([[], [], []]);
+      expect(await git(root, "rev-parse", "HEAD")).toBe(before);
+    } finally {
+      process.argv = originalArgv;
+    }
+  });
+});

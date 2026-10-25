@@ -21,6 +21,34 @@ export async function measureUpdateStateFiles(
   return { bytes, largest, families };
 }
 
+/** Headroom shared by every update state copy and backup space requirement. */
+export const UPDATE_STATE_SPACE_RESERVE_BYTES = 64 * 1024 * 1024;
+
+/**
+ * Activation-time update database backup requirement, shared by the backup
+ * owner's check and the pre-staging preflight: this volume holds snapshots,
+ * same-volume rollback copies, and acquisition/publication scratch.
+ */
+export function requiredUpdateDatabaseBackupBytes(size: {
+  bytes: number;
+  largest: number;
+}): number {
+  return size.bytes === 0
+    ? 0
+    : 2 * size.bytes + 3 * size.largest + UPDATE_STATE_SPACE_RESERVE_BYTES;
+}
+
+/**
+ * Rollback allowance for migrated files left in place on another volume:
+ * one snapshot plus publication scratch and headroom.
+ */
+export function requiredUpdateDatabaseRollbackBytes(size: {
+  bytes: number;
+  largest: number;
+}): number {
+  return size.bytes + size.largest + UPDATE_STATE_SPACE_RESERVE_BYTES;
+}
+
 /** Bound private update I/O without releasing accepted work before it settles. */
 export async function withUpdateCandidateIoBudget<T>(
   params: {

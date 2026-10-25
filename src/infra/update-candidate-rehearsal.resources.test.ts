@@ -420,6 +420,109 @@ it.each([
   },
 );
 
+/** Fixtures for the pre-flight activation-backup capacity check: two 8 MiB families. */
+async function activationFixture(
+  available: (activationRoot: string, stateDir: string, target: string) => number | null,
+) {
+  const f = await fixture(8, ["main", "second"]);
+  const activationRoot = path.join(f.root, "artifacts");
+  await fs.mkdir(activationRoot);
+  capacity((target) => available(activationRoot, f.stateDir, target));
+  const hashes = () =>
+    Promise.all(
+      f.files.map(async (file) =>
+        createHash("sha256")
+          .update(await fs.readFile(file))
+          .digest("hex"),
+      ),
+    );
+  const before = await hashes();
+  return {
+    ...f,
+    activationRoot,
+    assess: () =>
+      assessInitialUpdateSnapshotCapacity({
+        config: {},
+        stateDir: f.stateDir,
+        env: {},
+        activationBackupRoot: activationRoot,
+      }),
+    unchanged: async () => expect(await hashes()).toEqual(before),
+  };
+}
+
+it("refuses before staging when the activation backup volume cannot hold the database backup", async () => {
+  // Two 8 MiB families: the candidate copy needs S + L + 64 MiB = 88 MiB and every
+  // snapshot root reports 200 MiB, so staging is admitted. Activation requires
+  // 2S + 3L + 64 MiB = 120 MiB, but the durable backup volume reports 100 MiB.
+  const f = await activationFixture((activationRoot, stateDir, target) =>
+    target.startsWith(activationRoot) ? 100 * 1024 ** 2 : 200 * 1024 ** 2,
+  );
+  const result = await f.assess();
+  expect(result.exitCode, result.stderrTail ?? undefined).toBe(1);
+  expect(result.stderrTail).toContain("Activation database backup needs 120 MiB");
+  await f.unchanged();
+});
+
+it("admits the update when the activation backup volume holds the database backup", async () => {
+  const f = await activationFixture(() => 200 * 1024 ** 2);
+  const result = await f.assess();
+  expect(result.exitCode, result.stderrTail ?? undefined).toBe(0);
+  expect(result.diagnostics?.join("\n")).toContain("Activation database backup destination");
+  await f.unchanged();
+});
+
+it("keeps the activation check authoritative when backup volume free space is unknown", async () => {
+  const f = await activationFixture((activationRoot, stateDir, target) =>
+    target.startsWith(activationRoot) ? null : 200 * 1024 ** 2,
+  );
+  const result = await f.assess();
+  expect(result.exitCode, result.stderrTail ?? undefined).toBe(0);
+  expect(result.diagnostics?.join("\n")).toContain("free space unknown");
+  await f.unchanged();
+});
+
+it("refuses before staging when a cross-volume rollback source lacks rollback space", async () => {
+  // The activation backup volume differs from the state volume: migrated files
+  // stay in place during rollback and need S + L + 64 MiB = 88 MiB there, while
+  // the family directory only reports 70 MiB.
+  const f = await activationFixture((activationRoot, stateDir, target) =>
+    target.startsWith(activationRoot)
+      ? 200 * 1024 ** 2
+      : target.startsWith(`${stateDir}${path.sep}`)
+        ? 70 * 1024 ** 2
+        : 200 * 1024 ** 2,
+  );
+  const realStat = fs.stat;
+  const activationRoot = f.activationRoot;
+  const stateDir = f.stateDir;
+  // Keep the real Stats prototype so every other fs.stat consumer stays intact;
+  // only the reported device identity moves the backup volume apart from the
+  // state volume.
+  const withDevice = (stats: Awaited<ReturnType<typeof realStat>>, dev: bigint) => {
+    const copy = Object.create(
+      Object.getPrototypeOf(stats),
+      Object.getOwnPropertyDescriptors(stats),
+    );
+    Object.defineProperty(copy, "dev", { value: dev, enumerable: true });
+    return copy as typeof stats;
+  };
+  vi.spyOn(fs, "stat").mockImplementation(async (target, options) => {
+    const stats = await realStat(target, options);
+    const file = String(target);
+    if (file === activationRoot) {
+      return withDevice(stats, 1n);
+    }
+    return file.startsWith(`${stateDir}${path.sep}`) || file === stateDir
+      ? withDevice(stats, 2n)
+      : stats;
+  });
+  const result = await f.assess();
+  expect(result.exitCode, result.stderrTail ?? undefined).toBe(1);
+  expect(result.stderrTail).toContain("Update database rollback needs 88 MiB");
+  await f.unchanged();
+});
+
 it("copies and verifies both databases within capacity despite a sub-floor caller timeout", async () => {
   const f = await capacityFixture(100, true);
   let copiedState = "";
