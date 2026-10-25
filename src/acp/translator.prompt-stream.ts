@@ -314,6 +314,7 @@ export class AcpTranslatorPromptStream {
 
       const abortController = new AbortController();
       const runId = randomUUID();
+      this.backgroundRuns.rememberPromptRun(runId);
       this.sessionStore.setActiveRun(params.sessionId, runId, abortController);
       const requestParams = {
         sessionKey: session.sessionKey,

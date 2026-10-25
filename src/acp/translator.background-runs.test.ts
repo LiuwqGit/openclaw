@@ -1,49 +1,34 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import type { GatewayClient } from "../gateway/client.js";
-import {
-  createChatEvent,
-  createSessionAgentHarness,
-  promptAgent,
-} from "./translator.prompt-harness.test-support.js";
+import { createTestAcpEventLedger } from "./event-ledger.test-support.js";
+import { createPromptScenario } from "./translator.scenario.test-support.js";
 
 // Regression coverage for issue #174849: gateway events for a session with no
 // pending ACP prompt (e.g. a sessions_spawn completion waking the requester)
 // must reach the ACP client as plain session/update notifications.
 
+const SESSION_ID = "session-1";
+
 async function createBackgroundHarness() {
-  const sent = createDeferred<string>();
-  const chatSendRunIds: string[] = [];
-  const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
-    if (method === "chat.send") {
-      const runId = params?.idempotencyKey as string;
-      chatSendRunIds.push(runId);
-      sent.resolve(runId);
-    }
-    return {};
-  }) as GatewayClient["request"];
-  const harness = createSessionAgentHarness(request);
-  const promptPromise = promptAgent(harness.agent);
-  const promptRunId = await sent.promise;
-  await harness.agent.handleGatewayEvent(
-    createChatEvent({
-      sessionKey: harness.sessionKey,
-      runId: promptRunId,
-      seq: 1,
-      state: "final",
-      stopReason: "stop",
-    }),
-  );
-  await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
-  harness.sessionUpdate.mockClear();
+  // An explicitly created ledger keeps delivery authority observable: replay
+  // must contain exactly what the client received, before or after revocation.
+  const eventLedger = createTestAcpEventLedger();
+  const scenario = createPromptScenario({ eventLedger });
+  const pending = await scenario.active();
+  await scenario.chat(pending.runId, { stopReason: "stop" });
+  await expect(pending.result).resolves.toEqual({ stopReason: "end_turn" });
+  scenario.sessionUpdate.mockClear();
   let seq = 1;
   const send = (event: string, payload: Record<string, unknown>) =>
-    harness.agent.handleGatewayEvent({
-      type: "event",
-      event,
-      payload: { seq: seq++, ...payload },
-    });
-  return { ...harness, promptRunId, promptPromise, send, chatSendRunIds };
+    scenario.event(event, { seq: seq++, ...payload });
+  return {
+    ...scenario,
+    sessionId: SESSION_ID,
+    eventLedger,
+    promptRunId: pending.runId,
+    promptPromise: pending.result,
+    send,
+  };
 }
 
 type EmittedUpdate = { sessionId: string; kind: string; text?: string; tool?: string };
@@ -190,10 +175,10 @@ describe("ACP background session updates between prompts", () => {
 
     // A prompt that starts after attachment owns the session: background
     // deltas for the retained run must not interleave into its stream.
-    const secondPrompt = promptAgent(h.agent);
+    const secondPrompt = h.prompt();
     const secondRunId = await vi.waitFor(() => {
-      expect(h.chatSendRunIds.length).toBeGreaterThanOrEqual(2);
-      return h.chatSendRunIds[h.chatSendRunIds.length - 1]!;
+      expect(h.runIds.length).toBeGreaterThanOrEqual(2);
+      return h.runIds[h.runIds.length - 1]!;
     });
     await h.send("chat", {
       sessionKey: h.sessionKey,
@@ -207,12 +192,7 @@ describe("ACP background session updates between prompts", () => {
 
     // Once the prompt settles, background delivery resumes from the retained
     // context and only the unsent remainder is forwarded.
-    await h.send("chat", {
-      sessionKey: h.sessionKey,
-      runId: secondRunId,
-      state: "final",
-      stopReason: "stop",
-    });
+    await h.chat(secondRunId, { stopReason: "stop" });
     await expect(secondPrompt).resolves.toEqual({ stopReason: "end_turn" });
     h.sessionUpdate.mockClear();
     await h.send("chat", {
@@ -267,41 +247,30 @@ describe("ACP background session updates between prompts", () => {
   it("routes background events through a session key reconciled during a prompt", async () => {
     const provisionalKey = "acp:session-9";
     const canonicalKey = "agent:main:acp:session-9";
-    const sent = createDeferred<string>();
-    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
-      if (method === "chat.send") {
-        sent.resolve(params?.idempotencyKey as string);
-      }
-      return {};
-    }) as GatewayClient["request"];
-    const harness = createSessionAgentHarness(request, { sessionKey: provisionalKey });
-    const promptPromise = promptAgent(harness.agent);
-    const runId = await sent.promise;
+    const eventLedger = createTestAcpEventLedger();
+    const scenario = createPromptScenario({ eventLedger, sessionKey: provisionalKey });
+    const pending = await scenario.active();
     // The Gateway settles the prompt under the canonical key, reconciling the
     // session binding through the store's key index.
-    await harness.agent.handleGatewayEvent(
-      createChatEvent({
-        sessionKey: canonicalKey,
-        runId,
-        seq: 1,
-        state: "final",
-        stopReason: "stop",
-      }),
-    );
-    await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
-    harness.sessionUpdate.mockClear();
-    await harness.agent.handleGatewayEvent(
-      createChatEvent({
-        sessionKey: canonicalKey,
-        runId: "background-run-7",
-        seq: 2,
-        state: "delta",
-        message: { content: [{ type: "text", text: "Sub-agent finished: PINEAPPLE" }] },
-      }),
-    );
-    expect(emitted(harness.sessionUpdate)).toEqual([
+    await scenario.event("chat", {
+      sessionKey: canonicalKey,
+      runId: pending.runId,
+      seq: 1,
+      state: "final",
+      stopReason: "stop",
+    });
+    await expect(pending.result).resolves.toEqual({ stopReason: "end_turn" });
+    scenario.sessionUpdate.mockClear();
+    await scenario.event("chat", {
+      sessionKey: canonicalKey,
+      runId: "background-run-7",
+      seq: 2,
+      state: "delta",
+      message: { content: [{ type: "text", text: "Sub-agent finished: PINEAPPLE" }] },
+    });
+    expect(emitted(scenario.sessionUpdate)).toEqual([
       {
-        sessionId: harness.sessionId,
+        sessionId: SESSION_ID,
         kind: "agent_message_chunk",
         text: "Sub-agent finished: PINEAPPLE",
       },
@@ -316,7 +285,7 @@ async function startBlockedThoughtDelivery(
   h: Awaited<ReturnType<typeof createBackgroundHarness>>,
   runId: string,
 ) {
-  const thoughtDelivered = createDeferred<void>();
+  const thoughtDelivered = createDeferred();
   let sessionUpdateCalls = 0;
   h.sessionUpdate.mockImplementation(async () => {
     if (++sessionUpdateCalls === 1) {
@@ -392,19 +361,14 @@ describe("ACP background delivery authority across awaited chunks", () => {
       h,
       "background-run-10",
     );
-    const secondPrompt = promptAgent(h.agent);
+    const secondPrompt = h.prompt();
     await vi.waitFor(() => {
-      expect(h.chatSendRunIds.length).toBeGreaterThanOrEqual(2);
+      expect(h.runIds.length).toBeGreaterThanOrEqual(2);
     });
     thoughtDelivered.resolve();
     await expectTextNeverDelivered(h, delivery);
-    const secondRunId = h.chatSendRunIds[h.chatSendRunIds.length - 1]!;
-    await h.send("chat", {
-      sessionKey: h.sessionKey,
-      runId: secondRunId,
-      state: "final",
-      stopReason: "stop",
-    });
+    const secondRunId = h.runIds[h.runIds.length - 1]!;
+    await h.chat(secondRunId, { stopReason: "stop" });
     await expect(secondPrompt).resolves.toEqual({ stopReason: "end_turn" });
   });
 });
