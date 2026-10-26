@@ -12,6 +12,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/channels/message/ingress-drain.handoff.test.ts",
   "src/channels/message/ingress-queue.authority.test.ts",
   "src/agents/mcp-oauth-authorization.test.ts",
+  "src/agents/agent-bundle-mcp-start-backoff.test.ts",
   "src/agents/mcp-oauth-refresh-boundary.test.ts",
   "src/agents/mcp-auth-profile-authorization.test.ts",
   "src/agents/auth-profiles/authorization-observation.test.ts",
@@ -323,6 +324,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/reply/agent-runner-completion.persistence.test.ts",
   "src/auto-reply/reply/agent-runner-result-accounting.final-delivery.test.ts",
   "src/auto-reply/reply/agent-runner-result-accounting.persistence.test.ts",
+  "src/auto-reply/reply/followup-runner.writer-claim.test.ts",
   "src/auto-reply/reply/agent-runner-result-diagnostics.persistence.test.ts",
   "src/auto-reply/reply/agent-runner-result-accounting.restoration.test.ts",
   "src/auto-reply/reply/session-usage.test.ts",
@@ -1407,7 +1409,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/database-engine/message-progress-retention.conformance.test.ts",
   "src/infra/database-engine/session-archive-alias.conformance.test.ts",
   "src/infra/database-engine/outcome-surfaces.postgres.test.ts",
-  "src/node-host/node-worker-launch-claim.test.ts",
   "src/infra/database-engine/session-participant-capacity.conformance.test.ts",
 ];
 

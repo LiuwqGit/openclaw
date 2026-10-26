@@ -131,38 +131,6 @@ it.each(["", prepareSkillsForPrompt({ skills: [demo], maxSkillsInPrompt: 0 }).pr
   },
 );
 
-it.each([false, true])(
-  "routes deferred skill tools through the Tool Search dispatcher (%s)",
-  (listed) => {
-    const skillsPrompt = listed ? formatSkillsForPromptCore([demo]) : "";
-    const deferred = render({
-      toolNames: ["read", "tool_search", "tool_describe", "dispatch_action"],
-      capabilityToolNames: ["skills_search", "skills_read"],
-      skillsPrompt,
-    });
-    expect(deferred).toContain(
-      "call `dispatch_action` with `skills_read` in `id` and the exact skill name in `args`",
-    );
-    expect(deferred).toContain(
-      "by calling `dispatch_action` with `skills_search` in `id` and the query in `args`",
-    );
-    expect(deferred).not.toContain("use `skills_read` with its exact name");
-    const directoryMode = render({
-      toolNames: ["read", "dispatch_action"],
-      capabilityToolNames: ["skills_search", "skills_read"],
-      deferredToolsDirectlyCallable: true,
-      skillsPrompt,
-    });
-    expect(directoryMode).toContain("use `skills_read` with its exact name");
-    expect(directoryMode).not.toContain("call `dispatch_action` with `skills_read`");
-    const direct = renderSkills(
-      ["skills_search", "skills_read"],
-      formatSkillsForPromptCore([demo]),
-    );
-    expect(direct).toContain("use `skills_read` with its exact name");
-  },
-);
-
 it("adds Ultra orchestration only when sessions_spawn is callable", () => {
   const base: PromptOptions = { toolNames: ["sessions_spawn"], subagentDelegationMode: "prefer" };
   const ultra = (params: PromptOptions = {}) =>

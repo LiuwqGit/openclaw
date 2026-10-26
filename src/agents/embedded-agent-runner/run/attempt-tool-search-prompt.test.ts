@@ -56,19 +56,17 @@ async function promptFixture(
     admission.close();
     runtime.cleanup();
   });
-  const sourceTools = (codeMode ? ["sessions_create"] : ["fixture_allowed", "fixture_denied"]).map(
-    createStubTool,
-  );
+  const sourceTools = [
+    ...(codeMode ? ["sessions_create"] : ["fixture_allowed", "fixture_denied"]),
+    ...(skillsDeferred ? ["skills_search", "skills_read"] : []),
+  ].map(createStubTool);
   const surface = runtime.compactTools([
     ...(!codeMode
       ? createToolSearchTools({ config: runtime.config, catalogRef: runtime.toolSearchCatalogRef })
       : []),
     ...sourceTools,
   ]);
-  const capabilityToolNames = new Set([
-    ...sourceTools.map((tool) => tool.name),
-    ...(skillsDeferred ? ["skills_search", "skills_read"] : []),
-  ]);
+  const capabilityToolNames = new Set(sourceTools.map((tool) => tool.name));
   const attempt = {
     ...fixture.input.attempt,
     admittedRunContext: await admission.admit("embedded"),
@@ -130,16 +128,16 @@ it("keeps explicit task creation discoverable in Code Mode and removes revoked c
 });
 
 it.each(["tools", "directory"] as const)(
-  "routes deferred skill tools through the dispatcher in %s-mode prompt assembly",
+  "guides deferred skill access through the callable %s surface",
   async (mode) => {
     const { surface, prepared } = await promptFixture(false, mode, true);
     expect(surface.tools.map((tool) => tool.name)).not.toContain("skills_read");
     if (mode === "tools") {
       expect(prepared.systemPromptText).toContain(
-        "call `dispatch_action` with `skills_read` in `id` and the exact skill name in `args`",
+        'call `dispatch_action` with `{"id":"skills_read","args":{"name":"<name>"}}`',
       );
       expect(prepared.systemPromptText).toContain(
-        "by calling `dispatch_action` with `skills_search` in `id` and the query in `args`",
+        'by calling `dispatch_action` with `{"id":"skills_search","args":{"query":"<query>"}}`',
       );
       expect(prepared.systemPromptText).not.toContain("use `skills_read` with its exact name");
     } else {

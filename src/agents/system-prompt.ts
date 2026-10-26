@@ -75,7 +75,7 @@ import {
   resolveSilentReplyPromptMode,
 } from "./system-prompt-messaging.js";
 import { blindRuntime, blindWorkspace, buildRuntimeLine } from "./system-prompt-runtime.js";
-import { renderSkillsPromptSection } from "./system-prompt-skills.js";
+import { buildSkillsSection } from "./system-prompt-skills.js";
 import {
   buildSystemPromptToolLines,
   buildSystemPromptToolingSection,
@@ -338,7 +338,7 @@ export function buildAgentSystemPrompt(params: {
   runtimeInfo?: SystemPromptRuntimeInfo;
   messageToolHints?: string[];
   toolSchemaDirectoryPrompt?: string;
-  /** Whether deferred capability tools stay directly callable by name (schema directory mode). */
+  /** Deferred directory tools can be invoked by name in the embedded harness. */
   deferredToolsDirectlyCallable?: boolean;
   /** Guidance published by the MCP servers backing this prompt's visible tools. */
   mcpServerInstructions?: readonly McpServerInstruction[];
@@ -517,17 +517,16 @@ export function buildAgentSystemPrompt(params: {
     }),
     "",
   ];
-  const skillsPromptRender = renderSkillsPromptSection({
+  const { section: skillsSection, skillsPrompt: renderedSkillsPrompt } = buildSkillsSection({
     skillsPrompt,
     readToolName,
     codeModeActive: params.codeModeActive,
     promptSurface,
-    visibleToolNames: visibleTools,
-    capabilityToolNames: availableTools,
+    visibleTools,
+    availableTools,
     deferredToolsDirectlyCallable: params.deferredToolsDirectlyCallable,
   });
-  const skillsSection = skillsPromptRender.section;
-  params.onRenderedSkillsPrompt?.(skillsPromptRender.canAccess ? (skillsPrompt ?? "") : "");
+  params.onRenderedSkillsPrompt?.(renderedSkillsPrompt);
   const skillWorkshopSection = availableTools.has(SKILL_WORKSHOP_TOOL_NAME)
     ? buildSkillWorkshopPromptSection()
     : [];

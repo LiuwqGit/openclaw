@@ -6,96 +6,59 @@ export function buildSkillsSection(params: {
   skillsPrompt?: string;
   readToolName: string;
   codeModeActive?: boolean;
-  installedSkillSearch?: boolean;
-  installedSkillRead?: boolean;
-  deferredSkillSearch?: boolean;
-  deferredSkillRead?: boolean;
-  skillsDispatcherToolName?: string;
-}) {
-  const trimmed = params.skillsPrompt?.trim();
-  const hasListedSkills = parseSkillsPromptCatalog(trimmed ?? "").length > 0;
-  const skillReadAvailable = params.installedSkillRead || params.deferredSkillRead;
-  const skillSearchAvailable = params.installedSkillSearch || params.deferredSkillSearch;
-  if (!hasListedSkills && !skillSearchAvailable) {
-    return trimmed ? ["## Skills", trimmed, ""] : [];
-  }
-  // Deferred tools are not sent to the model directly; they run through the Tool
-  // Search dispatcher. Without a visible dispatcher (schema directory mode),
-  // deferred skill tools stay directly callable by name.
-  const dispatcher = params.skillsDispatcherToolName;
-  const readLine = params.codeModeActive
-    ? skillReadAvailable
-      ? 'Known name or clear match: use `skills.read("<name>")` inside `exec`; read the complete instructions before task actions and follow them.'
-      : `Clear match: read exact <location> with \`${params.readToolName}\`; obey.`
-    : params.installedSkillRead || (params.deferredSkillRead && !dispatcher)
-      ? "Known name or clear match: use `skills_read` with its exact name; read the complete instructions before task actions and follow them."
-      : params.deferredSkillRead && dispatcher
-        ? `Known name or clear match: call \`${dispatcher}\` with \`skills_read\` in \`id\` and the exact skill name in \`args\`; read the complete instructions before task actions and follow them.`
-        : `Clear match: read exact <location> with \`${params.readToolName}\`; obey.`;
-  const searchClause = params.codeModeActive
-    ? "with `skills.search(query)` inside `exec`"
-    : params.installedSkillSearch || (params.deferredSkillSearch && !dispatcher)
-      ? "with `skills_search`"
-      : params.deferredSkillSearch && dispatcher
-        ? `by calling \`${dispatcher}\` with \`skills_search\` in \`id\` and the query in \`args\``
-        : "with `skills_search`";
-  return [
-    "## Skills",
-    ...(hasListedSkills
-      ? ["Scan <available_skills> for a matching workflow."]
-      : ["No skill entries are listed in this prompt."]),
-    readLine,
-    ...(skillSearchAvailable
-      ? [
-          `Before work involving files, specialized tools, or a reusable workflow, ${hasListedSkills ? "use a listed match or search" : "search"} ${searchClause} for an applicable skill. Read the best match before implementing the workflow yourself.`,
-          "Search by the task goal and distinctive terms. Simple conversation or a self-contained answer does not need a search. Search covers installed skills; it does not install skills.",
-        ]
-      : []),
-    "Several: most specific. No relevant skill: read none.",
-    "Up-front max one. Never invent paths.",
-    "External writes: batch safely; no tight loops; honor 429/Retry-After.",
-    ...(trimmed ? [trimmed] : []),
-    "",
-  ];
-}
-
-type ToolNameLookup = ReadonlySet<string> | ReadonlyMap<string, string>;
-
-export function renderSkillsPromptSection(params: {
-  skillsPrompt?: string;
-  readToolName: string;
-  codeModeActive?: boolean;
-  promptSurface?: AgentPromptSurfaceKind;
-  visibleToolNames: ToolNameLookup;
-  capabilityToolNames: ToolNameLookup;
+  promptSurface: AgentPromptSurfaceKind;
+  availableTools: ReadonlySet<string>;
+  visibleTools: ReadonlyMap<string, string>;
   deferredToolsDirectlyCallable?: boolean;
-}): { section: string[]; canAccess: boolean } {
+}) {
+  const { availableTools, visibleTools } = params;
   // CLI backends own native file tools outside OpenClaw's projected tool list.
-  // Keep their skill catalog visible while embedded runs require a real read tool.
   const canAccess = params.codeModeActive
-    ? params.visibleToolNames.has("exec")
-    : params.visibleToolNames.has("read") ||
-      params.capabilityToolNames.has("skills_read") ||
+    ? visibleTools.has("exec")
+    : visibleTools.has("read") ||
+      availableTools.has("skills_read") ||
       params.promptSurface === "cli_backend";
-  const { visibleToolNames: visible, capabilityToolNames: available } = params;
-  const dispatcher =
-    !params.deferredToolsDirectlyCallable && visible.has(TOOL_CALL_RAW_TOOL_NAME)
-      ? TOOL_CALL_RAW_TOOL_NAME
-      : undefined;
-  const deferredSkillTool = (name: string) => !visible.has(name) && available.has(name);
+  const skillsPrompt = canAccess ? (params.skillsPrompt?.trim() ?? "") : "";
+  const hasListedSkills = parseSkillsPromptCatalog(skillsPrompt).length > 0;
+  const installedSkillSearch = availableTools.has("skills_search");
+  const installedSkillRead = availableTools.has("skills_read");
+  if (!canAccess || (!hasListedSkills && !installedSkillSearch)) {
+    return { skillsPrompt, section: skillsPrompt ? ["## Skills", skillsPrompt, ""] : [] };
+  }
+  const dispatchDeferredSkills =
+    !params.deferredToolsDirectlyCallable && visibleTools.has(TOOL_CALL_RAW_TOOL_NAME);
+  const readCall =
+    dispatchDeferredSkills && !visibleTools.has("skills_read")
+      ? `call \`${TOOL_CALL_RAW_TOOL_NAME}\` with \`{"id":"skills_read","args":{"name":"<name>"}}\``
+      : "use `skills_read` with its exact name";
+  const searchCall = params.codeModeActive
+    ? "with `skills.search(query)` inside `exec`"
+    : dispatchDeferredSkills && !visibleTools.has("skills_search")
+      ? `by calling \`${TOOL_CALL_RAW_TOOL_NAME}\` with \`{"id":"skills_search","args":{"query":"<query>"}}\``
+      : "with `skills_search`";
   return {
-    canAccess,
-    section: canAccess
-      ? buildSkillsSection({
-          skillsPrompt: params.skillsPrompt,
-          readToolName: params.readToolName,
-          codeModeActive: params.codeModeActive,
-          installedSkillSearch: visible.has("skills_search"),
-          installedSkillRead: visible.has("skills_read"),
-          deferredSkillSearch: deferredSkillTool("skills_search"),
-          deferredSkillRead: deferredSkillTool("skills_read"),
-          skillsDispatcherToolName: dispatcher,
-        })
-      : [],
+    skillsPrompt,
+    section: [
+      "## Skills",
+      ...(hasListedSkills
+        ? ["Scan <available_skills> for a matching workflow."]
+        : ["No skill entries are listed in this prompt."]),
+      params.codeModeActive && installedSkillRead
+        ? 'Known name or clear match: use `skills.read("<name>")` inside `exec`; read the complete instructions before task actions and follow them.'
+        : installedSkillRead
+          ? `Known name or clear match: ${readCall}; read the complete instructions before task actions and follow them.`
+          : `Clear match: read exact <location> with \`${params.readToolName}\`; obey.`,
+      ...(installedSkillSearch
+        ? [
+            `Before work involving files, specialized tools, or a reusable workflow, ${hasListedSkills ? "use a listed match or search" : "search"} ${searchCall} for an applicable skill. Read the best match before implementing the workflow yourself.`,
+            "Search by the task goal and distinctive terms. Simple conversation or a self-contained answer does not need a search. Search covers installed skills; it does not install skills.",
+          ]
+        : []),
+      "Several: most specific. No relevant skill: read none.",
+      "Up-front max one. Never invent paths.",
+      "External writes: batch safely; no tight loops; honor 429/Retry-After.",
+      ...(skillsPrompt ? [skillsPrompt] : []),
+      "",
+    ],
   };
 }
