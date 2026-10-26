@@ -31,7 +31,11 @@ const { createPromptBuildToolPolicy } = await vi.importActual<
 
 beforeEach(() => Object.values(mocks).forEach((mock) => mock.mockReset()));
 
-async function promptFixture(codeMode = false, mode: "tools" | "directory" = "tools") {
+async function promptFixture(
+  codeMode = false,
+  mode: "tools" | "directory" = "tools",
+  skillsDeferred = false,
+) {
   const config = {
     agents: { defaults: { experimental: { localModelLean: false } } },
     tools: { codeMode, ...(!codeMode && { toolSearch: { enabled: true, mode } }) },
@@ -61,7 +65,10 @@ async function promptFixture(codeMode = false, mode: "tools" | "directory" = "to
       : []),
     ...sourceTools,
   ]);
-  const capabilityToolNames = new Set(sourceTools.map((tool) => tool.name));
+  const capabilityToolNames = new Set([
+    ...sourceTools.map((tool) => tool.name),
+    ...(skillsDeferred ? ["skills_search", "skills_read"] : []),
+  ]);
   const attempt = {
     ...fixture.input.attempt,
     admittedRunContext: await admission.admit("embedded"),
@@ -97,6 +104,7 @@ async function promptFixture(codeMode = false, mode: "tools" | "directory" = "to
     skillsPrompt: "",
     codeModeActive: codeMode,
     toolSearchDirectoryEnabled: !codeMode,
+    deferredToolsDirectlyCallable: !codeMode && mode === "directory",
     toolSearchRuntimeConfig: runtime.config,
     toolSearchCatalogRef: runtime.toolSearchCatalogRef,
   });
@@ -120,6 +128,25 @@ it("keeps explicit task creation discoverable in Code Mode and removes revoked c
   const refreshPrompt = await prepared.prepareToolPrompt(restricted.tools);
   expect(refreshPrompt(prepared.systemPromptText)).not.toContain("`sessions_create`");
 });
+
+it.each(["tools", "directory"] as const)(
+  "routes deferred skill tools through the dispatcher in %s-mode prompt assembly",
+  async (mode) => {
+    const { surface, prepared } = await promptFixture(false, mode, true);
+    expect(surface.tools.map((tool) => tool.name)).not.toContain("skills_read");
+    if (mode === "tools") {
+      expect(prepared.systemPromptText).toContain(
+        "call `dispatch_action` with `skills_read` in `id` and the exact skill name in `args`",
+      );
+      expect(prepared.systemPromptText).toContain(
+        "by calling `dispatch_action` with `skills_search` in `id` and the query in `args`",
+      );
+      expect(prepared.systemPromptText).not.toContain("use `skills_read` with its exact name");
+    } else {
+      expect(prepared.systemPromptText).toContain("use `skills_read` with its exact name");
+    }
+  },
+);
 
 it.each([
   { mode: "tools" as const, toolsAllow: undefined },

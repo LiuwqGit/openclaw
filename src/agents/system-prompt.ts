@@ -75,7 +75,7 @@ import {
   resolveSilentReplyPromptMode,
 } from "./system-prompt-messaging.js";
 import { blindRuntime, blindWorkspace, buildRuntimeLine } from "./system-prompt-runtime.js";
-import { buildSkillsSection } from "./system-prompt-skills.js";
+import { renderSkillsPromptSection } from "./system-prompt-skills.js";
 import {
   buildSystemPromptToolLines,
   buildSystemPromptToolingSection,
@@ -338,6 +338,8 @@ export function buildAgentSystemPrompt(params: {
   runtimeInfo?: SystemPromptRuntimeInfo;
   messageToolHints?: string[];
   toolSchemaDirectoryPrompt?: string;
+  /** Whether deferred capability tools stay directly callable by name (schema directory mode). */
+  deferredToolsDirectlyCallable?: boolean;
   /** Guidance published by the MCP servers backing this prompt's visible tools. */
   mcpServerInstructions?: readonly McpServerInstruction[];
   messageTool?: Parameters<typeof buildUiPresentationPrompt>[0]["messageTool"];
@@ -515,23 +517,17 @@ export function buildAgentSystemPrompt(params: {
     }),
     "",
   ];
-  // CLI backends own native file tools outside OpenClaw's projected tool list.
-  // Keep their skill catalog visible while embedded runs require a real read tool.
-  const canAccessSkills = params.codeModeActive
-    ? visibleTools.has("exec")
-    : visibleTools.has("read") ||
-      availableTools.has("skills_read") ||
-      promptSurface === "cli_backend";
-  const skillsSection = canAccessSkills
-    ? buildSkillsSection({
-        skillsPrompt,
-        readToolName,
-        codeModeActive: params.codeModeActive,
-        installedSkillSearch: availableTools.has("skills_search"),
-        installedSkillRead: availableTools.has("skills_read"),
-      })
-    : [];
-  params.onRenderedSkillsPrompt?.(canAccessSkills ? (skillsPrompt ?? "") : "");
+  const skillsPromptRender = renderSkillsPromptSection({
+    skillsPrompt,
+    readToolName,
+    codeModeActive: params.codeModeActive,
+    promptSurface,
+    visibleToolNames: visibleTools,
+    capabilityToolNames: availableTools,
+    deferredToolsDirectlyCallable: params.deferredToolsDirectlyCallable,
+  });
+  const skillsSection = skillsPromptRender.section;
+  params.onRenderedSkillsPrompt?.(skillsPromptRender.canAccess ? (skillsPrompt ?? "") : "");
   const skillWorkshopSection = availableTools.has(SKILL_WORKSHOP_TOOL_NAME)
     ? buildSkillWorkshopPromptSection()
     : [];

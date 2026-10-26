@@ -81,6 +81,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
   webSearchUnconfigured?: () => boolean;
   toolSearchCatalogRef?: ToolSearchCatalogRef;
   toolSearchDirectoryEnabled: boolean;
+  deferredToolsDirectlyCallable?: boolean;
   toolSearchRuntimeConfig: EmbeddedRunAttemptParams["config"];
 }) {
   const { attempt } = params;
@@ -364,6 +365,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
         surface: promptSurface,
       }),
       toolSchemaDirectoryPrompt,
+      deferredToolsDirectlyCallable: params.deferredToolsDirectlyCallable,
       sandboxInfo,
       // oxlint-disable-next-line unicorn/no-array-sort -- The materialized set array is private.
       capabilityToolNames: [...params.capabilityToolNames].sort(),
