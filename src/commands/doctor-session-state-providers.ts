@@ -9,7 +9,11 @@ import {
 } from "../agents/agent-scope.js";
 import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
 import type { ModelRef } from "../agents/model-ref-shared.js";
-import { buildAllowedModelSet, isModelKeyAllowedBySet } from "../agents/model-selection-shared.js";
+import {
+  buildAllowedModelSet,
+  isModelKeyAllowedBySet,
+  resolveConfiguredModelPolicyAllow,
+} from "../agents/model-selection-shared.js";
 import {
   modelKey,
   normalizeProviderId,
@@ -90,9 +94,18 @@ function resolveConfiguredDoctorSessionStateRoute(params: {
     defaultProvider: primary.provider,
     defaultModel: primary,
   });
+  // An explicitly configured unrestricted policy (`modelPolicy.allow: []`) permits every
+  // model: the canonical `allows()` predicate returns true even though the finite
+  // `allowedKeys` fallback (empty catalog + default only) does not contain the selection.
+  // A policy that is not configured at all (no modelPolicy, no legacy models map) is not
+  // an explicit unrestricted grant — stale automatic overrides there stay repairable.
+  const modelPolicyPermitsAnyModel =
+    modelPolicy.allowAny &&
+    resolveConfiguredModelPolicyAllow({ cfg: params.cfg, agentId }).configPath !== null;
   return {
     defaultProvider: primary.provider,
     configuredModelRefs: [...configuredModelRefs],
+    modelPolicyPermitsAnyModel,
     modelPolicyAllowedKeys: modelPolicy.allowedKeys,
     runtime,
   };
@@ -248,16 +261,18 @@ function scanEntryForOwner(params: {
       });
       const overrideAllowed =
         directOverride !== null &&
-        isModelKeyAllowedBySet(
-          params.route.modelPolicyAllowedKeys,
-          modelKey(directOverride.provider, directOverride.model),
-        );
+        (params.route.modelPolicyPermitsAnyModel ||
+          isModelKeyAllowedBySet(
+            params.route.modelPolicyAllowedKeys,
+            modelKey(directOverride.provider, directOverride.model),
+          ));
       // Configured child sessions pick models through the agent's model policy and persist
       // self-origin provenance (origin equals the selection); only an origin that moved the
       // effective route is fallback residue. Automatic selections the canonical policy still
-      // permits are legitimate child-session picks and must not be cleared just for leaving
-      // the configured primary/fallback chain. Active fallbacks and models the policy no
-      // longer permits stay repairable.
+      // permits — including under an explicitly unrestricted policy — are legitimate
+      // child-session picks and must not be cleared just for leaving the configured
+      // primary/fallback chain. Active fallbacks and models the policy no longer permits
+      // stay repairable.
       if (overrideIsActiveFallback || !overrideAllowed) {
         addReason(reasons, "auto model override");
       }

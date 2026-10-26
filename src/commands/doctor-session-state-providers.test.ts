@@ -422,6 +422,7 @@ it("preserves an allowed automatic child-session selection with self-origin prov
 it.each([
   ["exact policy entries", ["openai/example-primary", "openai/example-secondary"]] as const,
   ["provider wildcard", ["openai/*"]] as const,
+  ["unrestricted policy (empty allow list)", []] as const,
 ])("preserves an automatic child-session selection permitted by %s", async (label, allow) => {
   const cfg = modelConfig("openai/example-primary");
   cfg.agents!.defaults!.modelPolicy = { allow: [...allow] };
@@ -431,6 +432,33 @@ it.each([
     modelOverrideSource: "auto",
     modelOverrideFallbackOriginProvider: "openai",
     modelOverrideFallbackOriginModel: "example-secondary",
+  });
+
+  const result = await runEntry(selected, cfg);
+
+  expect(result.row).toEqual(selected);
+  expect(result.warnings).toEqual([]);
+  expect(result.confirmRuntimeRepair).not.toHaveBeenCalled();
+});
+
+it("preserves a self-origin automatic child selection under an explicitly unrestricted policy", async () => {
+  const cfg = modelConfig("openai/example-primary");
+  cfg.agents!.defaults!.models = {
+    "openai/example-primary": { agentRuntime: { id: "openclaw" } },
+    "openai/example-secondary": { agentRuntime: { id: "openclaw" } },
+  };
+  // An explicit empty allow list is an unrestricted policy: the canonical `allows()`
+  // predicate permits every model even though the finite allowedKeys fallback does not.
+  cfg.agents!.defaults!.modelPolicy = { allow: [] };
+  const selected = entry({
+    providerOverride: "openai",
+    modelOverride: "example-secondary",
+    modelOverrideSource: "auto",
+    modelOverrideRouteResolution: "resolved",
+    modelOverrideFallbackOriginProvider: "openai",
+    modelOverrideFallbackOriginModel: "example-secondary",
+    modelProvider: "openai",
+    model: "example-secondary",
   });
 
   const result = await runEntry(selected, cfg);
