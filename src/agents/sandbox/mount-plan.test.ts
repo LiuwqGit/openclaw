@@ -133,6 +133,29 @@ describe("managed mount plan", () => {
     expect(fs.readdirSync(outside)).toEqual([]);
   });
 
+  it("names an inaccessible managed skill mountpoint instead of a path-alias violation", async () => {
+    // An engine-created mountpoint retained under another owner stays untraversable.
+    // POSIX permission bits bind neither root nor Windows, so neither can reproduce it.
+    if (process.platform === "win32" || process.getuid?.() === 0) {
+      return;
+    }
+    const engineCreated = path.join(root, "agent", ".openclaw");
+    fs.mkdirSync(path.join(engineCreated, "sandbox-skills", "skills"), { recursive: true });
+    fs.chmodSync(engineCreated, 0o000);
+    try {
+      const failure = await prepare("rw", { workspaceSource: "managed-worktree" }).then(
+        () => undefined,
+        (error: unknown) => error as Error,
+      );
+      expect(failure?.message).toContain(path.join(engineCreated, "sandbox-skills", "skills"));
+      expect(failure?.message).toContain('sudo chown -R "$(id -u):$(id -g)"');
+      expect(failure?.message).not.toContain("path alias escape blocked");
+      expect(failure?.cause).toBeInstanceOf(Error);
+    } finally {
+      fs.chmodSync(engineCreated, 0o755);
+    }
+  });
+
   it("keeps meaningful source and target whitespace through create and retained comparison", async () => {
     const plan = await prepare("rw", {
       workspaceDir: path.join(root, "empty"),

@@ -1,8 +1,12 @@
+import path from "node:path";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { decodeMountInfoPath } from "@openclaw/normalization-core/mountinfo-path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { hasErrnoCode } from "../../infra/errno.js";
 import { root as openFsSafeRoot } from "../../infra/fs-safe.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { MATERIALIZED_SANDBOX_SKILLS_WORKSPACE } from "../../shared/sandbox-workspace-paths.js";
+import { shellEscape } from "../../shared/shell-quote.js";
 import { splitSandboxBindSpec } from "./bind-spec.js";
 import { execContainer, type SandboxContainerEngine } from "./container-engine.js";
 import {
@@ -30,6 +34,25 @@ export type SandboxMountPlan = {
   tmpfs: ReturnType<typeof resolveSandboxTmpfsMounts>;
 };
 
+/** Reports an untraversable engine-created mountpoint as the access failure it is. */
+function diagnoseInaccessibleSkillMountpoint(params: {
+  workspaceDir: string;
+  relativeSkillMount: string;
+  error: unknown;
+}): Error | undefined {
+  const isPermissionFailure = (cause: unknown) =>
+    ["EACCES", "EPERM"].some((code) => hasErrnoCode(cause, code));
+  if (!collectNestedErrorCandidates(params.error).some(isPermissionFailure)) {
+    return undefined;
+  }
+  const runtimeRoot = path.join(params.workspaceDir, MATERIALIZED_SANDBOX_SKILLS_WORKSPACE);
+  const mountpoint = path.join(params.workspaceDir, params.relativeSkillMount);
+  return new Error(
+    `Sandbox skills cannot be mounted: ${mountpoint} is not accessible to the user running OpenClaw. A container engine created ${runtimeRoot} under a different owner, so the read-only skills mount cannot be allocated. Restore ownership for the user running OpenClaw (for example: sudo chown -R "$(id -u):$(id -g)" ${shellEscape(runtimeRoot)}) and retry.`,
+    { cause: params.error },
+  );
+}
+
 export async function prepareSandboxMountPlan(params: {
   engine: SandboxContainerEngine;
   workspaceDir: string;
@@ -54,12 +77,23 @@ export async function prepareSandboxMountPlan(params: {
     // Engine-created nested mountpoints can be owned by a different user namespace.
     // Allocate the empty scaffold as its workspace owner before mounting read-only
     // instructions, so normal workspace retention can later remove it without chmod.
-    const workspace = await openFsSafeRoot(params.workspaceDir, {
-      mode: 0o755,
-      mutationSymlinks: "reject",
-      assertBeforeMutation: params.assertCurrent,
-    });
-    await workspace.mkdir(relativeSkillMount);
+    try {
+      const workspace = await openFsSafeRoot(params.workspaceDir, {
+        mode: 0o755,
+        mutationSymlinks: "reject",
+        assertBeforeMutation: params.assertCurrent,
+      });
+      await workspace.mkdir(relativeSkillMount);
+    } catch (error) {
+      // A retained mountpoint this user cannot traverse is reported as a path-alias
+      // violation, which hides both the offending directory and its only remedy.
+      const diagnosed = diagnoseInaccessibleSkillMountpoint({
+        workspaceDir: params.workspaceDir,
+        relativeSkillMount,
+        error,
+      });
+      throw diagnosed ?? error;
+    }
   }
   const allowedRoots = [
     params.workspaceDir,
