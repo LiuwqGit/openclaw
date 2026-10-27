@@ -72,15 +72,12 @@ export function buildLitellmImageGenerationProvider(): ImageGenerationProvider {
     resolveAllowPrivateNetwork: ({ baseUrl }) =>
       shouldAutoAllowPrivateLitellmEndpoint(baseUrl) ? true : undefined,
     useConfiguredRequest: true,
-    // LiteLLM's OpenAI-compatible images API defaults n to 1. Some backends
-    // (e.g. Gemini image models) reject an explicit n=1, so only send n when
-    // more than one image is requested.
     buildGenerateRequest: ({ req, model, count }) => ({
       kind: "json",
       body: {
         model,
         prompt: req.prompt,
-        ...(count > 1 ? { n: count } : {}),
+        n: count,
         size: req.size ?? DEFAULT_SIZE,
       },
     }),
