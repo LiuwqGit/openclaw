@@ -20,6 +20,7 @@ import {
 } from "../../plugins/native-resource.test-support.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { resetGeneratedMediaTaskActivityForTests } from "../media-generation-activity.test-support.js";
@@ -92,6 +93,7 @@ function createNativeFixture(
     dir,
     id,
     body: `const { DatabaseSync } = require("node:sqlite");
+const metadata = (value) => new Proxy(value, {});
 module.exports = {
   id: ${JSON.stringify(id)},
   register(api) {
@@ -114,8 +116,15 @@ ${
     api.registerImageGenerationProvider({
       id: ${JSON.stringify(id)},
       defaultModel: "fixture-image",
+      models: ["fixture-image-catalog"],
       isConfigured() { return read() === 42; },
-      capabilities: { generate: { maxCount: 2 }, edit: { enabled: ${edit}, maxInputImages: ${edit ? 1 : 0} } },
+      capabilities: metadata({ generate: { maxCount: 2 }, edit: { enabled: ${edit}, maxInputImages: ${edit ? 1 : 0} } }),
+      catalogByModel: {
+        "fixture-image-catalog": {
+          capabilities: metadata({ generate: { maxCount: 1 }, edit: { enabled: false, maxInputImages: 0 } }),
+          modes: metadata(["generate"]),
+        },
+      },
       async generateImage(request) {
         await state.resumeProvider.promise;
         read();
@@ -143,7 +152,7 @@ ${
       id: ${JSON.stringify(id)},
       defaultModel: "fixture-music",
       isConfigured() { return read() === 42; },
-      capabilities: { generate: { maxTracks: 2 }, edit: { enabled: ${edit}, maxInputImages: ${edit ? 1 : 0} } },
+      capabilities: metadata({ generate: { maxTracks: 2 }, edit: { enabled: ${edit}, maxInputImages: ${edit ? 1 : 0} } }),
       async generateMusic() {
         await state.resumeProvider.promise;
         read();
@@ -169,7 +178,7 @@ ${
       id: ${JSON.stringify(id)},
       defaultModel: "fixture-video",
       isConfigured() { return read() === 42; },
-      capabilities: { generate: { maxVideos: 2 }, imageToVideo: { enabled: ${edit}, maxInputImages: ${edit ? 1 : 0} } },
+      capabilities: metadata({ generate: { maxVideos: 2 }, imageToVideo: { enabled: ${edit}, maxInputImages: ${edit ? 1 : 0} } }),
       async resolveModelCapabilities() {
         await state.resumeProvider.promise;
         read();
@@ -361,6 +370,58 @@ describe.each(["image", "music", "video"] as const)(
             await settlement.wait(createTask.mock.calls.length);
             await first.release();
             await prepared.release();
+          }
+        });
+      } finally {
+        fixture.cleanup();
+      }
+    });
+    it("returns serializable list metadata after its provider resources close", async () => {
+      const fixture = createNativeFixture(kind);
+      try {
+        await fixture.withEnvironment(async () => {
+          useNoBundledPlugins();
+          const acquired = await acquirePluginRegistryForInspection({ config: fixture.config });
+          try {
+            const result = await withPluginRuntimeRegistryScope(acquired.registry, () => {
+              const tool = createTool({
+                config: fixture.config,
+                agentDir: path.join(fixture.dir, "agent"),
+                workspaceDir: fixture.dir,
+              });
+              return tool!.execute("media-list-call", { action: "list" });
+            });
+            await acquired.release();
+
+            const connection = fixture.connections[0]!;
+            expect(connection.database.isOpen).toBe(false);
+            expect(connection.disposals).toBe(1);
+            expect(connection.generated).toBe(0);
+
+            expect(() => JSON.stringify(result)).not.toThrow();
+            // oxlint-disable-next-line unicorn/prefer-structured-clone -- Assert the JSON wire shape, not an in-memory clone.
+            const serialized = JSON.parse(JSON.stringify(result)) as {
+              details: { providers: Array<Record<string, unknown>> };
+            };
+            const providers = serialized.details.providers;
+            expect(providers).toHaveLength(1);
+            expect(providers[0]?.id).toBe(`prepared-${kind}-resource`);
+            expect(providers[0]?.configured).toBe(true);
+            expect(providers[0]?.models).toContain(`fixture-${kind}`);
+            if (kind === "image") {
+              expect(providers[0]?.models).toContain("fixture-image-catalog");
+              const catalog = providers[0]?.catalog as Array<Record<string, unknown>> | undefined;
+              const catalogEntry = catalog?.find(
+                (entry) => entry.model === "fixture-image-catalog",
+              );
+              expect(catalogEntry?.capabilities).toEqual({
+                generate: { maxCount: 1 },
+                edit: { enabled: false, maxInputImages: 0 },
+              });
+              expect(catalogEntry?.modes).toEqual(["generate"]);
+            }
+          } finally {
+            await acquired.release();
           }
         });
       } finally {
