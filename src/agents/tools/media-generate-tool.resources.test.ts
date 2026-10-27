@@ -399,6 +399,7 @@ describe.each(["image", "music", "video"] as const)(
             expect(connection.generated).toBe(0);
 
             expect(() => JSON.stringify(result)).not.toThrow();
+            // oxlint-disable-next-line unicorn/prefer-structured-clone -- Assert the JSON wire shape, not an in-memory clone.
             const serialized = JSON.parse(JSON.stringify(result)) as {
               details: { providers: Array<Record<string, unknown>> };
             };

@@ -102,8 +102,8 @@ export function createMediaGenerateProviderListAction<T extends MediaGeneratePro
  * would otherwise break later serialization.
  */
 function snapshotProviderMetadata<T>(value: T): T {
-  // SAFETY: JSON round-trip preserves the JSON-serializable subset of T's shape.
-  return value === undefined ? value : (JSON.parse(JSON.stringify(value)) as T);
+  // oxlint-disable-next-line unicorn/prefer-structured-clone -- Plugin-bound proxies cannot be materialized by structuredClone; the JSON round-trip is the serialization contract.
+  return value === undefined ? value : (JSON.parse(JSON.stringify(value)) as T); // SAFETY: JSON round-trip preserves the JSON-serializable subset of T's shape.
 }
 
 export async function createMediaGenerateProviderListActionResult<
