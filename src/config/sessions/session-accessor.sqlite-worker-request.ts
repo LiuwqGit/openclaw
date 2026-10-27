@@ -3,11 +3,12 @@ import { toErrorObject, toStringifiedError } from "@openclaw/normalization-core/
 import { resolveIdentityPathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import {
   acquireStateDatabaseSchemaLease,
-  assertStateDatabaseAccessAllowed,
+  type captureStateDatabaseAccess,
   type StateDatabaseSchemaLease,
 } from "../../infra/gateway-state-owner.js";
 import { retainSqliteWriteAdmissionService } from "../../infra/sqlite-transaction.js";
 import { createSqliteDatabaseAdmissionRelay } from "../../infra/sqlite-worker-operation-admission.js";
+import { recordWorkerMessage } from "../../infra/worker-message-metrics.js";
 import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-lifecycle.js";
 import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-db-readonly.js";
@@ -16,6 +17,7 @@ import {
   captureOpenClawAgentDatabaseValidationTransfer,
   getOpenClawAgentDatabaseValidation,
   getOpenClawAgentDatabaseValidationForTransfer,
+  hasRevokedOpenClawAgentDatabaseValidation,
   type OpenClawAgentDatabaseValidation,
 } from "../../state/openclaw-agent-db-validation-cache.js";
 import type { AgentDatabaseGenerationClaim } from "../../state/openclaw-agent-execution-admission-contract.js";
@@ -34,6 +36,13 @@ import {
   type SqliteMutationWorkerTransport,
 } from "./session-accessor.sqlite-worker-transport.js";
 
+/** The database owner closed this request; caller cancellation and completion stay distinct. */
+export class SqliteMutationWorkerRetiredError extends Error {
+  constructor() {
+    super("SQLite mutation Worker request was revoked");
+  }
+}
+
 /** Register before the first await and drain through the parent's retained claim release. */
 export function withSqliteMutationWorkerLifetime<T>(
   options: { agentId: string; path: string; env?: NodeJS.ProcessEnv },
@@ -51,14 +60,18 @@ export function withSqliteMutationWorkerLifetime<T>(
   );
   const commitGate = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
   const controller = new AbortController();
-  const revoke = () => {
+  const revoke = (reason: unknown) => {
     revokeSqliteReclamationCommit(commitGate);
-    controller.abort(
+    controller.abort(reason);
+  };
+  const cancel = () =>
+    revoke(
       callerSignal?.aborted
         ? callerSignal.reason
         : new Error("SQLite mutation Worker request was revoked"),
     );
-  };
+  const retire = () =>
+    revoke(callerSignal?.aborted ? callerSignal.reason : new SqliteMutationWorkerRetiredError());
   const assertCurrent = () => {
     controller.signal.throwIfAborted();
     state.assertCurrent();
@@ -66,26 +79,25 @@ export function withSqliteMutationWorkerLifetime<T>(
   const unregisterAgent = registerOpenClawAgentDatabaseAsyncResource({
     agentId: options.agentId,
     path: options.path,
-    revoke,
+    revoke: retire,
     close: () => completion.promise,
   });
   let unregisterState: () => void;
   try {
     unregisterState = registerOpenClawStateDatabaseAsyncResource({
-      close: async (identity) => {
-        if (!identity || identity.key === state.identity.key) {
-          revoke();
-          await completion.promise;
-        }
+      admission: state,
+      close: async () => {
+        retire();
+        await completion.promise;
       },
     });
   } catch (error) {
     unregisterAgent();
     throw error;
   }
-  callerSignal?.addEventListener("abort", revoke, { once: true });
+  callerSignal?.addEventListener("abort", cancel, { once: true });
   if (callerSignal?.aborted) {
-    revoke();
+    cancel();
   }
   return Promise.resolve()
     .then(() => {
@@ -93,8 +105,8 @@ export function withSqliteMutationWorkerLifetime<T>(
       return run({ assertCurrent, commitGate, signal: controller.signal });
     })
     .finally(() => {
-      callerSignal?.removeEventListener("abort", revoke);
-      revoke();
+      callerSignal?.removeEventListener("abort", cancel);
+      cancel();
       completion.resolve();
       unregisterAgent();
       unregisterState();
@@ -141,7 +153,7 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
   operationId: number;
   completion: "result" | "exit";
   databaseAuthority?: {
-    databasePath: string;
+    stateAccess: Awaited<ReturnType<typeof captureStateDatabaseAccess>>;
     creationPaths: readonly string[];
     maintenanceScope?: OpenClawDatabaseMaintenanceScope;
     assertCurrent(): void;
@@ -149,6 +161,7 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
   onCommitRequest?: () => void;
   withWriteAdmission: SqliteWorkerWriteAdmission<Result>;
   validationOwner?: SqliteMutationWorkerValidationOwner;
+  validationPath?: string;
   /** Opening proof remains revocable and is adopted only against the worker's native identity. */
   readOpeningValidation?: () => OpenClawAgentDatabaseValidation | undefined;
   dispatch?: () => void;
@@ -157,6 +170,11 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
 }): Promise<Result> {
   const { transport, operationId } = params;
   const validationOwner = params.validationOwner;
+  const validationPath = validationOwner
+    ? "database" in validationOwner
+      ? validationOwner.database.path
+      : validationOwner.source.path
+    : params.validationPath;
   if (validationOwner && "source" in validationOwner) {
     validationOwner.claim.assertCurrent();
   }
@@ -317,6 +335,16 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
               }
               authority?.assertCurrent();
             };
+            const assertStateAccess =
+              allowed && authority
+                ? await authority.stateAccess.prepareAccess({
+                    maintenanceScope: authority.maintenanceScope,
+                  })
+                : undefined;
+            if (assertStateAccess) {
+              assertCreationCurrent();
+              assertStateAccess();
+            }
             const metadata =
               allowed && authority
                 ? createSqliteDatabaseAdmissionRelay(assertCreationCurrent)
@@ -329,13 +357,13 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
               const assertAccess = () => {
                 assertCreationCurrent();
                 authority.maintenanceScope?.assertAdmission();
-                assertStateDatabaseAccessAllowed(authority.databasePath, {
+                assertStateAccess?.({
                   maintenanceScope: authority.maintenanceScope,
                   schemaLease,
                 });
               };
               metadata.bindDatabaseAuthority({
-                databasePath: authority.databasePath,
+                databasePath: authority.stateAccess.canonicalPath,
                 assertRequest: assertCreationCurrent,
                 assertAccess,
                 assertCreate(location) {
@@ -347,19 +375,14 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
                 },
                 acquireSchema() {
                   assertAccess();
-                  const acquire = () => acquireStateDatabaseSchemaLease(authority.databasePath);
+                  const acquire = () =>
+                    acquireStateDatabaseSchemaLease(authority.stateAccess.canonicalPath);
                   const lease = authority.maintenanceScope
                     ? authority.maintenanceScope.run(acquire)
                     : acquire();
                   schemaLease = lease;
                   authority.maintenanceScope?.own(lease, "shared-resources", () => lease.release());
-                  return {
-                    assertCurrent() {
-                      assertAccess();
-                      lease.assertCurrent();
-                    },
-                    release: () => lease.release(),
-                  };
+                  return lease;
                 },
               });
             }
@@ -370,16 +393,27 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
                   )
                 : undefined;
             try {
+              if (assertStateAccess) {
+                assertCreationCurrent();
+                assertStateAccess();
+              }
               worker.postMessage(
                 {
                   type: "admission",
                   operationId,
                   allowed,
                   validation: allowed ? readValidation() : undefined,
+                  integrityRevoked:
+                    allowed && validationPath !== undefined
+                      ? hasRevokedOpenClawAgentDatabaseValidation(validationPath)
+                      : false,
                   ...(metadata ? { databaseAdmissionPort: metadata.port } : {}),
                 },
                 metadata ? [metadata.port] : [],
               );
+              if (transport.kind === "pooled") {
+                recordWorkerMessage("admission", "to_worker");
+              }
               // Refusal holds the FIFO until exit. The owner publishes successful results
               // before returning this writer section; preliminary admissions release separately.
               await requested.released.promise;
@@ -399,6 +433,9 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
             if (!completed) {
               try {
                 worker.postMessage({ type: "admission", operationId, allowed: false }, []);
+                if (transport.kind === "pooled") {
+                  recordWorkerMessage("admission", "to_worker");
+                }
               } catch (dispatchError) {
                 fail(
                   new AggregateError(
@@ -413,7 +450,7 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
         admissionTasks.push(task);
       } else if (message.type === "admission-release") {
         if (admission) {
-          admission.diagnostics.releaseCause = "worker-release";
+          admission.diagnostics.releaseCause = "preliminary-release";
           admission.released.resolve();
           admission = undefined;
         }

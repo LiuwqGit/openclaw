@@ -23,6 +23,7 @@ import {
   parseOpaqueLeafEntry,
   parseParentLinkedOpaqueEntry,
   partitionSessionFileEntries,
+  reuseResidentSessionEntryStrings,
 } from "./session-manager-codec.js";
 import { createManagedSessionId, generateSessionEntryId } from "./session-manager-id.js";
 import {
@@ -50,6 +51,7 @@ import type {
   SessionManagerBoundedView,
   SessionManagerTranscriptCohort,
 } from "./session-manager-view-types.js";
+import { shareSessionSystemPrompt } from "./system-prompt-pool.js";
 
 /** @internal Fresh payload adoption and metadata consumption share one history admission. */
 export const sessionManagerReloadTranscriptCohort = Symbol.for(
@@ -60,6 +62,9 @@ export const sessionManagerReloadTranscriptCohort = Symbol.for(
 export const sessionManagerOpenTranscriptCohort = Symbol.for(
   "openclaw.session-manager.open-transcript-cohort",
 );
+
+/** @internal Compaction planning retains its transcript and metadata from one read snapshot. */
+export const sessionManagerOpenCompaction = Symbol.for("openclaw.session-manager.open-compaction");
 
 export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
   migrated = false;
@@ -110,7 +115,7 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     }
   }
 
-  /** @deprecated Runtime callers should await setSessionTargetAsync; removed in the next Plugin SDK major. */
+  /** @deprecated Await setSessionTargetAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   setSessionTarget(target: SessionTranscriptRuntimeTarget): void {
     prepareSessionManagerSync("setSessionTarget", target, this);
     this.setSessionTargetSync(target);
@@ -280,7 +285,7 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     }
     this.persistenceHeaderPending = false;
     this.persistenceTarget = target ? captureSessionTranscriptTargetBinding(target) : undefined;
-    this.fileEntries = partitioned.fileEntries;
+    this.fileEntries = partitioned.fileEntries.map(shareSessionSystemPrompt);
     this.opaqueFileEntries = partitioned.opaqueEntries;
     this.sessionId = header?.id ?? target?.sessionId ?? createManagedSessionId();
     this.migrated = migrateToCurrentVersion(
@@ -327,27 +332,23 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
   }
 
   /** The loaded view only: bounded managers must never hydrate inactive history for a rewrite. */
-  protected captureTranscriptView(copy = false) {
+  protected captureTranscriptView() {
     this.assertTranscriptViewAvailable();
     return {
       sessionId: this.sessionId,
       transcriptVersion: this.transcriptVersion,
       persistenceHeaderPending: this.persistenceHeaderPending,
       migrated: this.migrated,
-      fileEntries: copy ? [...this.fileEntries] : this.fileEntries,
-      opaqueFileEntries: copy
-        ? this.opaqueFileEntries.map((entry) => ({ ...entry }))
-        : this.opaqueFileEntries,
-      byId: copy ? new Map(this.byId) : this.byId,
-      opaqueParentsById: copy ? new Map(this.opaqueParentsById) : this.opaqueParentsById,
-      logicalParentsById: copy ? new Map(this.logicalParentsById) : this.logicalParentsById,
-      invalidLeafControlIds: copy
-        ? new Set(this.invalidLeafControlIds)
-        : this.invalidLeafControlIds,
-      labelsById: copy ? new Map(this.labelsById) : this.labelsById,
-      labelTimestampsById: copy ? new Map(this.labelTimestampsById) : this.labelTimestampsById,
-      boundedFirstKeptById: copy ? new Map(this.boundedFirstKeptById) : this.boundedFirstKeptById,
-      boundedParentIds: copy ? new Map(this.boundedParentIds) : this.boundedParentIds,
+      fileEntries: this.fileEntries,
+      opaqueFileEntries: this.opaqueFileEntries,
+      byId: this.byId,
+      opaqueParentsById: this.opaqueParentsById,
+      logicalParentsById: this.logicalParentsById,
+      invalidLeafControlIds: this.invalidLeafControlIds,
+      labelsById: this.labelsById,
+      labelTimestampsById: this.labelTimestampsById,
+      boundedFirstKeptById: this.boundedFirstKeptById,
+      boundedParentIds: this.boundedParentIds,
       cacheTtlProjectionPrefixes: this.cacheTtlProjectionPrefixes,
       boundedContextIncomplete: this.boundedContextIncomplete,
       boundedContextLimits: this.boundedContextLimits,
@@ -361,7 +362,7 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     };
   }
 
-  /** @deprecated Runtime callers should await reloadPersistedTranscriptAsync; removed in the next Plugin SDK major. */
+  /** @deprecated Await reloadPersistedTranscriptAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   reloadPersistedTranscript(): void {
     prepareSessionManagerSync("reloadPersistedTranscript", this.persistenceTarget, this);
     this.reloadPersistedTranscriptSync();
@@ -435,6 +436,7 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
         );
       }
     }
+    reuseResidentSessionEntryStrings(candidate.fileEntries, this.byId);
     Object.assign(this, candidate.captureTranscriptView());
     this.persistenceTarget = candidate.persistenceTarget;
   }

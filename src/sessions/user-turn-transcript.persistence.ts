@@ -7,16 +7,25 @@ import {
 import { readActiveTranscriptEntryAnchorAsync } from "../config/sessions/session-transcript-anchor-read.js";
 import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
 import { captureOwnedTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
+import { observeDiagnosticsTimelinePhases } from "../infra/diagnostics-timeline.js";
 import { isUserMessage, resolvePersistedUserTurnMessage } from "./user-turn-transcript.message.js";
 import { preparePersistedUserTurnMessageForTranscriptWrite } from "./user-turn-transcript.metadata.js";
 import type {
   PersistUserTurnTranscriptParams,
   PersistedUserTurnMessage,
   UserTurnTranscriptPersistResult,
+  UserTurnTranscriptTarget,
+  UserTurnTranscriptTargetResolver,
 } from "./user-turn-transcript.types.js";
 
 export type CommittedUserTurnTranscript = TranscriptMessageAppendResult<PersistedUserTurnMessage> &
   Pick<UserTurnTranscriptPersistResult, "sessionEntry" | "sessionTurnMutationResult">;
+
+export async function resolveUserTurnTranscriptTarget(
+  target: UserTurnTranscriptTargetResolver,
+): Promise<UserTurnTranscriptTarget | undefined> {
+  return typeof target === "function" ? await target() : target;
+}
 
 export function admittedUserTurnResult(
   committed: CommittedUserTurnTranscript,
@@ -39,8 +48,10 @@ export async function resolveCommittedUserTurnTranscript(
 ): Promise<UserTurnTranscriptPersistResult | undefined> {
   let committed = originalCommit;
   if (!committed.anchor) {
+    using phase = observeDiagnosticsTimelinePhases("persist.transcript.projection");
     const assertCurrent = captureOwnedTranscriptWriteAssertion(params);
     await waitForSessionTranscriptProjection(params);
+    phase.mark("persist.transcript.anchor");
     const anchor = await readActiveTranscriptEntryAnchorAsync({
       ...params,
       entryId: committed.messageId,
@@ -74,26 +85,20 @@ export async function persistUserTurnTranscript(
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
       sessionEntry: params.sessionEntry,
-      ...(params.sessionStore ? { sessionStore: params.sessionStore } : {}),
-      ...(params.storePath ? { storePath: params.storePath } : {}),
+      sessionStore: params.sessionStore,
+      storePath: params.storePath,
       agentId: params.agentId,
-      ...(params.threadId !== undefined ? { threadId: params.threadId } : {}),
+      threadId: params.threadId,
     },
     {
-      ...(params.cwd ? { cwd: params.cwd } : {}),
-      ...(params.config
-        ? {
-            // SAFETY: Recorder targets carry the host's loaded config; their public contract keeps it opaque.
-            config: params.config as SessionTranscriptTurnPersistOptions["config"],
-          }
-        : {}),
-      ...(params.expectedSessionId ? { expectedSessionId: params.expectedSessionId } : {}),
-      ...(params.initialSessionEntry ? { initialSessionEntry: params.initialSessionEntry } : {}),
-      ...(params.expectedSessionState ? { expectedSessionState: params.expectedSessionState } : {}),
-      ...(params.sessionLifecyclePatch
-        ? { sessionLifecyclePatch: params.sessionLifecyclePatch }
-        : {}),
-      ...(params.sessionTurnMutation ? { sessionTurnMutation: params.sessionTurnMutation } : {}),
+      cwd: params.cwd,
+      // SAFETY: Recorder targets carry the host's loaded config; their public contract keeps it opaque.
+      config: params.config as SessionTranscriptTurnPersistOptions["config"],
+      expectedSessionId: params.expectedSessionId,
+      initialSessionEntry: params.initialSessionEntry,
+      expectedSessionState: params.expectedSessionState,
+      sessionLifecyclePatch: params.sessionLifecyclePatch,
+      sessionTurnMutation: params.sessionTurnMutation,
       updateMode: params.updateMode ?? "inline",
       onMessageCommitted: (result, acceptCompletion, committedTurn) => {
         if (!isUserMessage(result.message)) {

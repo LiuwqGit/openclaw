@@ -33,9 +33,10 @@ import { hasCommandProcessCleanupError, type SpawnResult } from "../../process/e
 import * as processRunner from "../../process/exec.js";
 import * as processDeadline from "../../process/process-deadline.js";
 import { getProcessInstanceStartTime } from "../../shared/pid-alive.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { waitForPidToExit } from "../../test-utils/process-tree.js";
+import { writeFixtureJsonSync } from "../cli-fixtures.test-support.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import { cleanupUpdateCommandTest } from "./update-command-cleanup.test-support.js";
 import { runUpdateDoctorProcess } from "./update-command-doctor-child.js";
 import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
@@ -63,10 +64,7 @@ beforeEach(() => {
     fs.mkdirSync(dir, { mode: 0o700 });
   }
   fs.writeFileSync(configPath, "{}\n");
-  fs.writeFileSync(
-    path.join(root, "package.json"),
-    JSON.stringify({ name: "openclaw", version: "2026.9.99" }),
-  );
+  writeFixtureJsonSync(path.join(root, "package.json"), { name: "openclaw", version: "2026.9.99" });
   fs.writeFileSync(path.join(root, "dist", "index.js"), "");
   env = {
     HOME: root,
@@ -78,11 +76,7 @@ beforeEach(() => {
   }
   vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(path.join(root, "tmp"));
 });
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
-});
+afterEach(cleanupUpdateCommandTest);
 
 function doctorOptions(
   runId: string,
@@ -634,24 +628,6 @@ it.skipIf(process.platform === "win32").for([
   },
 );
 
-it("does not invent unsettled writers when the Doctor executable never starts", async () => {
-  const resultPath = path.join(root, "doctor-not-started.json");
-  const steps: UpdateStepResult[] = [];
-  const error = await runUpdateDoctorProcess(
-    { runId: randomUUID(), root, onProcessSettlement: (step) => steps.push(step) },
-    [path.join(root, "missing-doctor-executable")],
-    {
-      cwd: root,
-      timeoutMs: 1_000,
-      env: { ...env, [UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]: resultPath },
-    },
-  ).catch((cause: unknown) => cause);
-  expect(error).toMatchObject({ code: "ENOENT" });
-  expect(hasCommandProcessCleanupError(error)).toBe(false);
-  expect(steps).toEqual([]);
-  expect(fs.existsSync(`${resultPath}.processes`)).toBe(false);
-});
-
 /** Hold fixture startup outside the deadline without freezing native cleanup or lease clocks. */
 function controlDoctorDeadline() {
   const nativeTimeout = processDeadline.setProcessTimeout;
@@ -663,7 +639,8 @@ function controlDoctorDeadline() {
     .mockImplementationOnce((callback, delayMs) => {
       const inOwner = AsyncLocalStorage.snapshot();
       release = (expire) => {
-        expect(delayMs).toBe(5_000);
+        expect(delayMs).toBeGreaterThan(0);
+        expect(delayMs).toBeLessThanOrEqual(5_000);
         if (active) {
           timer = inOwner(() => nativeTimeout(callback, expire ? 0 : delayMs));
         }

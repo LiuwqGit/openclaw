@@ -64,11 +64,11 @@ export function Kbd(props: KbdOptions & { keys: string | number | readonly strin
   return (
     <kbd
       class={["shortcut-kbd", props.class]}
-      style={props.inline ? { font: "inherit" } : undefined}
+      style={props.inline ? { "font-size": "inherit" } : undefined}
       slot={props.slot}
       aria-hidden={props.ariaHidden ? "true" : undefined}
       hidden={props.hidden}
-      ref={props.ref}
+      ref={(element) => props.ref?.(element)}
     >
       <For each={parts()}>{(key) => <Key value={key} />}</For>
     </kbd>
@@ -97,14 +97,13 @@ export function KeyboardShortcut(
   );
 }
 
+/** Label followed by a keycap chip; the separating space keeps announced text readable. */
 export function ShortcutHint(props: { label: string; combo: KeyboardShortcutCombo }) {
   return (
-    <>
-      {props.label}
-      {" ("}
-      <KeyboardShortcut combo={props.combo} inline />
-      {")"}
-    </>
+    <span class="shortcut-hint">
+      <span>{props.label}</span>{" "}
+      <KeyboardShortcut combo={props.combo} class="shortcut-hint__keys" />
+    </span>
   );
 }
 

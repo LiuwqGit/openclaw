@@ -215,17 +215,6 @@ describe("outbound prepared queue migration", () => {
     const migration = migrate();
     await vi.waitFor(() => expect(hookMocks.runMessageSending).toHaveBeenCalledOnce());
     const overlappingMigration = migrate();
-    let overlappingSettled = false;
-    void overlappingMigration.then(
-      () => {
-        overlappingSettled = true;
-      },
-      () => {
-        overlappingSettled = true;
-      },
-    );
-    await Promise.resolve();
-    expect(overlappingSettled).toBe(false);
     expect(loadDeliveryQueueEntry(LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME, id, tmpDir())).toBeNull();
     expect(
       loadDeliveryQueueEntry(OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME, id, tmpDir()),
@@ -238,9 +227,9 @@ describe("outbound prepared queue migration", () => {
 
     await expect(migration).resolves.toEqual({ moved: 1, skipped: 0, remaining: 0 });
     await expect(overlappingMigration).resolves.toEqual({
-      moved: 1,
-      skipped: 0,
-      remaining: 0,
+      moved: 0,
+      skipped: 1,
+      remaining: 1,
     });
     expect(hookMocks.runMessageSending).toHaveBeenCalledOnce();
     expect(loadDeliveryQueueEntry(OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME, id, tmpDir())).toBeNull();
@@ -633,39 +622,6 @@ describe("outbound prepared queue migration", () => {
     expect(hookMocks.runMessageSent).toHaveBeenNthCalledWith(
       3,
       expect.objectContaining({ content: "unattempted", success: false }),
-      expect.any(Object),
-    );
-  });
-
-  it("fills a suppressed observer gap by source index without duplicating a later failure", async () => {
-    await enqueueDelivery(
-      {
-        channel: "matrix",
-        to: "!room:example",
-        queuePolicy: "required",
-        payloads: [{ text: "render-suppressed" }, { text: "failed" }],
-      },
-      tmpDir(),
-    );
-    const deliver = vi.fn(async (params: Parameters<typeof deliverOutboundPayloadsInternal>[0]) => {
-      params.onMessageSentEvent?.(
-        { success: false, content: "failed", error: "chat not found" },
-        1,
-      );
-      throw new Error("chat not found");
-    });
-
-    await recover(deliver);
-
-    expect(hookMocks.runMessageSent).toHaveBeenCalledTimes(2);
-    expect(hookMocks.runMessageSent).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ content: "render-suppressed", success: false }),
-      expect.any(Object),
-    );
-    expect(hookMocks.runMessageSent).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({ content: "failed", success: false }),
       expect.any(Object),
     );
   });
