@@ -1,0 +1,127 @@
+name: PR 185160 Published Driver Upgrade Evidence
+
+on:
+  push:
+    branches: ["evidence/pr-185160-upgrade"]
+  workflow_dispatch:
+
+jobs:
+  published-driver-upgrade-evidence:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "26.12.1"
+          install-bun: "false"
+      - name: Bump candidate version above latest stable
+        run: |
+          set -euo pipefail
+          npm pkg set version=2026.10.8
+          node -p "'candidate version: ' + require('./package.json').version"
+      - name: Build candidate package (PR head + repair)
+        env:
+          OPENCLAW_CONTROL_UI_RELEASE_BUILD: "1"
+        run: pnpm build
+      - name: Ensure Control UI release artifact
+        run: |
+          set -euo pipefail
+          if [[ ! -f dist/control-ui/index.html ]]; then pnpm ui:build; fi
+          test -f dist/control-ui/index.html
+      - name: Pack candidate npm tarball
+        run: |
+          set -euo pipefail
+          node scripts/package-openclaw-for-docker.mjs --allow-unreleased-changelog --output-dir "$RUNNER_TEMP"
+          ls -la "$RUNNER_TEMP"/openclaw-*.tgz
+      - name: Start local npm registry and publish the candidate
+        run: |
+          set -uxo pipefail
+          mkdir -p /tmp/verdaccio-evidence-storage
+          cat > "$RUNNER_TEMP/verdaccio/config.yaml" <<'VERDACCIO_EOF'
+          storage: /tmp/verdaccio-evidence-storage
+          web:
+            enable: false
+          uplinks:
+            npmjs:
+              url: https://registry.npmjs.org/
+          packages:
+            '**':
+              access: $all
+              publish: $all
+              proxy: npmjs
+          logs:
+            type: stdout
+            format: pretty
+            level: warn
+          VERDACCIO_EOF
+          npx --yes verdaccio@6 --config "$RUNNER_TEMP/verdaccio/config.yaml" --listen 127.0.0.1:4873 > "$RUNNER_TEMP/verdaccio.log" 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:4873/ >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:4873/ >/dev/null
+          echo "local registry is up"
+          npm publish "$RUNNER_TEMP"/openclaw-*.tgz --registry http://127.0.0.1:4873
+          npm view openclaw version --registry http://127.0.0.1:4873
+      - name: Published-driver upgrade from latest stable
+        env:
+          CANDIDATE_DIR: ${{ runner.temp }}
+        run: |
+          set -uxo pipefail
+          SANDBOX="$CANDIDATE_DIR/sandbox"
+          mkdir -p "$SANDBOX/home" "$SANDBOX/prefix"
+          export HOME="$SANDBOX/home"
+
+          echo "=== [1] Install the actual published latest stable release (public npm registry) ==="
+          npm install -g openclaw@latest --prefix "$SANDBOX/prefix"
+          STABLE_VERSION="$(node -p "require('$SANDBOX/prefix/lib/node_modules/openclaw/package.json').version")"
+          echo "installed published stable version: $STABLE_VERSION"
+          "$SANDBOX/prefix/bin/openclaw" --version
+
+          echo "=== [2] Initialize the real installation state with the published CLI ==="
+          timeout 90 "$SANDBOX/prefix/bin/openclaw" status || true
+          timeout 120 "$SANDBOX/prefix/bin/openclaw" doctor || true
+          echo "--- installation state tree before update ---"
+          find "$HOME/.openclaw" -maxdepth 3 2>/dev/null | sort || true
+          snapshot() {
+            find "$HOME/.openclaw" -type f 2>/dev/null | sort | while read -r f; do
+              printf '%s %s\n' "$(sha256sum "$f" | cut -d' ' -f1)" "${f#"$HOME"/}"
+            done
+          }
+          snapshot > "$SANDBOX/state-before.txt"
+          cat "$SANDBOX/state-before.txt"
+
+          echo "=== [3] Run the published driver's update to the candidate containing the repair ==="
+          export PATH="$SANDBOX/prefix/bin:$PATH"
+          export NPM_CONFIG_REGISTRY=http://127.0.0.1:4873
+          export OPENCLAW_UPDATE_PACKAGE_SPEC=openclaw
+          openclaw update || UPDATE_EXIT=$?
+          echo "openclaw update exit code: ${UPDATE_EXIT:-0}"
+
+          echo "=== [4] Verify the installed driver now contains the repair ==="
+          INSTALLED_ROOT="$SANDBOX/prefix/lib/node_modules/openclaw"
+          node -p "'installed candidate version: ' + require('$INSTALLED_ROOT/package.json').version"
+          "$SANDBOX/prefix/bin/openclaw" --version
+          DRIVER_FILE="$(grep -rl 'Windows package restore rename failed after' "$INSTALLED_ROOT" --include='*.mjs' --include='*.js' | head -n1)"
+          echo "installed driver containing the repair: $DRIVER_FILE"
+          grep -o 'Windows package restore rename failed after' "$DRIVER_FILE" | head -n1
+          echo "recovery-action diagnostics present:"
+          grep -o 'is missing\. Restore a bootable installation by moving' "$DRIVER_FILE" | head -n1 || true
+          grep -o 'is missing\. Restore the previous package by moving' "$DRIVER_FILE" | head -n1 || true
+
+          echo "=== [5] Verify the installation's real settings and data remain intact ==="
+          snapshot > "$SANDBOX/state-after.txt"
+          echo "--- per-file comparison (hash  path) before -> after ---"
+          awk 'NR==FNR { before[$2]=$1; next }
+               {
+                 if ($2 in before) {
+                   if (before[$2]==$1) print "INTACT:  " $2
+                   else { print "CHANGED: " $2; print "  before: " before[$2]; print "  after:  " $1 }
+                 } else print "ADDED:   " $2
+               }' "$SANDBOX/state-before.txt" "$SANDBOX/state-after.txt"
+
+          echo "=== [6] Post-update health check with the new installation ==="
+          timeout 120 "$SANDBOX/prefix/bin/openclaw" doctor || true
+          timeout 90 "$SANDBOX/prefix/bin/openclaw" status || true
+          echo "=== EVIDENCE COMPLETE ==="
