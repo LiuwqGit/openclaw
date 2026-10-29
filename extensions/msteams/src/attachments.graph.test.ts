@@ -243,7 +243,10 @@ describe("msteams attachment helpers", () => {
       ["application/vnd.microsoft.card.adaptive", { content: { type: "AdaptiveCard" } }, false],
     ])("does not count HTML references separately from %s", (contentType, fields, isFile) => {
       expectAdvertised(
-        [createHtmlAttachment('<attachment id="ref-1"></attachment>'), { id: "ref-1", contentType, ...fields }],
+        [
+          createHtmlAttachment('<attachment id="ref-1"></attachment>'),
+          { id: "ref-1", contentType, ...fields },
+        ],
         isFile ? [{ kind: "document", sourceId: "ref-1" }] : [],
       );
     });
@@ -269,7 +272,11 @@ describe("msteams attachment helpers", () => {
     ])("classifies Teams CDN %s without hiding real images", (path, alt, isMedia) => {
       const url = `https://statics.teams.cdn.office.net/evergreen-assets/${path}`;
       expectAdvertised(
-        [createHtmlAttachment(`<img src="${url}" alt="${alt}"><img src="https://example.com/photo.png">`)],
+        [
+          createHtmlAttachment(
+            `<img src="${url}" alt="${alt}"><img src="https://example.com/photo.png">`,
+          ),
+        ],
         [
           ...(isMedia ? [{ kind: "image", sourceId: url }] : []),
           { kind: "image", sourceId: "https://example.com/photo.png" },
@@ -278,7 +285,10 @@ describe("msteams attachment helpers", () => {
     });
 
     it.each([
-      ["https://example.com/repeated.png", [{ kind: "image", sourceId: "https://example.com/repeated.png" }]],
+      [
+        "https://example.com/repeated.png",
+        [{ kind: "image", sourceId: "https://example.com/repeated.png" }],
+      ],
       ["data:image/png;base64,AQ==", [{ kind: "image" }, { kind: "image" }]],
     ])("counts repeated URL/data occurrences correctly: %s", (src, expected) => {
       expectAdvertised([createHtmlAttachment(`<img src="${src}"><img src="${src}">`)], expected);

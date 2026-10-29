@@ -11,8 +11,18 @@ function prepare(activity: Omit<MSTeamsTurnContext["activity"], "type">) {
 
 describe("msteams inbound facts", () => {
   it.each([
-    [{ text: "  <at>Bot</at> hello &lt;tag&gt;  ", attachments: [{ contentType: "text/html", content: "<p>ignored</p>" }], value: { action: "ignored" } }, "hello &lt;tag&gt;"],
-    [{ attachments: [{ contentType: "text/html", content: "<p>hello &amp; goodbye</p>" }] }, "hello & goodbye"],
+    [
+      {
+        text: "  <at>Bot</at> hello &lt;tag&gt;  ",
+        attachments: [{ contentType: "text/html", content: "<p>ignored</p>" }],
+        value: { action: "ignored" },
+      },
+      "hello &lt;tag&gt;",
+    ],
+    [
+      { attachments: [{ contentType: "text/html", content: "<p>hello &amp; goodbye</p>" }] },
+      "hello & goodbye",
+    ],
     [{ value: { action: "approve", id: 7 } }, expect.stringMatching(/approve.*7/s)],
   ])("prefers activity text, then HTML, then adaptive-card values", async (activity, expected) => {
     expect((await prepare(activity)).text).toEqual(expected);

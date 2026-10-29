@@ -43,6 +43,7 @@ export function htmlTagAttributeValues(
   html: string,
   tag: "img" | "attachment",
   attr: "src" | "id",
+  visit?: (value: string, start: number, end: number) => void,
 ): string[] {
   const length = html.length;
   const nextGt = new Int32Array(length + 1).fill(length);
@@ -79,7 +80,12 @@ export function htmlTagAttributeValues(
     }
     const candidate = candidates[pastWindow - 1];
     if (candidate && candidate.start > nameEnd) {
-      values.push(html.slice(candidate.valueStart, candidate.valueEnd));
+      const value = html.slice(candidate.valueStart, candidate.valueEnd);
+      if (visit) {
+        visit(value, open.index, candidate.end);
+      } else {
+        values.push(value);
+      }
       resumeAt = candidate.end;
     }
   }
@@ -91,7 +97,7 @@ const GRAPH_HOSTED_CONTENT_SRC_RE = /\/hostedContents\/([^/?#]+)/i;
 // marker so genuine images on the same CDN remain media.
 const TEAMS_EMOJI_CDN_HOST = "statics.teams.cdn.office.net";
 const TEAMS_EMOJI_ASSET_PATH_RE = /\/emoji([/?#]|$)/i;
-const IMG_ALT_ATTR_RE = /<img\b[^>]*?\balt=["']([^"']*)["']/i;
+const IMG_ALT_ATTR_RE = /\balt=["']([^"']*)["']/i;
 const EMOJI_PICTOGRAPHIC_RE = /\p{Extended_Pictographic}/u;
 
 function isTeamsEmojiSpriteImage(src: string, imgTag: string): boolean {
@@ -108,14 +114,16 @@ function isTeamsEmojiSpriteImage(src: string, imgTag: string): boolean {
 
 // Preserve sprite text before HTML stripping, including HTML-only emoji messages.
 export function replaceTeamsEmojiSpriteImagesWithAltText(html: string): string {
-  IMG_SRC_RE.lastIndex = 0;
-  return html.replace(IMG_SRC_RE, (imgTag: string, src: string) => {
-    const trimmedSrc = src.trim();
-    if (!trimmedSrc || !isTeamsEmojiSpriteImage(trimmedSrc, imgTag)) {
-      return imgTag;
+  const parts: string[] = [];
+  let cursor = 0;
+  htmlTagAttributeValues(html, "img", "src", (src, start, end) => {
+    const imgTag = html.slice(start, end);
+    if (isTeamsEmojiSpriteImage(src.trim(), imgTag)) {
+      parts.push(html.slice(cursor, start), IMG_ALT_ATTR_RE.exec(imgTag)?.[1] ?? "");
+      cursor = end;
     }
-    return IMG_ALT_ATTR_RE.exec(imgTag)?.[1] ?? "";
   });
+  return parts.join("") + html.slice(cursor);
 }
 
 function resolveInlineImageSourceId(src: string): string {
@@ -338,12 +346,13 @@ export function extractInlineImageReferences(
     if (!html) {
       continue;
     }
-    for (const value of htmlTagAttributeValues(html, "img", "src")) {
+    for (const value of htmlTagAttributeValues(
+      replaceTeamsEmojiSpriteImagesWithAltText(html),
+      "img",
+      "src",
+    )) {
       const src = value.trim();
       if (src) {
-        if (isTeamsEmojiSpriteImage(src, match[0])) {
-          continue;
-        }
         if (src.startsWith("data:")) {
           out.push({ kind: "data", src });
         } else if (!seenReferences.has(src)) {
