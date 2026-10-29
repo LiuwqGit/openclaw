@@ -7,35 +7,26 @@ function context(activity: MSTeamsTurnContext["activity"]): MSTeamsTurnContext {
 }
 
 describe("msteams inbound facts", () => {
-  it("prefers activity text, then HTML, then adaptive-card values", async () => {
-    const textEntry = await prepareMSTeamsDebounceEntry({
-      accountId: "default",
-      context: context({
-        type: "message",
+  it.each([
+    [
+      {
         text: "  <at>Bot</at> hello &lt;tag&gt;  ",
         attachments: [{ contentType: "text/html", content: "<p>ignored</p>" }],
         value: { action: "ignored" },
-      }),
-    });
-    const htmlEntry = await prepareMSTeamsDebounceEntry({
+      },
+      "hello &lt;tag&gt;",
+    ],
+    [
+      { attachments: [{ contentType: "text/html", content: "<p>hello &amp; goodbye</p>" }] },
+      "hello & goodbye",
+    ],
+    [{ value: { action: "approve", id: 7 } }, expect.stringMatching(/approve.*7/s)],
+  ])("prefers activity text, then HTML, then adaptive-card values", async (activity, expected) => {
+    const entry = await prepareMSTeamsDebounceEntry({
       accountId: "default",
-      context: context({
-        type: "message",
-        attachments: [{ contentType: "text/html", content: "<p>hello &amp; goodbye</p>" }],
-      }),
+      context: context({ type: "message", ...activity }),
     });
-    const valueEntry = await prepareMSTeamsDebounceEntry({
-      accountId: "default",
-      context: context({
-        type: "message",
-        value: { action: "approve", id: 7 },
-      }),
-    });
-
-    expect(textEntry.text).toBe("hello &lt;tag&gt;");
-    expect(htmlEntry.text).toBe("hello & goodbye");
-    expect(valueEntry.text).toContain("approve");
-    expect(valueEntry.text).toContain("7");
+    expect(entry.text).toEqual(expected);
   });
 
   it.each([
@@ -44,6 +35,7 @@ describe("msteams inbound facts", () => {
     ["<p>literal &amp;lt;tag&amp;gt;</p>", "literal &lt;tag&gt;"],
     ["<p>literal &lt;at&gt;Alice&lt;/at&gt;</p>", "literal <at>Alice</at>"],
     ["<p>one<br>two</p><p>three&nbsp;four</p>", "one two three four"],
+    ['<img src="https://statics.teams.cdn.office.net/emoji/smile.png" alt="🙂">', "🙂"],
     [
       '<at>Bot</at><p>See <a href="https://example.test/?a=1&amp;b=2">report</a></p>',
       "See report https://example.test/?a=1&b=2",
@@ -72,24 +64,6 @@ describe("msteams inbound facts", () => {
     });
 
     expect(entry.text).toBe("answer &lt;tag&gt;");
-  });
-
-  it("preserves the emoji for genuinely emoji-only HTML messages", async () => {
-    const entry = await prepareMSTeamsDebounceEntry({
-      accountId: "default",
-      context: context({
-        type: "message",
-        attachments: [
-          {
-            contentType: "text/html",
-            content:
-              '<div><img src="https://statics.teams.cdn.office.net/evergreen-assets/emoji/smile/default/30_f.png" alt="🙂" title=""></div>',
-          },
-        ],
-      }),
-    });
-
-    expect(assembleMSTeamsInboundFacts(entry).rawBody).toBe("🙂");
   });
 
   it("preserves raw Bot Framework IDs while normalizing routing facts", async () => {

@@ -344,28 +344,16 @@ describe("msteams attachment helpers", () => {
       ).toEqual([]);
     });
 
-    it("does not count HTML references separately from files or cards", () => {
+    it.each([
+      [CONTENT_TYPE_APPLICATION_PDF, { contentUrl: TEST_URL_PDF }, true],
+      ["application/vnd.microsoft.card.adaptive", { content: { type: "AdaptiveCard" } }, false],
+    ])("does not count HTML references separately from %s", (contentType, fields, isFile) => {
       expect(
         resolveMSTeamsAdvertisedMedia([
-          createHtmlAttachment('<attachment id="file-1"></attachment>'),
-          {
-            id: "file-1",
-            contentType: CONTENT_TYPE_APPLICATION_PDF,
-            contentUrl: TEST_URL_PDF,
-          },
+          createHtmlAttachment('<attachment id="ref-1"></attachment>'),
+          { id: "ref-1", contentType, ...fields },
         ]),
-      ).toEqual([{ kind: "document", sourceId: "file-1" }]);
-
-      expect(
-        resolveMSTeamsAdvertisedMedia([
-          createHtmlAttachment('<attachment id="card-1"></attachment>'),
-          {
-            id: "card-1",
-            contentType: "application/vnd.microsoft.card.adaptive",
-            content: { type: "AdaptiveCard" },
-          },
-        ]),
-      ).toEqual([]);
+      ).toEqual(isFile ? [{ kind: "document", sourceId: "ref-1" }] : []);
     });
 
     it("does not count CID image references separately from their attachment", () => {
@@ -381,50 +369,22 @@ describe("msteams attachment helpers", () => {
       ).toEqual([{ kind: "image", sourceId: "image-1" }]);
     });
 
-    it("excludes Teams emoji sprite images from advertised media", () => {
+    it.each([
+      ["emoji/smile/default/30_f.png", "🙂", false],
+      ["emoji/1f44b/default/30_f.png", "", false],
+      ["brand/brand.png", "brand.png", true],
+    ])("classifies Teams CDN %s without hiding real images", (path, alt, isMedia) => {
+      const url = `https://statics.teams.cdn.office.net/evergreen-assets/${path}`;
       expect(
         resolveMSTeamsAdvertisedMedia([
           createHtmlAttachment(
-            '<div><at>Bot</at> can you tell <at>Other User</at> what works now <img src="https://statics.teams.cdn.office.net/evergreen-assets/emoji/smile/default/30_f.png" alt="🙂" title=""></div>',
-          ),
-        ]),
-      ).toEqual([]);
-    });
-
-    it("excludes Teams emoji sprites without alt text by their asset path", () => {
-      expect(
-        resolveMSTeamsAdvertisedMedia([
-          createHtmlAttachment(
-            '<img src="https://statics.teams.cdn.office.net/evergreen-assets/emoji/1f44b/default/30_f.png" />',
-          ),
-        ]),
-      ).toEqual([]);
-    });
-
-    it("keeps non-emoji images from the Teams emoji CDN host as advertised media", () => {
-      expect(
-        resolveMSTeamsAdvertisedMedia([
-          createHtmlAttachment(
-            '<img src="https://statics.teams.cdn.office.net/evergreen-assets/brand/brand.png" alt="brand.png" />',
+            `<img src="${url}" alt="${alt}"><img src="https://example.com/photo.png">`,
           ),
         ]),
       ).toEqual([
-        {
-          kind: "image",
-          sourceId: "https://statics.teams.cdn.office.net/evergreen-assets/brand/brand.png",
-        },
+        ...(isMedia ? [{ kind: "image", sourceId: url }] : []),
+        { kind: "image", sourceId: "https://example.com/photo.png" },
       ]);
-    });
-
-    it("keeps real inline images in mixed emoji-and-image messages", () => {
-      const realUrl = "https://example.com/photo.png";
-      expect(
-        resolveMSTeamsAdvertisedMedia([
-          createHtmlAttachment(
-            `<img src="${realUrl}"><img src="https://statics.teams.cdn.office.net/evergreen-assets/emoji/smile/default/30_f.png" alt="🙂">`,
-          ),
-        ]),
-      ).toEqual([{ kind: "image", sourceId: realUrl }]);
     });
 
     it("counts repeated inline URLs once while keeping data images per occurrence", () => {
