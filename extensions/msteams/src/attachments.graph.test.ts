@@ -272,23 +272,16 @@ describe("msteams attachment helpers", () => {
     ])("classifies Teams CDN %s without hiding real images", (path, alt, isMedia) => {
       const url = `https://statics.teams.cdn.office.net/evergreen-assets/${path}`;
       expectAdvertised(
-        [
-          createHtmlAttachment(
-            `<img src="${url}" alt="${alt}"><img src="https://example.com/photo.png">`,
-          ),
-        ],
+        [createHtmlAttachment(`<img src="${url}" alt="${alt}"><img src="https://x/photo.png">`)],
         [
           ...(isMedia ? [{ kind: "image", sourceId: url }] : []),
-          { kind: "image", sourceId: "https://example.com/photo.png" },
+          { kind: "image", sourceId: "https://x/photo.png" },
         ],
       );
     });
 
     it.each([
-      [
-        "https://example.com/repeated.png",
-        [{ kind: "image", sourceId: "https://example.com/repeated.png" }],
-      ],
+      ["https://x/repeated.png", [{ kind: "image", sourceId: "https://x/repeated.png" }]],
       ["data:image/png;base64,AQ==", [{ kind: "image" }, { kind: "image" }]],
     ])("counts repeated URL/data occurrences correctly: %s", (src, expected) => {
       expectAdvertised([createHtmlAttachment(`<img src="${src}"><img src="${src}">`)], expected);
