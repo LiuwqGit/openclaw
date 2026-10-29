@@ -2,10 +2,7 @@ import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
-import {
-  assertExistingDatabaseIdentity,
-  type DatabasePathIdentity,
-} from "../infra/sqlite-worker-identity.js";
+import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import type { SqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import {
   openSharedStateSqliteWorkerStore,
@@ -268,11 +265,6 @@ function createSharedStateWorkerOwner() {
       }
       const assertCurrent = () => {
         assertOwned();
-        assertExistingDatabaseIdentity(
-          databasePath,
-          expectedIdentity.key,
-          expectedIdentity.birthtime,
-        );
         for (const entry of activeEntries) {
           if (
             matches(entry, expectedIdentity) &&
@@ -301,7 +293,16 @@ function createSharedStateWorkerOwner() {
         }
       }
       return openSharedStateSqliteWorkerStore<OpenClawStateWorkerCleanupOperations>(
-        { ...captureRuntimeWorkerSource(moduleUrl), databasePath, existingOnly: true },
+        {
+          ...captureRuntimeWorkerSource(moduleUrl),
+          databasePath,
+          existingOnly: true,
+          admission: {
+            identity: expectedIdentity.key,
+            birthtime: expectedIdentity.birthtime,
+            assertCurrent,
+          },
+        },
         context,
         assertCurrent,
         {
@@ -315,7 +316,7 @@ function createSharedStateWorkerOwner() {
       context: OpenClawStateWorkerContext,
       options: Omit<OperationOptions, "createAdmission"> = {},
     ): Promise<Store | undefined> {
-      const { existingOnly = false, assertCurrent, preparation, signal } = options;
+      const { existingOnly = false, assertCurrent, signal } = options;
       const { admission } = context;
       const wait = <T>(pending: Promise<T>) => racePromiseWithAbortSignal(pending, signal);
       const source = captureRuntimeWorkerSource(moduleUrl);
@@ -333,6 +334,7 @@ function createSharedStateWorkerOwner() {
         if (
           stores.has(candidate) &&
           (candidate.context.existingSchemaPath !== context.existingSchemaPath ||
+            candidate.context.gatewayServiceInstallation !== context.gatewayServiceInstallation ||
             candidate.source.moduleUrl.href !== source.moduleUrl.href)
         ) {
           await wait(retire(candidate));
@@ -370,7 +372,8 @@ function createSharedStateWorkerOwner() {
         (candidate) =>
           matches(candidate, admission.identity) &&
           candidate.context.maintenanceScope === context.maintenanceScope &&
-          candidate.context.existingSchemaPath === context.existingSchemaPath,
+          candidate.context.existingSchemaPath === context.existingSchemaPath &&
+          candidate.context.gatewayServiceInstallation === context.gatewayServiceInstallation,
       );
       const ownsOpening = !entry;
       if (!entry) {
@@ -388,7 +391,10 @@ function createSharedStateWorkerOwner() {
               openingGuard.assertCurrent,
               {
                 maintenanceScope: context.maintenanceScope,
-                preparation,
+                // Opening binds the captured file; later commands retain their own authority.
+                ...(existingOnly && admission.identity.key.startsWith("file:")
+                  ? { createAdmission: openingGuard.createAdmission }
+                  : {}),
                 retireIdle: retireIdle.bind(undefined, admitted),
                 retainCleanup: (cleanup) => {
                   admitted.cleanup = cleanup;
@@ -461,7 +467,10 @@ function createSharedStateWorkerOwner() {
       }
       try {
         if (!entry.bound) {
-          publishOpenClawStateDatabaseWorkerAdmission(entry.context.admission);
+          publishOpenClawStateDatabaseWorkerAdmission(
+            entry.context.admission,
+            getSqliteWorkerActorIdentity(store).identity,
+          );
           entry.bound = true;
         }
       } catch (error) {

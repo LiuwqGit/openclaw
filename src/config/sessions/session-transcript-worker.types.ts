@@ -30,6 +30,10 @@ import type {
   CombinedSessionStoreTopologyRequest,
   CombinedSessionStoreTopologyResult,
 } from "./combined-store.types.js";
+import type {
+  ConversationBindingsWorkerInput,
+  ConversationBindingSnapshot,
+} from "./conversation-binding-facts.types.js";
 import type { ConversationDeliveryRecord } from "./conversation-delivery-store.types.js";
 import type {
   ConversationRowsWorkerInput,
@@ -76,7 +80,6 @@ import type {
   SessionRuntimeTargetWorkerInput,
   SessionRuntimeTargetWorkerResult,
 } from "./session-entry-read.types.js";
-import type * as HarnessCompletionSourceWorker from "./session-harness-completion-source.types.js";
 import type { SessionArchivePruningSnapshot } from "./session-history-archive-pruning.types.js";
 import type { SessionContextMessagesWorkerInput } from "./session-history-read.types.js";
 import type {
@@ -90,6 +93,8 @@ import type { SessionMembershipFacts } from "./session-membership-facts.types.js
 import type {
   PendingInputHistoryWorkerInput,
   PendingInputHistorySnapshot,
+  PendingInputOrphansWorkerInput,
+  PendingInputOrphanTarget,
 } from "./session-pending-input-history.types.js";
 import type * as PendingInputSourceWorker from "./session-pending-input-source.types.js";
 import type {
@@ -287,7 +292,6 @@ export type SessionHistoryWorkerInput =
       kind: "prewarm";
       database: { agentId: string; path: string };
       env: NodeJS.ProcessEnv;
-      history: boolean;
     }
   | SessionHistoricalEvictionCandidatesWorkerInput
   | SessionArchivedEvictionCandidatesWorkerInput
@@ -320,11 +324,12 @@ export type SessionHistoryWorkerInput =
   | SessionMembershipFactsWorkerInput
   | SessionProgressCardWorkerInput
   | PendingInputHistoryWorkerInput
+  | PendingInputOrphansWorkerInput
   | SessionPendingInputReceiptsWorkerInput
   | PendingInputSourceWorker.Input
-  | HarnessCompletionSourceWorker.Input
   | SessionGoalOperationReceiptWorkerInput
   | ConversationRowsWorkerInput
+  | ConversationBindingsWorkerInput
   | ConversationDeliveryWorkerInput
   | SessionEntryListWorkerInput
   | SessionEntryReadWorkerInput
@@ -397,6 +402,10 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
     };
     "cli-process-history": ChatHistoryDisplayResult;
     "conversation-rows": { kind: "conversation-rows"; rows: ConversationRecord[] };
+    "conversation-bindings": {
+      kind: "conversation-bindings";
+      snapshot: ConversationBindingSnapshot;
+    };
     "conversation-delivery": { kind: "conversation-delivery"; record?: ConversationDeliveryRecord };
     prewarm: { kind: "prewarm" };
     "session-pending-archives": { kind: "session-pending-archives"; pending: boolean };
@@ -446,10 +455,13 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
       result: SessionGoalOperationLookupResult;
     };
     "session-pending-input-source": PendingInputSourceWorker.Value;
-    "session-harness-completion-source": HarnessCompletionSourceWorker.Value;
     "session-pending-input-history": {
       kind: "session-pending-input-history";
       snapshot: PendingInputHistorySnapshot;
+    };
+    "session-pending-input-orphans": {
+      kind: "session-pending-input-orphans";
+      targets: PendingInputOrphanTarget[];
     };
     "session-pending-input-receipts": {
       kind: "session-pending-input-receipts";
@@ -554,7 +566,8 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
     readMessagePresence: CancellableSessionHistoryReader<"transcript-message-presence", "present">;
     readAnchors: CancellableSessionHistoryReader<"transcript-anchors", "facts">;
     readConversations: SessionHistoryReader<"conversation-rows", "rows">;
-    prewarm: (input: { env: NodeJS.ProcessEnv; history: boolean }) => Promise<void>;
+    readConversationBindings: SessionHistoryReader<"conversation-bindings", "snapshot">;
+    prewarm: (input: { env: NodeJS.ProcessEnv }) => Promise<void>;
     readPendingArchives: CancellableSessionHistoryReader<"session-pending-archives", "pending">;
     readLifecycleArtifactPlan: CancellableSessionHistoryReader<"lifecycle-artifact-plan">;
     findTranscriptEvent: (
@@ -616,8 +629,8 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
     readConversationDelivery: SessionHistoryReader<"conversation-delivery", "record">;
     readGoalOperationReceipt: SessionHistoryReader<"goal-operation-receipt", "result">;
     readPendingInputSource: PendingInputSourceWorker.Reader;
-    readHarnessCompletionSource: HarnessCompletionSourceWorker.Reader;
     readPendingInputHistory: SessionHistoryReader<"session-pending-input-history", "snapshot">;
+    readPendingInputOrphans: SessionHistoryReader<"session-pending-input-orphans", "targets">;
     readPendingInputReceipts: SessionHistoryReader<"session-pending-input-receipts", "receipts">;
     readVoiceSessions: SessionHistoryReader<"voice-sessions">;
   };

@@ -149,8 +149,6 @@ export class NewSessionDraft {
       () => ({
         ...read(),
         isAdmin: this.place?.isAdmin() ?? false,
-        canStartAsDraft: this.submission?.capabilities.canStartAsDraft(read().context) ?? false,
-        visibility: this.submission?.visibility ?? "normal",
         cloudProfileId: this.place?.cloudProfileId ?? "",
         pendingPlacement: this.submission?.pendingPlacement ?? {
           sessionKey: "",
@@ -170,7 +168,6 @@ export class NewSessionDraft {
           this.invalidate(reset, outcome);
           callbacks.onInvalidate();
         },
-        onVisibilityRetired: () => this.submission.setVisibility("normal"),
         onCloudProfileCleared: () => this.place.clearCloudProfile(),
         onCloudState: (error) => this.submission.setError(error),
         onPendingPlacementReset: () => this.submission.releasePendingPlacementOwner(),
@@ -263,6 +260,7 @@ export class NewSessionDraft {
       this.stopGateway = undefined;
       this.boundGateway = gateway;
       if (gateway) {
+        // Connection receipts synchronously retire stale discovery and submission authority.
         const stopStore = gateway.subscribe(() => {
           if (this.read().context?.gateway === gateway) {
             this.gateway.synchronize(gateway);
