@@ -2184,6 +2184,80 @@ EOF
     },
   );
 
+  it.each([
+    { requested: "main", runtime: "24.21.0", engines: "", upgrade: false, releaseLookup: false },
+    {
+      requested: "release-branch",
+      runtime: "24.16.0",
+      engines: "",
+      upgrade: false,
+      releaseLookup: false,
+    },
+    {
+      requested: "latest",
+      runtime: "24.21.0",
+      engines: ">=24.22.1 <25 || >=26.12.1",
+      upgrade: true,
+      releaseLookup: true,
+    },
+    {
+      requested: "2026.10.5",
+      runtime: "24.21.0",
+      engines: ">=24.22.1 <25 || >=26.12.1",
+      upgrade: true,
+      releaseLookup: true,
+    },
+    {
+      requested: "2026.10.5",
+      runtime: "24.22.1",
+      engines: ">=24.22.1 <25 || >=26.12.1",
+      upgrade: false,
+      releaseLookup: true,
+    },
+    { requested: "2026.10.5", runtime: "24.21.0", engines: "", upgrade: true, releaseLookup: true },
+  ])(
+    "admits git $requested on Node $runtime against the selected source",
+    ({ requested, runtime, engines, upgrade, releaseLookup }) => {
+      const result = runInstallShell(`
+      source "${SCRIPT_PATH}"
+      bootstrap_gum_temp() { :; }; print_installer_banner() { :; }; print_gum_status() { :; }
+      detect_os_or_die() { OS=linux; }; detect_openclaw_checkout() { return 1; }
+      show_install_plan() { :; }; check_existing_openclaw() { return 1; }
+      load_nvm_for_node_detection() { :; }; use_supported_nvm_node() { return 1; }
+      promote_supported_node_binary() { return 1; }; install_homebrew() { :; }
+      node_binary_has_safe_sqlite() { return 0; }
+      node() { printf 'v%s\\n' "$fixture_version"; }
+      npm() {
+        printf '%s\\n' "$*" >> "$HOME/npm-calls"
+        case "$*" in
+          'view openclaw dist-tags.latest') printf '%s\\n' "$fixture_release" ;;
+          "view openclaw@\${fixture_release} engines.node --fetch-timeout=5000 --fetch-retries=0")
+            [[ -n "$fixture_engine" ]] || return 1
+            printf '%s\\n' "$fixture_engine"
+            ;;
+          'list -g openclaw') return 1 ;;
+          *) return 91 ;;
+        esac
+      }
+      install_node() { echo 'runtime upgraded'; fixture_version=26.12.1; }
+      check_git() { return 0; }
+      install_openclaw_from_git() {
+        check_node
+        echo 'git install reached'
+        printf 'npm-calls=%s\\n' "$(tr '\\n' ';' < "$HOME/npm-calls" 2>/dev/null || true)"
+        exit 0
+      }
+      fixture_version='${runtime}' fixture_engine='${engines}' fixture_release='2026.10.5'
+      INSTALL_METHOD=git OPENCLAW_VERSION='${requested}'
+      main
+    `);
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(result.stdout).toContain("git install reached");
+      expect(result.stdout.includes("runtime upgraded")).toBe(upgrade);
+      expect(result.stdout.includes("engines.node")).toBe(releaseLookup);
+    },
+  );
+
   it.each(["install.sh", "install-cli.sh"])(
     "checks canonical Node release labels in %s",
     (installer) => {

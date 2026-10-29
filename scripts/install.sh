@@ -1607,6 +1607,9 @@ NODE_PACKAGE_ENGINE=">=24.22.1 <25 || >=26.12.1"
 node_components_satisfy_package_engine() {
     local major="$1" minor="$2" patch="$3" range="$4"
     local clause lower_major lower_minor lower_patch upper_major upper_minor upper_patch matched=1
+    # An empty range means the selected target publishes no package engine of its
+    # own, so only the compatibility floor above admits the runtime.
+    [[ -n "$range" ]] || return 0
     # Match the same >=floor [<ceiling] alternatives as the package preinstall guard.
     local pattern='^[[:space:]]*>=[[:space:]]*v?([0-9]+)\.([0-9]+)\.([0-9]+)([[:space:]]+<[[:space:]]*v?([0-9]+)(\.([0-9]+)\.([0-9]+))?)?[[:space:]]*$'
     while :; do
@@ -1624,7 +1627,45 @@ node_components_satisfy_package_engine() {
     return "$matched"
 }
 
+# Applies the published engines of one package version. Returns non-zero when the
+# registry lookup failed or returned a range this installer cannot evaluate.
+apply_registry_node_package_engine() {
+    local version="$1" engine="" verdict=0
+    if ! engine="$(bounded_probe_output 'package Node requirement' npm view "openclaw@${version}" engines.node --fetch-timeout=5000 --fetch-retries=0)"; then
+        engine=""
+    fi
+    [[ -n "$engine" ]] || return 1
+    node_components_satisfy_package_engine 0 0 0 "$engine" || verdict=$?
+    [[ "$verdict" != 2 ]] || return 1
+    NODE_PACKAGE_ENGINE="$engine"
+    NODE_SUPPORTED_VERSION_LABEL="$engine"
+}
+
+# A git target builds source instead of a published package, so the npm fallback
+# engine only applies when the requested ref pins a published release. Moving refs
+# (main, branch names, commits) build current source, which declares the
+# compatibility floor node_version_components_are_supported already enforces.
+resolve_git_node_package_engine() {
+    local git_ref=""
+    git_ref="$(bounded_probe_output 'git ref' resolve_git_openclaw_ref || true)"
+    if [[ "$git_ref" != v[0-9]* ]]; then
+        NODE_PACKAGE_ENGINE=""
+        NODE_SUPPORTED_VERSION_LABEL="24.${NODE_24_MIN_MINOR}.${NODE_24_MIN_PATCH}+ or 26.${NODE_26_MIN_MINOR}.${NODE_26_MIN_PATCH}+"
+        return 0
+    fi
+    # Admission runs before the checkout exists, so resolve the pinned release's
+    # engines from the registry instead of reading them from source.
+    if apply_registry_node_package_engine "${git_ref#v}"; then
+        return 0
+    fi
+    ui_warn "Could not resolve target Node requirement; using ${NODE_PACKAGE_ENGINE}"
+}
+
 resolve_node_package_engine() {
+    if [[ "$INSTALL_METHOD" == git ]]; then
+        resolve_git_node_package_engine
+        return 0
+    fi
     [[ "$INSTALL_METHOD" == npm ]] || return 0
     # Consume --beta here so admission and installation use the same selected target.
     if [[ "$USE_BETA" == 1 ]]; then
@@ -1632,19 +1673,9 @@ resolve_node_package_engine() {
         OPENCLAW_VERSION="${OPENCLAW_VERSION:-latest}"
         USE_BETA=0
     fi
-    local engine="" verdict=0
-    if can_resolve_registry_package_version "$OPENCLAW_VERSION"; then
-        if ! engine="$(bounded_probe_output 'package Node requirement' npm view "openclaw@${OPENCLAW_VERSION}" engines.node --fetch-timeout=5000 --fetch-retries=0)"; then
-            engine=""
-        fi
-    fi
-    if [[ -n "$engine" ]]; then
-        node_components_satisfy_package_engine 0 0 0 "$engine" || verdict=$?
-        if [[ "$verdict" != 2 ]]; then
-            NODE_PACKAGE_ENGINE="$engine"
-            NODE_SUPPORTED_VERSION_LABEL="$engine"
-            return 0
-        fi
+    if can_resolve_registry_package_version "$OPENCLAW_VERSION" &&
+        apply_registry_node_package_engine "$OPENCLAW_VERSION"; then
+        return 0
     fi
     ui_warn "Could not resolve target Node requirement; using ${NODE_PACKAGE_ENGINE}"
 }
