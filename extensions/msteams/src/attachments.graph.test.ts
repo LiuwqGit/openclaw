@@ -274,13 +274,13 @@ describe("msteams attachment helpers", () => {
       expectAdvertised(
         [createHtmlAttachment(`<img src="${url}" alt="${alt}"><img src="https://x/photo.png">`)],
         [
-          ...(isMedia ? [{ kind: "image", sourceId: url }] : []),
+          ...(isMedia ? [{ kind: "image" as const, sourceId: url }] : []),
           { kind: "image", sourceId: "https://x/photo.png" },
         ],
       );
     });
 
-    it.each([
+    it.each<[string, Parameters<typeof expectAdvertised>[1]]>([
       ["https://x/repeated.png", [{ kind: "image", sourceId: "https://x/repeated.png" }]],
       ["data:image/png;base64,AQ==", [{ kind: "image" }, { kind: "image" }]],
     ])("counts repeated URL/data occurrences correctly: %s", (src, expected) => {
