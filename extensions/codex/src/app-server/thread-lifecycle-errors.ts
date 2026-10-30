@@ -18,6 +18,21 @@ export class CodexThreadClientReplacementError extends AgentHarnessPreflightErro
   }
 }
 
+const CODEX_THREAD_CLAIMED_MARKER = "is claimed by active work; stop it first.";
+
+/** A single physical thread admits one turn at a time; live protection counts as work. */
+export const codexThreadClaimedMessage = (threadId: string) =>
+  `Codex thread ${threadId} ${CODEX_THREAD_CLAIMED_MARKER}`;
+
+/**
+ * A claim refusal reaches a completion owner only as text, because the announce crosses the
+ * host boundary. Matching the marker lets a caller tell this refusal apart from a delivery
+ * failure it should retry or retire on.
+ */
+export function isCodexThreadClaimRefusal(message: string): boolean {
+  return message.includes(CODEX_THREAD_CLAIMED_MARKER);
+}
+
 export class CodexThreadBindingConflictError extends Error {
   constructor(threadId: string, operation: string) {
     super(`Codex thread binding changed while ${operation}: ${threadId}`);

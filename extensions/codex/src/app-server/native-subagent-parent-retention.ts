@@ -10,9 +10,9 @@ type SettledNativeParentRetention = {
 };
 
 /**
- * Native child work pins its parent thread until every sibling settles. A pinned
- * parent refuses the release a completion announce needs, so an unsettled child
- * both keeps the parent subscription alive and blocks its siblings' delivery.
+ * Native child work pins its parent thread until every sibling settles. A pinned parent refuses
+ * the release that a cold announce needs, while a warm continuation still accepts it, so the pin
+ * only explains a refusal; it never rules delivery out by itself.
  */
 export function hasUnsettledNativeChild(
   children: ReadonlyMap<string, ChildState>,
@@ -32,7 +32,7 @@ export function hasUnsettledNativeChild(
   return false;
 }
 
-/** True while a running sibling keeps this parent thread pinned against an announce. */
+/** True while a running sibling keeps this parent thread pinned against a cold announce. */
 export function holdsNativeParentThreadForSibling(
   retentions: ReadonlyMap<string, () => void>,
   children: ReadonlyMap<string, ChildState>,

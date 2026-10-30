@@ -40,7 +40,10 @@ import {
   fingerprintCodexThreadConfig,
   fingerprintRestrictedThreadConfig,
 } from "./thread-fingerprints.js";
-import { CodexThreadBindingConflictError } from "./thread-lifecycle-errors.js";
+import {
+  CodexThreadBindingConflictError,
+  codexThreadClaimedMessage,
+} from "./thread-lifecycle-errors.js";
 import {
   buildCodexThreadRequestConfig,
   prepareCodexThreadFinalConfigPatch,
@@ -254,7 +257,7 @@ export async function releaseCodexBoundLiveThread(
       throw new AgentHarnessPreflightError(
         options.waitForBackgroundCleanup && !claimed && protectedWork
           ? `Codex thread ${options.threadId} still has background work after waiting for cleanup; stop its running work and retry.`
-          : `Codex thread ${options.threadId} is claimed by active work; stop it first.`,
+          : codexThreadClaimedMessage(options.threadId),
       );
     }
     return await releaseCodexRetainedLiveThread({

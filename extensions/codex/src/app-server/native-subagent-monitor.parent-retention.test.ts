@@ -21,6 +21,7 @@ import {
   turnStartedNotification,
 } from "./native-subagent-monitor.test-support.js";
 import { createCodexTestBindingStore } from "./session-binding.test-helpers.js";
+import { codexThreadClaimedMessage } from "./thread-lifecycle-errors.js";
 import { createCodexThreadLifecycleTimingTracker } from "./thread-lifecycle-timing.js";
 import { releaseCodexBoundLiveThread } from "./thread-lifecycle-warm.js";
 
@@ -127,21 +128,19 @@ it("keeps an interrupted assignment resumable without pinning its restored paren
   await continued.unregister();
 });
 
-it("holds a finished child's result while a running sibling protects the parent, then delivers it once", async () => {
+it("holds a refused announce while a running sibling protects the parent, then delivers it once", async () => {
   vi.useFakeTimers();
   const { client, runtime, monitor, releaseForResume } = await setupParentRetention(
     "/tmp/codex-sibling-protected-delivery",
   );
   const delivered: string[] = [];
-  // An announce turn must release the protected parent first. Real core reports that
-  // refusal as a blocked recovery for the same source run, which retires the result.
+  // A cold announce has to release the protected parent first, which the live guard refuses.
   runtime.deliverAgentHarnessCompletion.mockImplementation(async ({ result }) => {
     if (isCodexAppServerLiveThreadProtected(client.client, "parent-thread")) {
       return {
         delivered: false,
         path: "none",
-        recoveryBlocked: true,
-        error: "Codex thread parent-thread is claimed by active work; stop it first.",
+        error: `Codex agent harness failed: ${codexThreadClaimedMessage("parent-thread")}`,
       };
     }
     delivered.push(result);
@@ -157,8 +156,12 @@ it("holds a finished child's result while a running sibling protects the parent,
   );
   expect(isCodexAppServerLiveThreadProtected(client.client, "parent-thread")).toBe(true);
   await expect(releaseForResume()).rejects.toThrow("claimed by active work; stop it first");
-  // Holding the accepted result must not attempt, charge, or retire it.
-  expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
+  expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(1);
+  expect(delivered).toEqual([]);
+  // A refusal the monitor's own retention caused must not charge the bounded retry budget,
+  // which is what retired the accepted result undelivered.
+  await vi.advanceTimersByTimeAsync(65_000);
+  expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(1);
   expect(delivered).toEqual([]);
 
   await client.notify(
@@ -166,10 +169,35 @@ it("holds a finished child's result while a running sibling protects the parent,
   );
   await expect(releaseForResume()).resolves.toBe(true);
   expect(delivered).toEqual(["first result", "second result"]);
-  expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(2);
   const continued = await registerParent(monitor);
   expect(continued.listPendingChildren()).toEqual([]);
   await continued.unregister();
+});
+
+it("delivers into a protected warm parent without waiting for its running sibling", async () => {
+  vi.useFakeTimers();
+  const { client, runtime, monitor, releaseForResume } = await setupParentRetention(
+    "/tmp/codex-warm-protected-delivery",
+  );
+  const delivered: string[] = [];
+  // A warm continuation accepts the announce without releasing the protected parent.
+  runtime.deliverAgentHarnessCompletion.mockImplementation(async ({ result }) => {
+    delivered.push(result);
+    return { delivered: true, path: "direct" };
+  });
+  const parent = await registerParent(monitor);
+  await notifyChildStarted(client, "parent-thread", "child-a");
+  await notifyChildStarted(client, "parent-thread", "child-b");
+  await parent.unregister();
+
+  await client.notify(
+    nativeCompletionNotification({ agentPath: "child-a", result: "first result" }),
+  );
+  // The sibling still protects the parent, yet an announce it can accept is not held back.
+  expect(isCodexAppServerLiveThreadProtected(client.client, "parent-thread")).toBe(true);
+  await expect(releaseForResume()).rejects.toThrow("claimed by active work; stop it first");
+  expect(delivered).toEqual(["first result"]);
+  expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(1);
 });
 
 it("permits parent cold resume once every child is terminal, while preserving undelivered results", async () => {

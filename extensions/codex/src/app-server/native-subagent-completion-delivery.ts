@@ -12,6 +12,7 @@ import type {
 } from "./native-subagent-monitor-types.js";
 import { holdsNativeParentThreadForSibling } from "./native-subagent-parent-retention.js";
 import { delayForAttempt } from "./native-subagent-retry.js";
+import { isCodexThreadClaimRefusal } from "./thread-lifecycle-errors.js";
 
 type CompletionDeliveryDependencies = {
   deliver: NativeSubagentMonitorRuntime["deliverAgentHarnessCompletion"];
@@ -65,7 +66,7 @@ export class CodexNativeSubagentCompletionDelivery {
     if (childState.completionDeliveryTimer) {
       return;
     }
-    let deferredWithoutAttempt = false;
+    let deferredToForeground = false;
     try {
       if (childState.cancellationRequested) {
         // Stop settles owned processes before acknowledging cancellation or
@@ -97,19 +98,8 @@ export class CodexNativeSubagentCompletionDelivery {
       }
       // Foreground parents receive native completion input. Only wake a detached
       // parent after its last owner leaves; native receipts deduplicate both paths.
-      // A detached parent that a running sibling still protects cannot admit an
-      // announce either: the release it needs throws while protection is held, so
-      // hold the accepted result instead of spending the bounded retry budget on
-      // refusals that retire it undelivered. Settlement of the last sibling
-      // releases the protection and resumes delivery.
-      const siblingProtected = holdsNativeParentThreadForSibling(
-        this.dependencies.parentThreadRetentions,
-        this.dependencies.children,
-        state,
-        childState,
-      );
-      if (state.owners.size > 0 || !state.completionScope || siblingProtected) {
-        deferredWithoutAttempt = state.owners.size > 0 || siblingProtected;
+      if (state.owners.size > 0 || !state.completionScope) {
+        deferredToForeground = state.owners.size > 0;
         return;
       }
       const historyOwner = childState.historyOwner;
@@ -158,6 +148,9 @@ export class CodexNativeSubagentCompletionDelivery {
         return;
       }
       const error = delivery.error ?? "completion delivery did not produce a parent response";
+      if (this.heldBySiblingProtection(state, childState, error)) {
+        return;
+      }
       await this.scheduleRetry(state, childState, error);
     } catch (error) {
       if (!this.isCurrent(state, childState)) {
@@ -168,6 +161,9 @@ export class CodexNativeSubagentCompletionDelivery {
         return;
       }
       const message = formatErrorMessage(error);
+      if (this.heldBySiblingProtection(state, childState, message)) {
+        return;
+      }
       await this.scheduleRetry(state, childState, message, !childState.completionDeliveryAbandoned);
       embeddedAgentLog.warn("Failed to deliver Codex native subagent completion", {
         parentThreadId: state.parentThreadId,
@@ -175,12 +171,45 @@ export class CodexNativeSubagentCompletionDelivery {
         error: message,
       });
     } finally {
-      if (!deferredWithoutAttempt) {
+      if (!deferredToForeground) {
         // Keep the root through the first handoff, including a foreground parent's
         // pending unregister. Once attempted, sleeping retries retain only delivery authority.
         childState.completionCustody?.settleExecution();
       }
     }
+  }
+
+  /**
+   * An announce that needs the parent thread released is refused while a running sibling keeps
+   * the monitor's own protection on it. That refusal is the monitor's doing, not a delivery
+   * failure, so holding the accepted result keeps it out of the bounded retry budget that would
+   * otherwise retire it undelivered. Releasing the protection resumes it through `deliverDetached`.
+   * A protected parent that can continue warm accepts the announce without a release, so only a
+   * refusal is held; every other outcome keeps its existing retry or retirement path.
+   */
+  private heldBySiblingProtection(
+    state: ParentState,
+    childState: ChildState,
+    error: string,
+  ): boolean {
+    if (!isCodexThreadClaimRefusal(error)) {
+      return false;
+    }
+    if (
+      !holdsNativeParentThreadForSibling(
+        this.dependencies.parentThreadRetentions,
+        this.dependencies.children,
+        state,
+        childState,
+      )
+    ) {
+      return false;
+    }
+    embeddedAgentLog.debug("Holding Codex native subagent completion for a protected parent", {
+      parentThreadId: state.parentThreadId,
+      childThreadId: childState.childThreadId,
+    });
+    return true;
   }
 
   finish(state: ParentState, child: ChildState): void {
