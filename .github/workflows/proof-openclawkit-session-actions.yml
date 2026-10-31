@@ -1,0 +1,110 @@
+name: OpenClawKit Session Action Proof
+
+# Fork-local evidence run for openclaw/openclaw PR #189467.
+# The upstream `macos-swift` lanes are gated behind `!ordinaryPullRequest`
+# (scripts/ci-build-manifest.mjs), so a fork PR never executes the shared
+# OpenClawKit Swift suite. This workflow reproduces the upstream
+# `openclawkit-tests-contract-v1` command on a hosted macOS runner so the
+# ChatViewModelSessionActionTests regression cases actually execute:
+#   1. GREEN on the PR head source.
+#   2. RED control with only ChatViewModel+SessionActions.swift reverted to base.
+on:
+  push:
+    branches: ["proof/**"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openclawkit-session-action-proof
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: "24.22.1"
+  BASE_SHA: "20cdaea4bb5fc2035949a39643ae2df413ed9f3b"
+  PATCHED_FILE: "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+SessionActions.swift"
+
+jobs:
+  openclawkit-session-action-tests:
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Record host, head and toolchain
+        run: |
+          set -euo pipefail
+          sw_vers
+          uname -a
+          ls -d /Applications/Xcode*.app || true
+          newest_xcode="$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
+          sudo xcode-select -s "$newest_xcode"
+          xcode-select -p
+          xcodebuild -version
+          swift --version
+          echo "HEAD_SHA=$(git rev-parse HEAD)"
+          git log --oneline -1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Enable pnpm
+        run: |
+          set -euo pipefail
+          corepack enable || npm install --global pnpm@12.15.0
+          pnpm --version
+
+      - name: Install native asset dependencies
+        run: |
+          set -euo pipefail
+          pnpm install --frozen-lockfile --prefer-offline --optional \
+            --filter '@openclaw/mermaid-renderer...' \
+            --filter '@openclaw/gateway-protocol...' \
+            --config.ignore-scripts=false \
+            --config.engine-strict=false \
+            --config.enable-pre-post-scripts=true \
+            --config.side-effects-cache=true
+
+      - name: Prepare Apple Mermaid assets
+        run: |
+          set -euo pipefail
+          node scripts/prepare-apple-mermaid.mjs
+
+      - name: Swift test (PR head source) - ChatViewModelSessionActionTests
+        run: |
+          set -euo pipefail
+          scratch="$RUNNER_TEMP/openclawkit-proof-scratch"
+          mkdir -p "$scratch"
+          echo "OPENCLAWKIT_SCRATCH=$scratch" >> "$GITHUB_ENV"
+          swift test \
+            --package-path apps/shared/OpenClawKit \
+            --scratch-path "$scratch" \
+            --disable-index-store -Xswiftc -gline-tables-only \
+            --filter ChatViewModelSessionActionTests
+
+      - name: Revert only the patched source file to base (RED control)
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/openclaw/openclaw.git
+          git fetch --depth 1 upstream "$BASE_SHA"
+          git checkout "$BASE_SHA" -- "$PATCHED_FILE"
+          git status --porcelain
+          git diff --stat
+
+      - name: Swift test (base source, patched tests) - expected RED
+        run: |
+          set -uo pipefail
+          swift test \
+            --package-path apps/shared/OpenClawKit \
+            --scratch-path "$OPENCLAWKIT_SCRATCH" \
+            --disable-index-store -Xswiftc -gline-tables-only \
+            --filter ChatViewModelSessionActionTests
+          status=$?
+          echo "RED_CONTROL_SWIFT_TEST_EXIT=$status"
+          if [[ "$status" -eq 0 ]]; then
+            echo "::error::RED control unexpectedly passed; the regression tests do not capture the defect."
+          fi
+          exit 0
