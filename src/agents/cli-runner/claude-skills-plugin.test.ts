@@ -69,6 +69,88 @@ describe("prepareClaudeCliSkillsPlugin", () => {
     await expect(fs.readdir(pluginTempRoot)).resolves.toEqual([]);
   });
 
+  it("materializes node-hosted skills from their advertised instructions", async () => {
+    const nodeLocator = "node://node-a/skills/remote-demo/SKILL.md";
+    const prepared = await prepareClaudeCliSkillsPlugin({
+      backendId: "claude-cli",
+      skillsSnapshot: {
+        ...skillsSnapshot,
+        resolvedSkills: [
+          ...(skillsSnapshot.resolvedSkills ?? []),
+          {
+            name: "remote-demo",
+            description: "Node-hosted skill",
+            locationNote:
+              "Node-hosted on A (node-a). Run referenced files and bins with exec host=node node=node-a.",
+            readContent: "# Remote Demo\n\nRun scripts/run.sh from this skill directory.\n",
+            filePath: nodeLocator,
+            baseDir: "node://node-a/skills/remote-demo",
+            source: "openclaw-node",
+            sourceInfo: {
+              path: nodeLocator,
+              source: "openclaw-node",
+              scope: "temporary",
+              origin: "top-level",
+              baseDir: "node://node-a/skills/remote-demo",
+            },
+            disableModelInvocation: false,
+          },
+        ],
+      },
+    });
+    try {
+      expect(prepared.pluginDir).toBeDefined();
+      const materialized = path.join(prepared.pluginDir!, "skills", "remote-demo", "SKILL.md");
+      const content = await fs.readFile(materialized, "utf8");
+      expect(content).toContain("# Remote Demo");
+      expect(content).toContain("exec host=node node=node-a");
+      expect([...(prepared.skillCommands?.keys() ?? [])].toSorted()).toEqual([
+        "openclaw-skills:demo",
+        "openclaw-skills:remote-demo",
+      ]);
+      expect((await fs.stat(path.join(prepared.pluginDir!, "skills", "demo"))).isDirectory()).toBe(
+        true,
+      );
+    } finally {
+      await prepared.cleanup();
+    }
+    await expect(fs.readdir(pluginTempRoot)).resolves.toEqual([]);
+  });
+
+  it("skips node-hosted skills that advertise no instructions", async () => {
+    const nodeLocator = "node://node-a/skills/remote-demo/SKILL.md";
+    const prepared = await prepareClaudeCliSkillsPlugin({
+      backendId: "claude-cli",
+      skillsSnapshot: {
+        ...skillsSnapshot,
+        resolvedSkills: [
+          {
+            name: "remote-demo",
+            description: "Node-hosted skill",
+            filePath: nodeLocator,
+            baseDir: "node://node-a/skills/remote-demo",
+            source: "openclaw-node",
+            sourceInfo: {
+              path: nodeLocator,
+              source: "openclaw-node",
+              scope: "temporary",
+              origin: "top-level",
+              baseDir: "node://node-a/skills/remote-demo",
+            },
+            disableModelInvocation: false,
+          },
+        ],
+      },
+    });
+    try {
+      expect(prepared.args).toEqual([]);
+      expect(prepared.pluginDir).toBeUndefined();
+    } finally {
+      await prepared.cleanup();
+    }
+    await expect(fs.readdir(pluginTempRoot)).resolves.toEqual([]);
+  });
+
   it("delivers and cleans up copied skills when symlinks are unavailable", async () => {
     vi.spyOn(fs, "symlink").mockRejectedValueOnce(new Error("unavailable"));
     const prepared = await prepareClaudeCliSkillsPlugin({
