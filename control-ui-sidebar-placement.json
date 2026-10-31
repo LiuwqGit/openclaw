@@ -1,0 +1,50 @@
+{
+  "generatedAt": "2026-10-31T16:34:11.850Z",
+  "projectionSource": "ui/src/components/app-sidebar-session-parent.ts (resolveSidebarSessionParentKey + collectSidebarSessionChildKeys)",
+  "inputRows": "sessions.list rows from the real Gateway run in gateway-runtime-proof.json",
+  "mainSessionKeys": [
+    "agent:main:main",
+    "main"
+  ],
+  "mainSessionKeysSource": "canonical agent main key (app-sidebar-agent-session-rows.ts canonicalMainKeys)",
+  "sidebarChildKeysByParent": {
+    "agent:main:pinned-dashboard-thread": [
+      "agent:main:ios-0fab2569-2e6b-45e3-a25f-c15658ce8254",
+      "agent:main:ios-4a307959-7fa7-4162-9107-66cfb7c7c2b3"
+    ]
+  },
+  "rows": [
+    {
+      "key": "agent:main:ios-4a307959-7fa7-4162-9107-66cfb7c7c2b3",
+      "label": "Fork of the selected conversation",
+      "persistedParentSessionKey": "agent:main:pinned-dashboard-thread",
+      "controlUiSidebarParentKey": "agent:main:pinned-dashboard-thread",
+      "controlUiPlacement": "nested child of agent:main:pinned-dashboard-thread"
+    },
+    {
+      "key": "agent:main:ios-cef576b3-023c-429b-aa35-f9eeb6dc5e13",
+      "label": "New chat (patched payload)",
+      "persistedParentSessionKey": "agent:main:main",
+      "controlUiSidebarParentKey": null,
+      "controlUiPlacement": "independent top-level row"
+    },
+    {
+      "key": "agent:main:ios-0fab2569-2e6b-45e3-a25f-c15658ce8254",
+      "label": "New chat (pre-patch payload)",
+      "persistedParentSessionKey": "agent:main:pinned-dashboard-thread",
+      "controlUiSidebarParentKey": "agent:main:pinned-dashboard-thread",
+      "controlUiPlacement": "nested child of agent:main:pinned-dashboard-thread"
+    },
+    {
+      "key": "agent:main:pinned-dashboard-thread",
+      "label": "Pinned dashboard thread",
+      "persistedParentSessionKey": "agent:main:main",
+      "controlUiSidebarParentKey": null,
+      "controlUiPlacement": "independent top-level row"
+    }
+  ],
+  "selectedConversationChildren": [
+    "agent:main:ios-0fab2569-2e6b-45e3-a25f-c15658ce8254",
+    "agent:main:ios-4a307959-7fa7-4162-9107-66cfb7c7c2b3"
+  ]
+}

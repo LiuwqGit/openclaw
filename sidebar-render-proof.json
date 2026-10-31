@@ -1,0 +1,367 @@
+{
+  "generatedAt": "2026-10-31T19:04:31.868Z",
+  "host": {
+    "platform": "linux",
+    "node": "v26.12.1"
+  },
+  "controlUi": {
+    "baseUrl": "http://127.0.0.1:37607/",
+    "server": "vite source server (real Control UI application code)"
+  },
+  "gateway": {
+    "port": 18024,
+    "stateDir": "/tmp/openclaw-test-state-pr189467-sidebar-render-233g2K/home/.openclaw",
+    "configPath": "/tmp/openclaw-test-state-pr189467-sidebar-render-233g2K/home/.openclaw/openclaw.json"
+  },
+  "createRequests": [
+    {
+      "kind": "pre-patch native payload",
+      "request": {
+        "key": "agent:main:ios-legacy-1-pr189467",
+        "agentId": "main",
+        "label": "Legacy nested new chat 1",
+        "parentSessionKey": "agent:main:pinned-dashboard-thread"
+      },
+      "response": {
+        "ok": true,
+        "key": "agent:main:ios-legacy-1-pr189467",
+        "sessionId": "0b99c6cc-2ad8-4f05-8630-5da7486376f7",
+        "entry": {
+          "sessionId": "0b99c6cc-2ad8-4f05-8630-5da7486376f7",
+          "lifecycleRevision": "7b7cc9e2-9b23-44a9-9290-8dd791ff8dd2",
+          "updatedAt": 1793473510045,
+          "sessionRoot": "/tmp/openclaw-test-state-pr189467-sidebar-render-233g2K/home/workspace",
+          "label": "Legacy nested new chat 1",
+          "delivery": {
+            "kind": "none"
+          },
+          "createdVia": "operator",
+          "createdActor": {
+            "type": "human",
+            "source": "profile",
+            "id": "gateway-owner"
+          },
+          "createdAt": 1793473510045,
+          "skillLibrarySelections": [],
+          "spawnDepth": 0,
+          "modelOverrideSource": "default",
+          "parentSessionKey": "agent:main:pinned-dashboard-thread",
+          "parentSessionId": "766a0feb-2c0c-48ce-94ad-8beab94f18fc"
+        },
+        "runStarted": false,
+        "publicRead": false,
+        "resolved": {
+          "modelProvider": "fixture",
+          "model": "proof"
+        }
+      }
+    },
+    {
+      "kind": "pre-patch native payload",
+      "request": {
+        "key": "agent:main:ios-legacy-2-pr189467",
+        "agentId": "main",
+        "label": "Legacy nested new chat 2",
+        "parentSessionKey": "agent:main:pinned-dashboard-thread"
+      },
+      "response": {
+        "ok": true,
+        "key": "agent:main:ios-legacy-2-pr189467",
+        "sessionId": "209537a5-90cd-4f89-9051-ea61fbb78d8c",
+        "entry": {
+          "sessionId": "209537a5-90cd-4f89-9051-ea61fbb78d8c",
+          "lifecycleRevision": "5e0921f2-8842-418a-a76d-dc0f020fdd64",
+          "updatedAt": 1793473510116,
+          "sessionRoot": "/tmp/openclaw-test-state-pr189467-sidebar-render-233g2K/home/workspace",
+          "label": "Legacy nested new chat 2",
+          "delivery": {
+            "kind": "none"
+          },
+          "createdVia": "operator",
+          "createdActor": {
+            "type": "human",
+            "source": "profile",
+            "id": "gateway-owner"
+          },
+          "createdAt": 1793473510116,
+          "skillLibrarySelections": [],
+          "spawnDepth": 0,
+          "modelOverrideSource": "default",
+          "parentSessionKey": "agent:main:pinned-dashboard-thread",
+          "parentSessionId": "766a0feb-2c0c-48ce-94ad-8beab94f18fc"
+        },
+        "runStarted": false,
+        "publicRead": false,
+        "resolved": {
+          "modelProvider": "fixture",
+          "model": "proof"
+        }
+      }
+    },
+    {
+      "kind": "pre-patch native payload",
+      "request": {
+        "key": "agent:main:ios-legacy-3-pr189467",
+        "agentId": "main",
+        "label": "Legacy nested new chat 3",
+        "parentSessionKey": "agent:main:pinned-dashboard-thread"
+      },
+      "response": {
+        "ok": true,
+        "key": "agent:main:ios-legacy-3-pr189467",
+        "sessionId": "0339bc49-787f-48d8-83ba-ed7710ade3a6",
+        "entry": {
+          "sessionId": "0339bc49-787f-48d8-83ba-ed7710ade3a6",
+          "lifecycleRevision": "dd8b844b-eb7b-4433-ad7a-5867b6dfe79e",
+          "updatedAt": 1793473510166,
+          "sessionRoot": "/tmp/openclaw-test-state-pr189467-sidebar-render-233g2K/home/workspace",
+          "label": "Legacy nested new chat 3",
+          "delivery": {
+            "kind": "none"
+          },
+          "createdVia": "operator",
+          "createdActor": {
+            "type": "human",
+            "source": "profile",
+            "id": "gateway-owner"
+          },
+          "createdAt": 1793473510167,
+          "skillLibrarySelections": [],
+          "spawnDepth": 0,
+          "modelOverrideSource": "default",
+          "parentSessionKey": "agent:main:pinned-dashboard-thread",
+          "parentSessionId": "766a0feb-2c0c-48ce-94ad-8beab94f18fc"
+        },
+        "runStarted": false,
+        "publicRead": false,
+        "resolved": {
+          "modelProvider": "fixture",
+          "model": "proof"
+        }
+      }
+    },
+    {
+      "kind": "explicit fork",
+      "request": {
+        "key": "agent:main:ios-fork-pr189467",
+        "agentId": "main",
+        "label": "Fork of the selected conversation",
+        "parentSessionKey": "agent:main:pinned-dashboard-thread",
+        "fork": true
+      },
+      "response": {
+        "ok": true,
+        "key": "agent:main:ios-fork-pr189467",
+        "sessionId": "cf3f37f7-3824-447b-bfde-337060413004",
+        "entry": {
+          "sessionId": "cf3f37f7-3824-447b-bfde-337060413004",
+          "lifecycleRevision": "a8461f7a-9190-4974-915c-01171d27a3cc",
+          "updatedAt": 1793473510225,
+          "sessionRoot": "/tmp/openclaw-test-state-pr189467-sidebar-render-233g2K/home/workspace",
+          "label": "Fork of the selected conversation",
+          "delivery": {
+            "kind": "none"
+          },
+          "createdVia": "operator",
+          "createdActor": {
+            "type": "human",
+            "source": "profile",
+            "id": "gateway-owner"
+          },
+          "createdAt": 1793473510225,
+          "skillLibrarySelections": [],
+          "spawnDepth": 0,
+          "modelOverrideSource": "default",
+          "parentSessionKey": "agent:main:pinned-dashboard-thread",
+          "parentSessionId": "766a0feb-2c0c-48ce-94ad-8beab94f18fc",
+          "forkSource": {
+            "sessionKey": "agent:main:pinned-dashboard-thread",
+            "sessionId": "766a0feb-2c0c-48ce-94ad-8beab94f18fc"
+          },
+          "totalTokensFresh": false,
+          "forkedFromParent": true
+        },
+        "runStarted": false,
+        "publicRead": false,
+        "resolved": {
+          "modelProvider": "fixture",
+          "model": "proof"
+        }
+      }
+    },
+    {
+      "kind": "patched native payload",
+      "request": {
+        "key": "agent:main:ios-patched-pr189467",
+        "agentId": "main",
+        "label": "New chat (patched native payload)"
+      },
+      "response": {
+        "ok": true,
+        "key": "agent:main:ios-patched-pr189467",
+        "sessionId": "6a43120d-8af9-4d08-993b-d740e5833246",
+        "entry": {
+          "sessionId": "6a43120d-8af9-4d08-993b-d740e5833246",
+          "lifecycleRevision": "352fcbf7-41f1-43f1-855e-390736555268",
+          "updatedAt": 1793473511522,
+          "sessionRoot": "/tmp/openclaw-test-state-pr189467-sidebar-render-233g2K/home/workspace",
+          "label": "New chat (patched native payload)",
+          "delivery": {
+            "kind": "none"
+          },
+          "createdVia": "operator",
+          "createdActor": {
+            "type": "human",
+            "source": "profile",
+            "id": "gateway-owner"
+          },
+          "createdAt": 1793473511522,
+          "skillLibrarySelections": [],
+          "spawnDepth": 0,
+          "modelOverrideSource": "default",
+          "chatType": "direct",
+          "parentSessionKey": "agent:main:main"
+        },
+        "runStarted": false,
+        "publicRead": false,
+        "resolved": {
+          "modelProvider": "fixture",
+          "model": "proof"
+        }
+      }
+    }
+  ],
+  "sessionsListRows": [
+    {
+      "key": "agent:main:ios-patched-pr189467",
+      "label": "New chat (patched native payload)",
+      "parentSessionKey": "agent:main:main",
+      "parentSessionId": null,
+      "sidebarRoot": false,
+      "childSessions": null
+    },
+    {
+      "key": "agent:main:ios-fork-pr189467",
+      "label": "Fork of the selected conversation",
+      "parentSessionKey": "agent:main:pinned-dashboard-thread",
+      "parentSessionId": "766a0feb-2c0c-48ce-94ad-8beab94f18fc",
+      "sidebarRoot": false,
+      "childSessions": null
+    },
+    {
+      "key": "agent:main:ios-legacy-3-pr189467",
+      "label": "Legacy nested new chat 3",
+      "parentSessionKey": "agent:main:pinned-dashboard-thread",
+      "parentSessionId": "766a0feb-2c0c-48ce-94ad-8beab94f18fc",
+      "sidebarRoot": false,
+      "childSessions": null
+    },
+    {
+      "key": "agent:main:ios-legacy-2-pr189467",
+      "label": "Legacy nested new chat 2",
+      "parentSessionKey": "agent:main:pinned-dashboard-thread",
+      "parentSessionId": "766a0feb-2c0c-48ce-94ad-8beab94f18fc",
+      "sidebarRoot": false,
+      "childSessions": null
+    },
+    {
+      "key": "agent:main:ios-legacy-1-pr189467",
+      "label": "Legacy nested new chat 1",
+      "parentSessionKey": "agent:main:pinned-dashboard-thread",
+      "parentSessionId": "766a0feb-2c0c-48ce-94ad-8beab94f18fc",
+      "sidebarRoot": false,
+      "childSessions": null
+    },
+    {
+      "key": "agent:main:pinned-dashboard-thread",
+      "label": "Pinned dashboard thread",
+      "parentSessionKey": "agent:main:main",
+      "parentSessionId": null,
+      "sidebarRoot": false,
+      "childSessions": [
+        "agent:main:ios-fork-pr189467",
+        "agent:main:ios-legacy-1-pr189467",
+        "agent:main:ios-legacy-2-pr189467",
+        "agent:main:ios-legacy-3-pr189467"
+      ]
+    }
+  ],
+  "browser": {
+    "navigatedUrl": "http://127.0.0.1:37607/chat/main/pinned-dashboard-thread?gatewayUrl=ws%3A%2F%2F127.0.0.1%3A18024#token=[redacted fixture token]",
+    "gatewayUrl": "ws://127.0.0.1:18024",
+    "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36",
+    "gatewayPhase": "connected"
+  },
+  "sidebar": {
+    "selectedConversation": "agent:main:pinned-dashboard-thread",
+    "collapsedChildToggleCount": "4",
+    "childrenRenderedUnderSelectedConversation": [
+      {
+        "key": "agent:main:ios-legacy-1-pr189467",
+        "insideSelectedConversationChildren": 1
+      },
+      {
+        "key": "agent:main:ios-legacy-2-pr189467",
+        "insideSelectedConversationChildren": 1
+      },
+      {
+        "key": "agent:main:ios-legacy-3-pr189467",
+        "insideSelectedConversationChildren": 1
+      },
+      {
+        "key": "agent:main:ios-fork-pr189467",
+        "insideSelectedConversationChildren": 1
+      },
+      {
+        "key": "agent:main:ios-patched-pr189467",
+        "insideSelectedConversationChildren": 0
+      }
+    ],
+    "patchedRowPlacement": {
+      "insideAnyChildrenContainer": false,
+      "treeWrapperClass": "sidebar-session-tree",
+      "label": "New chat (patched native payload)"
+    },
+    "renderedRows": [
+      {
+        "key": "agent:main:ios-patched-pr189467",
+        "nested": false,
+        "label": "New chat (patched native payload)"
+      },
+      {
+        "key": "agent:main:pinned-dashboard-thread",
+        "nested": false,
+        "label": "Pinned dashboard thread 4"
+      },
+      {
+        "key": "agent:main:ios-fork-pr189467",
+        "nested": true,
+        "label": "Fork of the selected conversation"
+      },
+      {
+        "key": "agent:main:ios-legacy-3-pr189467",
+        "nested": true,
+        "label": "Legacy nested new chat 3"
+      },
+      {
+        "key": "agent:main:ios-legacy-2-pr189467",
+        "nested": true,
+        "label": "Legacy nested new chat 2"
+      },
+      {
+        "key": "agent:main:ios-legacy-1-pr189467",
+        "nested": true,
+        "label": "Legacy nested new chat 1"
+      }
+    ],
+    "screenshots": [
+      "sidebar-collapsed.png",
+      "sidebar-expanded.png",
+      "sidebar-nav-expanded.png"
+    ]
+  },
+  "assertions": {
+    "problems": [],
+    "passed": true
+  }
+}

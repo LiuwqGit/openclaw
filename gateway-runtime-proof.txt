@@ -1,0 +1,86 @@
+# Real Gateway runtime proof — PR #189467 (issue #189432)
+# Generated: 2026-10-31T16:34:41Z  Host: Linux (dev machine), Node v26.12.1
+# Real in-process Gateway + real on-disk SQLite session store; the two native
+# sessions.create payloads emitted by performStartNewSession were replayed verbatim.
+
+## sessions.create responses (persisted entry)
+### prePatchNativePayload
+request: {"key": "agent:main:ios-0fab2569-2e6b-45e3-a25f-c15658ce8254", "agentId": "main", "parentSessionKey": "agent:main:pinned-dashboard-thread"}
+persisted entry: {
+ "sessionId": "9ffafd74-631d-4201-a518-7f762ca75824",
+ "label": "New chat (pre-patch payload)",
+ "createdVia": "operator",
+ "spawnDepth": 0,
+ "parentSessionKey": "agent:main:pinned-dashboard-thread",
+ "parentSessionId": "d632b880-18a8-4a57-be17-28e78951087c",
+ "forkSource": null,
+ "forkedFromParent": null,
+ "fastMode": true,
+ "chatType": null,
+ "modelOverrideSource": "default"
+}
+resolved model: {"modelProvider": "mock-openai", "model": "pr189467-lineage-fixture"}
+
+### patchedNativePayload
+request: {"key": "agent:main:ios-cef576b3-023c-429b-aa35-f9eeb6dc5e13", "agentId": "main", "parentSessionKey": "(omitted)"}
+persisted entry: {
+ "sessionId": "75b95c03-54a6-4f4e-95a4-065929491ce1",
+ "label": "New chat (patched payload)",
+ "createdVia": "operator",
+ "spawnDepth": 0,
+ "parentSessionKey": "agent:main:main",
+ "parentSessionId": null,
+ "forkSource": null,
+ "forkedFromParent": null,
+ "fastMode": null,
+ "chatType": "direct",
+ "modelOverrideSource": "default"
+}
+resolved model: {"modelProvider": "mock-openai", "model": "pr189467-lineage-fixture"}
+
+### explicitForkPayload
+request: {"key": "agent:main:ios-4a307959-7fa7-4162-9107-66cfb7c7c2b3", "agentId": "main", "parentSessionKey": "agent:main:pinned-dashboard-thread", "fork": true}
+persisted entry: {
+ "sessionId": "6c3092c7-34ce-4c11-b025-565b76e86f4a",
+ "label": "Fork of the selected conversation",
+ "createdVia": "operator",
+ "spawnDepth": 0,
+ "parentSessionKey": "agent:main:pinned-dashboard-thread",
+ "parentSessionId": "d632b880-18a8-4a57-be17-28e78951087c",
+ "forkSource": {
+  "sessionKey": "agent:main:pinned-dashboard-thread",
+  "sessionId": "d632b880-18a8-4a57-be17-28e78951087c"
+ },
+ "forkedFromParent": true,
+ "fastMode": true,
+ "chatType": null,
+ "modelOverrideSource": "default"
+}
+resolved model: {"modelProvider": "mock-openai", "model": "pr189467-lineage-fixture"}
+
+## sessions.list rows (what the Control UI / PWA sidebar reads)
+{"key": "agent:main:ios-4a307959-7fa7-4162-9107-66cfb7c7c2b3", "label": "Fork of the selected conversation", "parentSessionKey": "agent:main:pinned-dashboard-thread", "parentSessionId": "d632b880-18a8-4a57-be17-28e78951087c", "createdVia": "operator", "spawnDepth": 0, "forkedFromParent": true, "childSessions": null, "fastMode": true, "effectiveFastMode": true}
+{"key": "agent:main:ios-cef576b3-023c-429b-aa35-f9eeb6dc5e13", "label": "New chat (patched payload)", "parentSessionKey": "agent:main:main", "parentSessionId": null, "createdVia": "operator", "spawnDepth": 0, "forkedFromParent": null, "childSessions": null, "fastMode": null, "effectiveFastMode": false}
+{"key": "agent:main:ios-0fab2569-2e6b-45e3-a25f-c15658ce8254", "label": "New chat (pre-patch payload)", "parentSessionKey": "agent:main:pinned-dashboard-thread", "parentSessionId": "d632b880-18a8-4a57-be17-28e78951087c", "createdVia": "operator", "spawnDepth": 0, "forkedFromParent": null, "childSessions": null, "fastMode": true, "effectiveFastMode": true}
+{"key": "agent:main:pinned-dashboard-thread", "label": "Pinned dashboard thread", "parentSessionKey": "agent:main:main", "parentSessionId": null, "createdVia": "operator", "spawnDepth": 0, "forkedFromParent": null, "childSessions": ["agent:main:ios-0fab2569-2e6b-45e3-a25f-c15658ce8254", "agent:main:ios-4a307959-7fa7-4162-9107-66cfb7c7c2b3"], "fastMode": true, "effectiveFastMode": true}
+
+## On-disk SQLite session_nodes rows (persisted lineage)
+{"table": "session_nodes", "session_key": "agent:main:pinned-dashboard-thread", "parent_session_key": "agent:main:main", "spawned_by": null, "fork_source_session_key": null, "created_via": "operator", "label": "Pinned dashboard thread"}
+{"table": "session_nodes", "session_key": "agent:main:ios-0fab2569-2e6b-45e3-a25f-c15658ce8254", "parent_session_key": "agent:main:pinned-dashboard-thread", "spawned_by": null, "fork_source_session_key": null, "created_via": "operator", "label": "New chat (pre-patch payload)"}
+{"table": "session_nodes", "session_key": "agent:main:ios-cef576b3-023c-429b-aa35-f9eeb6dc5e13", "parent_session_key": "agent:main:main", "spawned_by": null, "fork_source_session_key": null, "created_via": "operator", "label": "New chat (patched payload)"}
+{"table": "session_nodes", "session_key": "agent:main:ios-4a307959-7fa7-4162-9107-66cfb7c7c2b3", "parent_session_key": "agent:main:pinned-dashboard-thread", "spawned_by": null, "fork_source_session_key": "agent:main:pinned-dashboard-thread", "created_via": "operator", "label": "Fork of the selected conversation"}
+store file: /tmp/openclaw-pr189467-lineage-AYgKB6/.openclaw/agents/main/agent/openclaw-agent.sqlite
+
+## Control UI sidebar placement (real UI projection code over the real rows)
+projection source: ui/src/components/app-sidebar-session-parent.ts (resolveSidebarSessionParentKey + collectSidebarSessionChildKeys)
+mainSessionKeys: ['agent:main:main', 'main'] ( canonical agent main key (app-sidebar-agent-session-rows.ts canonicalMainKeys) )
+{"key": "agent:main:ios-4a307959-7fa7-4162-9107-66cfb7c7c2b3", "label": "Fork of the selected conversation", "persistedParentSessionKey": "agent:main:pinned-dashboard-thread", "controlUiSidebarParentKey": "agent:main:pinned-dashboard-thread", "controlUiPlacement": "nested child of agent:main:pinned-dashboard-thread"}
+{"key": "agent:main:ios-cef576b3-023c-429b-aa35-f9eeb6dc5e13", "label": "New chat (patched payload)", "persistedParentSessionKey": "agent:main:main", "controlUiSidebarParentKey": null, "controlUiPlacement": "independent top-level row"}
+{"key": "agent:main:ios-0fab2569-2e6b-45e3-a25f-c15658ce8254", "label": "New chat (pre-patch payload)", "persistedParentSessionKey": "agent:main:pinned-dashboard-thread", "controlUiSidebarParentKey": "agent:main:pinned-dashboard-thread", "controlUiPlacement": "nested child of agent:main:pinned-dashboard-thread"}
+{"key": "agent:main:pinned-dashboard-thread", "label": "Pinned dashboard thread", "persistedParentSessionKey": "agent:main:main", "controlUiSidebarParentKey": null, "controlUiPlacement": "independent top-level row"}
+sidebarChildKeysByParent: {
+ "agent:main:pinned-dashboard-thread": [
+  "agent:main:ios-0fab2569-2e6b-45e3-a25f-c15658ce8254",
+  "agent:main:ios-4a307959-7fa7-4162-9107-66cfb7c7c2b3"
+ ]
+}
