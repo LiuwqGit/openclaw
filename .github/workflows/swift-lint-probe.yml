@@ -1,0 +1,22 @@
+name: Swift format and lint probe
+
+on:
+  push:
+    branches: [chore/swift-lint-probe]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Run SwiftFormat and SwiftLint over the candidate
+        env:
+          CANDIDATE_REF: chore/proof-candidate-191076
+        run: bash proof/run-swift-lint-probe.sh "$CANDIDATE_REF"
