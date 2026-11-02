@@ -51,6 +51,38 @@ xcodebuild -version
 swift --version
 node --version
 
+log "pinned swiftformat and swiftlint"
+./scripts/install-swift-tools.sh "$WORKDIR/swift-tools" || exit 99
+export PATH="$WORKDIR/swift-tools:$PATH"
+swiftformat --version
+swiftlint version
+
+swiftformat --lint apps/shared/OpenClawKit/Sources/OpenClawChatUI \
+  --config config/swiftformat \
+  --unexclude "$PWD/apps/shared/OpenClawKit/Sources/OpenClawChatUI" \
+  >"$WORKDIR/swiftformat.log" 2>&1
+format_status=$?
+tail -n 40 "$WORKDIR/swiftformat.log"
+printf -- '--- swiftformat exit=%s\n' "$format_status"
+
+(
+  cd apps/ios
+  swiftlint lint --strict --quiet --config .swiftlint.yml \
+    ../shared/OpenClawKit/Sources/OpenClawChatUI/ChatMarkdownBlockViews.swift
+) >"$WORKDIR/swiftlint.log" 2>&1
+lint_status=$?
+tail -n 40 "$WORKDIR/swiftlint.log"
+printf -- '--- swiftlint exit=%s\n' "$lint_status"
+
+if [ "$format_status" -ne 0 ] || [ "$lint_status" -ne 0 ]; then
+  {
+    echo "## OpenClawKit table proof"
+    echo ""
+    echo "- result: **swift format/lint failed** (swiftformat=$format_status swiftlint=$lint_status)"
+  } >>"$SUMMARY"
+  exit 1
+fi
+
 log "node dependencies for the native protocol generator and the mermaid assets"
 npm install --global pnpm@12.15.0 >/dev/null 2>&1 || exit 94
 pnpm install --frozen-lockfile --prefer-offline --optional \
