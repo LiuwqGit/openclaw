@@ -1,0 +1,29 @@
+name: macOS toolchain probe
+
+on:
+  push:
+    branches: [chore/macos-runner-probe]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-latest]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    steps:
+      - run: |
+          sw_vers || true
+          uname -a
+          echo "--- xcodebuild ---"
+          xcodebuild -version || true
+          echo "--- swift ---"
+          swift --version || true
+          echo "--- installed Xcodes ---"
+          ls -d /Applications/Xcode*.app 2>/dev/null || true
+          echo "--- node ---"
+          node --version || true

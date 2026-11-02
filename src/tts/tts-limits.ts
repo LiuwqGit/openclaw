@@ -1,1 +1,0 @@
-export const DEFAULT_MAX_TEXT_LENGTH = 4096;
