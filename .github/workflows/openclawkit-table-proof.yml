@@ -1,0 +1,27 @@
+name: OpenClawKit table proof
+
+on:
+  push:
+    branches: [chore/macos-openclawkit-proof]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openclawkit-table-proof
+  cancel-in-progress: false
+
+jobs:
+  proof:
+    runs-on: macos-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Run the shared chat table proof
+        env:
+          CANDIDATE_REF: chore/proof-candidate-191076
+          UPSTREAM_URL: https://github.com/openclaw/openclaw.git
+        run: bash proof/run-openclawkit-table-proof.sh "$CANDIDATE_REF" "$UPSTREAM_URL"
