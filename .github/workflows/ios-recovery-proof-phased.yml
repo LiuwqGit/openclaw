@@ -1,0 +1,216 @@
+name: iOS ChatProTab recovery proof (phased)
+
+# Evidence harness for openclaw/openclaw#191474 (issue #191449), phased so that a
+# later phase running out of job time cannot take the earlier evidence with it:
+# every phase is followed by an always() artifact upload.
+#
+#   prepare        -> toolchain, dependencies, project generation, booted simulator
+#   build-head     -> build the PR head for testing
+#   test-head      -> execute the regression at the PR head       (expected GREEN)
+#   build-reverted -> re-apply main's screen-wide lock, rebuild
+#   test-reverted  -> execute against main's lock placement       (expected RED)
+#
+# This workflow lives only on the evidence branch. It is not part of the PR diff.
+
+on:
+  push:
+    branches: [proof/pr-191474-ios-recovery-phased]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-recovery-proof-phased
+  cancel-in-progress: false
+
+jobs:
+  proof:
+    runs-on: macos-latest
+    timeout-minutes: 350
+    env:
+      NODE_VERSION: "24.22.1"
+      HEAD_SHA: "2d584dfbf6774a422dff07978c8ef99f1683c2b4"
+      BASE_SHA: "94e2e06be0d44cc8adf5104f201f4f589d8c63b4"
+      CHANGED_SOURCE: "apps/ios/Sources/Design/ChatProTab.swift"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Prepare the toolchain, project and simulator
+        run: bash proof/ios-recovery-phase.sh prepare
+
+      - name: Build the PR head for testing
+        if: ${{ !cancelled() }}
+        run: bash proof/ios-recovery-phase.sh build-head
+
+      - name: Upload proof evidence so far (after build-head)
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-recovery-proof-logs
+          path: |
+            ${{ runner.temp }}/proof/summary.txt
+            ${{ runner.temp }}/proof/toolchain.txt
+            ${{ runner.temp }}/proof/simulator-inventory.txt
+            ${{ runner.temp }}/proof/harness-tree.txt
+            ${{ runner.temp }}/proof/*.log
+            ${{ runner.temp }}/proof/*.patch
+            ${{ runner.temp }}/proof/*.txt
+          if-no-files-found: warn
+          retention-days: 60
+          overwrite: true
+
+      - name: Execute the regression at the PR head (expected GREEN)
+        if: ${{ !cancelled() }}
+        run: bash proof/ios-recovery-phase.sh test-head
+
+      - name: Upload proof evidence so far (after head execution)
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-recovery-proof-logs
+          path: |
+            ${{ runner.temp }}/proof/summary.txt
+            ${{ runner.temp }}/proof/toolchain.txt
+            ${{ runner.temp }}/proof/simulator-inventory.txt
+            ${{ runner.temp }}/proof/harness-tree.txt
+            ${{ runner.temp }}/proof/*.log
+            ${{ runner.temp }}/proof/*.patch
+            ${{ runner.temp }}/proof/*.txt
+          if-no-files-found: warn
+          retention-days: 60
+          overwrite: true
+
+      - name: Re-apply main's screen-wide lock and rebuild
+        if: ${{ !cancelled() }}
+        run: bash proof/ios-recovery-phase.sh build-reverted
+
+      - name: Upload proof evidence so far (after reverted build)
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-recovery-proof-logs
+          path: |
+            ${{ runner.temp }}/proof/summary.txt
+            ${{ runner.temp }}/proof/toolchain.txt
+            ${{ runner.temp }}/proof/simulator-inventory.txt
+            ${{ runner.temp }}/proof/harness-tree.txt
+            ${{ runner.temp }}/proof/*.log
+            ${{ runner.temp }}/proof/*.patch
+            ${{ runner.temp }}/proof/*.txt
+          if-no-files-found: warn
+          retention-days: 60
+          overwrite: true
+
+      - name: Execute the regression against main's lock placement (expected RED)
+        if: ${{ !cancelled() }}
+        run: bash proof/ios-recovery-phase.sh test-reverted
+
+      - name: Export the rendered attachments
+        if: ${{ always() }}
+        run: |
+          set -uo pipefail
+          proof_dir="$RUNNER_TEMP/proof"
+          mkdir -p "$proof_dir/attachments"
+          for bundle in head-green reverted-red; do
+            path="$proof_dir/$bundle.xcresult"
+            out="$proof_dir/attachments/$bundle"
+            [[ -e "$path" ]] || continue
+            mkdir -p "$out"
+            if xcrun xcresulttool export attachments --path "$path" --output-path "$out" \
+              > "$proof_dir/attachment-export-$bundle.log" 2>&1; then
+              echo "exported $bundle attachments with 'xcresulttool export attachments'"
+            else
+              echo "::warning::bulk export unavailable for $bundle, falling back to per-reference export"
+              python3 - "$path" "$out" <<'PY' 2>&1 | tee -a "$proof_dir/attachment-export-$bundle.log"
+          import json, pathlib, subprocess, sys
+
+          bundle, out = sys.argv[1], pathlib.Path(sys.argv[2])
+          payload = json.loads(subprocess.run(
+              ["xcrun", "xcresulttool", "get", "--path", bundle, "--legacy", "--format", "json"],
+              check=True, capture_output=True, text=True).stdout)
+          references = []
+
+
+          def walk(node):
+              if isinstance(node, dict):
+                  payload_ref = node.get("payloadRef")
+                  if isinstance(payload_ref, dict) and payload_ref.get("id"):
+                      name = node.get("name", {})
+                      label = name.get("_value") if isinstance(name, dict) else None
+                      references.append((str(label or "attachment"), payload_ref["id"]))
+                  for value in node.values():
+                      walk(value)
+              elif isinstance(node, list):
+                  for value in node:
+                      walk(value)
+
+
+          walk(payload)
+          print(f"found {len(references)} payload references")
+          for index, (name, identifier) in enumerate(references):
+              safe = "".join(c if c.isalnum() or c in "-_." else "_" for c in name)
+              target = out / f"{index:03d}-{safe}"
+              subprocess.run(["xcrun", "xcresulttool", "export", "--path", bundle,
+                              "--id", identifier, "--output-path", str(target)], check=False)
+          PY
+            fi
+            find "$out" -type f | sort
+          done
+          find "$proof_dir/attachments" -type f 2>/dev/null | sort > "$proof_dir/attachment-index.txt" || true
+
+      - name: Publish the step summary
+        if: ${{ always() }}
+        run: |
+          set -uo pipefail
+          {
+            echo "## iOS recovery proof — openclaw/openclaw#191474"
+            echo
+            echo '```text'
+            cat "$RUNNER_TEMP/proof/summary.txt" 2>/dev/null || echo "(no summary produced)"
+            echo '```'
+            echo
+            echo '```text'
+            for log in test-head-green test-reverted-red; do
+              path="$RUNNER_TEMP/proof/$log.log"
+              [[ -f "$path" ]] || continue
+              echo "== $log =="
+              grep -E "Test Suite|Test Case .*(passed|failed)|XCTAssertTrue failed|error:" "$path" | tail -40
+            done
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload proof logs and rendered attachments
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-recovery-proof-logs
+          path: |
+            ${{ runner.temp }}/proof/summary.txt
+            ${{ runner.temp }}/proof/toolchain.txt
+            ${{ runner.temp }}/proof/simulator-inventory.txt
+            ${{ runner.temp }}/proof/harness-tree.txt
+            ${{ runner.temp }}/proof/*.log
+            ${{ runner.temp }}/proof/*.patch
+            ${{ runner.temp }}/proof/*.txt
+            ${{ runner.temp }}/proof/attachments/
+          if-no-files-found: warn
+          retention-days: 60
+          overwrite: true
+
+      - name: Upload result bundles
+        if: ${{ always() }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-recovery-proof-xcresults
+          path: ${{ runner.temp }}/proof/*.xcresult
+          if-no-files-found: warn
+          retention-days: 60
+          overwrite: true
