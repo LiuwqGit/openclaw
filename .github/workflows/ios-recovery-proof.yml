@@ -1,0 +1,90 @@
+name: iOS ChatProTab recovery proof
+
+# Evidence harness for openclaw/openclaw#191474 (issue #191449).
+# Upstream gates every Apple *test* lane behind !ordinaryPullRequest, so a fork
+# pull_request only compiles the iOS sources and never executes them. This job
+# executes the regression the PR adds on a real iOS simulator: GREEN at the PR
+# head, RED with main's screen-wide lock placement re-applied, and a build
+# failure against main's unmodified ChatProTab.swift.
+#
+# This workflow lives only on the evidence branch. It is not part of the PR diff.
+
+on:
+  push:
+    branches: [proof/pr-191474-ios-recovery]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-recovery-proof
+  cancel-in-progress: false
+
+jobs:
+  proof:
+    runs-on: macos-latest
+    timeout-minutes: 340
+    env:
+      NODE_VERSION: "24.22.1"
+      HEAD_SHA: "e909bf123373946995eac6a70232a2fabc140b8d"
+      BASE_SHA: "94e2e06be0d44cc8adf5104f201f4f589d8c63b4"
+      CHANGED_SOURCE: "apps/ios/Sources/Design/ChatProTab.swift"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Execute the recovery regression on an iOS simulator
+        run: bash proof/ios-recovery-proof.sh
+
+      - name: Publish the step summary
+        if: ${{ !cancelled() }}
+        run: |
+          set -uo pipefail
+          {
+            echo "## iOS recovery proof — openclaw/openclaw#191474"
+            echo
+            echo '```text'
+            cat "$RUNNER_TEMP/proof/summary.txt" 2>/dev/null || echo "(no summary produced)"
+            echo '```'
+            echo
+            echo '```text'
+            for log in test-head-green test-reverted-red; do
+              path="$RUNNER_TEMP/proof/$log.log"
+              [[ -f "$path" ]] || continue
+              echo "== $log =="
+              grep -E "Test Suite|Test Case .*(passed|failed)|XCTAssertTrue failed|error:" "$path" | tail -40
+            done
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload proof logs and rendered attachments
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-recovery-proof-logs
+          path: |
+            ${{ runner.temp }}/proof/summary.txt
+            ${{ runner.temp }}/proof/toolchain.txt
+            ${{ runner.temp }}/proof/simulator-inventory.txt
+            ${{ runner.temp }}/proof/*.log
+            ${{ runner.temp }}/proof/*.patch
+            ${{ runner.temp }}/proof/attachment-index.txt
+            ${{ runner.temp }}/proof/attachments/
+          if-no-files-found: warn
+          retention-days: 60
+
+      - name: Upload result bundles
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-recovery-proof-xcresults
+          path: ${{ runner.temp }}/proof/*.xcresult
+          if-no-files-found: warn
+          retention-days: 60
