@@ -1,0 +1,47 @@
+name: iOS sidebar selection proof
+
+on:
+  push:
+    branches: [proof/pr-192299-ios-sidebar-selection]
+  workflow_dispatch:
+    inputs:
+      candidate_ref:
+        description: "Fork branch carrying the patch plus the rendered regression"
+        required: false
+        default: "chore/proof-candidate-192299"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-sidebar-selection-proof
+  cancel-in-progress: false
+
+jobs:
+  proof:
+    runs-on: macos-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.22.1"
+
+      - name: Run the rendered sidebar selection proof
+        env:
+          CANDIDATE_REF: ${{ github.event.inputs.candidate_ref || 'chore/proof-candidate-192299' }}
+          FORK_URL: https://github.com/LiuwqGit/openclaw.git
+          UPSTREAM_URL: https://github.com/openclaw/openclaw.git
+        run: bash proof/run-ios-sidebar-selection-proof.sh "$CANDIDATE_REF" "$UPSTREAM_URL"
+
+      - name: Upload proof evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-sidebar-selection-proof
+          path: ${{ runner.temp }}/ios-sidebar-selection-proof/out/
+          if-no-files-found: warn
+          retention-days: 30
