@@ -1,0 +1,12 @@
+diff --git a/apps/ios/project.yml b/apps/ios/project.yml
+index b2303769..21c572ac 100644
+--- a/apps/ios/project.yml
++++ b/apps/ios/project.yml
+@@ -81,7 +81,6 @@ targets:
+         embed: true
+       # A companion watch application belongs in the standard Watch bundle location.
+       # PlugIns is for extension products and breaks paired watch installation.
+-      - target: OpenClawWatchApp
+       - package: OpenClawKit
+       - package: OpenClawKit
+         product: OpenClawChatUI

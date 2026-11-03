@@ -1,0 +1,12 @@
+diff --git a/apps/ios/Sources/Design/ChatProTab.swift b/apps/ios/Sources/Design/ChatProTab.swift
+index 213730ea..7e25e350 100644
+--- a/apps/ios/Sources/Design/ChatProTab.swift
++++ b/apps/ios/Sources/Design/ChatProTab.swift
+@@ -48,6 +48,7 @@ struct ChatProTab: View {
+ 
+     var body: some View {
+         self.content
++            .disabled(self.isChatMutationLocked)
+             .task {
+                 if self.speech == nil {
+                     let gateway = self.appModel.operatorSession

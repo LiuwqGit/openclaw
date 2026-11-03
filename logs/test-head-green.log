@@ -1,0 +1,78 @@
+Command line invocation:
+    /Applications/Xcode_26.6.app/Contents/Developer/usr/bin/xcodebuild -project apps/ios/OpenClaw.xcodeproj -scheme OpenClaw -configuration Debug CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=NO CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER= COMPILER_INDEX_STORE_ENABLE=NO ARCHS=arm64 ONLY_ACTIVE_ARCH=YES -destination "platform=iOS Simulator,id=1F0A9C4B-2DFC-444E-B162-696E5078A72B" -derivedDataPath /Users/runner/work/_temp/DerivedData -resultBundlePath /Users/runner/work/_temp/proof/head-green.xcresult -parallel-testing-enabled NO -collect-test-diagnostics never -test-timeouts-enabled YES -default-test-execution-time-allowance 600 -maximum-test-execution-time-allowance 1200 "-only-testing:OpenClawTests/ChatProTabRecoveryControlsTests" test-without-building
+
+Build settings from command line:
+    ARCHS = arm64
+    CODE_SIGN_IDENTITY = -
+    CODE_SIGN_STYLE = Manual
+    CODE_SIGNING_ALLOWED = YES
+    CODE_SIGNING_REQUIRED = NO
+    COMPILER_INDEX_STORE_ENABLE = NO
+    DEVELOPMENT_TEAM = 
+    ONLY_ACTIVE_ARCH = YES
+    PROVISIONING_PROFILE_SPECIFIER = 
+
+Resolve Package Graph
+
+
+Resolved source packages:
+  swabble: /Users/runner/work/openclaw/openclaw/apps/swabble
+  WebRTC: https://github.com/stasel/WebRTC.git @ 154.0.0
+  swift-markdown: https://github.com/swiftlang/swift-markdown @ 0.9.0
+  cmark-gfm: https://github.com/swiftlang/swift-cmark.git @ 0.9.0
+  SwiftMath: https://github.com/mgriebling/SwiftMath @ 1.7.3
+  Sodium: https://github.com/jedisct1/swift-sodium.git @ cfd195c
+  OpenClawKit: /Users/runner/work/openclaw/openclaw/apps/shared/OpenClawKit
+  ElevenLabsKit: https://github.com/steipete/ElevenLabsKit @ 0.1.3
+  Commander: https://github.com/steipete/Commander.git @ 0.3.0
+  GRDB: https://github.com/groue/GRDB.swift.git @ 7.11.1
+
+Writing result bundle at path:
+	/Users/runner/work/_temp/proof/head-green.xcresult
+
+--- xcodebuild: WARNING: Using the first of multiple matching destinations:
+{ platform:iOS Simulator, arch:arm64, id:1F0A9C4B-2DFC-444E-B162-696E5078A72B, OS:26.5, name:iPhone Air }
+{ platform:iOS Simulator, arch:x86_64, id:1F0A9C4B-2DFC-444E-B162-696E5078A72B, OS:26.5, name:iPhone Air }
+2026-11-03 11:27:32.251447+0000 OpenClaw[19663:61062] OpenClaw: installing uncaught exception handler
+2026-11-03 11:27:32.475907+0000 OpenClaw[19663:61327] [GatewayDiag] [2026-11-03T11:27:32.458Z] watch messaging: activation complete state=activated error=none
+2026-11-03 11:27:32.478105+0000 OpenClaw[19663:61062] [TalkMode] disabled
+2026-11-03 11:27:32.509786+0000 OpenClaw[19663:61327] [WC] -[WCSession onqueue_handleUpdateSessionState:]_block_invoke dropping as pairingIDs no longer match. pairingID (null), client pairingID: (null)
+2026-11-03 11:27:32.562112+0000 OpenClaw[19663:61342] [GatewayDiag] [2026-11-03T11:27:32.561Z] app delegate: didFinishLaunching
+2026-11-03 11:27:32.601124+0000 OpenClaw[19663:61327] [WC] WCSession is not paired
+IOSurfaceClientSetSurfaceNotify failed e00002c7
+2026-11-03 11:27:33.678633+0000 OpenClaw[19663:61062] fopen failed for data file: errno = 2 (No such file or directory)
+2026-11-03 11:27:33.982887+0000 OpenClaw[19663:61062] fopen failed for data file: errno = 2 (No such file or directory)
+2026-11-03 11:27:34.071104+0000 OpenClaw[19663:61327] [General] Failed to send CA Event for app launch measurements for ca_event_type: 0 event_name: com.apple.app_launch_measurement.FirstFramePresentationMetric
+2026-11-03 11:27:34.520982+0000 OpenClaw[19663:61062] [OpenClawChatUI] refresh history failed not connected
+2026-11-03 11:27:34.533448+0000 OpenClaw[19663:61062] [OpenClawChatUI] refresh history failed not connected
+2026-11-03 11:27:34.631773+0000 OpenClaw[19663:61343] [General] Failed to send CA Event for app launch measurements for ca_event_type: 1 event_name: com.apple.app_launch_measurement.ExtendedLaunchMetrics
+Test Suite 'Selected tests' started at 2026-11-03 11:27:34.955.
+Test Suite 'OpenClawTests.xctest' started at 2026-11-03 11:27:34.956.
+Test Suite 'ChatProTabRecoveryControlsTests' started at 2026-11-03 11:27:34.956.
+Test Case '-[OpenClawTests.ChatProTabRecoveryControlsTests testChatMutationLockCoversEveryPendingGatewayOwner]' started.
+Test Case '-[OpenClawTests.ChatProTabRecoveryControlsTests testChatMutationLockCoversEveryPendingGatewayOwner]' passed (0.001 seconds).
+Test Case '-[OpenClawTests.ChatProTabRecoveryControlsTests testRecoveryControlsStayReachableWhileAutomaticPreflightRetries]' started.
+2026-11-03 11:27:35.048251+0000 OpenClaw[19663:61062] [WC] already in progress or activated
+2026-11-03 11:27:35.048680+0000 OpenClaw[19663:61062] [TalkMode] disabled
+2026-11-03 11:27:35.316591+0000 OpenClaw[19663:61062] [OpenClawChatUI] refresh history failed not connected
+Test Case '-[OpenClawTests.ChatProTabRecoveryControlsTests testRecoveryControlsStayReachableWhileAutomaticPreflightRetries]' passed (1.250 seconds).
+Test Suite 'ChatProTabRecoveryControlsTests' passed at 2026-11-03 11:27:36.209.
+	 Executed 2 tests, with 0 failures (0 unexpected) in 1.251 (1.253) seconds
+Test Suite 'OpenClawTests.xctest' passed at 2026-11-03 11:27:36.210.
+	 Executed 2 tests, with 0 failures (0 unexpected) in 1.251 (1.254) seconds
+Test Suite 'Selected tests' passed at 2026-11-03 11:27:36.210.
+	 Executed 2 tests, with 0 failures (0 unexpected) in 1.251 (1.255) seconds
+2026-11-03 11:27:36.276525+0000 OpenClaw[19663:61062] [WatchExecApproval] watch approval snapshot failed reason=gateway_changed
+2026-11-03 11:27:36.276719+0000 OpenClaw[19663:61062] [WatchExecApproval] watch approval snapshot error=WATCH_UNAVAILABLE: no paired Apple Watch
+2026-11-03 11:27:36.276995+0000 OpenClaw[19663:61323] [GatewayDiag] [2026-11-03T11:27:36.276Z] watch exec approval: sync snapshot failed reason=gateway_changed error=WATCH_UNAVAILABLE: no paired Apple Watch
+2026-11-03 11:27:36.283675+0000 OpenClaw[19663:61062] [OpenClawChatUI] refresh history failed not connected
+2026-11-03 11:27:36.728 xcodebuild[18370:57317] [MT] IDETestOperationsObserverDebug: 16.947 elapsed -- Testing started completed.
+2026-11-03 11:27:36.728 xcodebuild[18370:57317] [MT] IDETestOperationsObserverDebug: 0.000 sec, +0.000 sec -- start
+2026-11-03 11:27:36.728 xcodebuild[18370:57317] [MT] IDETestOperationsObserverDebug: 16.947 sec, +16.947 sec -- end
+
+Test session results, code coverage, and logs:
+	/Users/runner/work/_temp/proof/head-green.xcresult
+
+** TEST EXECUTE SUCCEEDED **
+
+Testing started

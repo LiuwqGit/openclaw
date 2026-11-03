@@ -1,0 +1,93 @@
+
+Rendered controls:
+view(UIWindow) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(UITransitionView) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(UIDropShadowView) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(_UIHostingView<ModifiedContent<ModifiedContent<ModifiedContent<ModifiedContent<ChatRecoveryRenderedOwner, _EnvironmentKeyWritingModifier<Optional<AppAppearanceModel>>>, _EnvironmentKeyWritingModifier<Optional<NodeAppModel>>>, _EnvironmentKeyWritingModifier<Optional<VoiceWakeManager>>>, _EnvironmentKeyWritingModifier<Optional<GatewayConnectionController>>>>) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(UIKitPlatformViewHost<PlatformViewControllerRepresentableAdaptor<NavigationStackRepresentable>>) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(UILayoutContainerView) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(FloatingBarContainerView) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(_UIPointerInteractionAssistantEffectContainerView) id=- label=- frame=0,0,0x0 hidden=false alpha=1.0 interaction=false
+view(FloatingBarHostingView<FloatingBarContainer>) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(UIKitNavigationBar) id=- label=- frame=0,68,420x54 hidden=false alpha=1.0 interaction=true
+view(_UIPointerInteractionAssistantEffectContainerView) id=- label=- frame=0,0,0x0 hidden=false alpha=1.0 interaction=false
+view(NavigationBarContentView) id=- label=- frame=0,0,420x54 hidden=false alpha=1.0 interaction=true
+view(NavigationBarTransitionContainer) id=- label=- frame=0,0,420x54 hidden=false alpha=1.0 interaction=true
+view(NavigationBarPlatterContainer) id=- label=- frame=0,0,420x54 hidden=false alpha=1.0 interaction=true
+view(PlatterView) id=- label=- frame=348,0,52x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=-2,-2,56x48 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=2,1,47x40 hidden=false alpha=1.0 interaction=true
+view(PlatterContentView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(PlatterGlassView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(SubviewContainerView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(PlatterItemView) id=- label=- frame=4,0,44x44 hidden=false alpha=1.0 interaction=true
+view(ItemWrapperView) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=true
+view(_UITAMICAdaptorView) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=true
+view(UIKitBarItemHost<BarItemView>) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=true
+view(_UIInteractionView<_UIScrollPocketInteraction, CoreInteractionRepresentableAdaptor<ScrollPocketElementInteractionRepresentable>>) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=true
+view(_UIInteractionView<_UIScrollPocketInteraction, CoreInteractionRepresentableAdaptor<ScrollPocketElementInteractionRepresentable>>) id=- label=- frame=5,5,32x32 hidden=false alpha=1.0 interaction=true
+view(PlatterView) id=- label=- frame=84,0,46x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=0,0,46x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=0,0,46x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=-2,-2,50x48 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=2,1,41x40 hidden=false alpha=1.0 interaction=true
+view(PlatterContentView) id=- label=- frame=0,0,46x44 hidden=false alpha=1.0 interaction=true
+view(PlatterGlassView) id=- label=- frame=0,0,46x44 hidden=false alpha=1.0 interaction=true
+view(SubviewContainerView) id=- label=- frame=0,0,46x44 hidden=false alpha=1.0 interaction=true
+view(PlatterItemView) id=- label=- frame=4,0,38x44 hidden=false alpha=1.0 interaction=true
+view(ItemWrapperView) id=- label=- frame=0,0,38x44 hidden=false alpha=1.0 interaction=true
+view(_UITAMICAdaptorView) id=- label=- frame=0,0,38x44 hidden=false alpha=1.0 interaction=true
+view(UIKitBarItemHost<BarItemView>) id=- label=- frame=0,0,38x44 hidden=false alpha=1.0 interaction=true
+view(_UIInteractionView<_UIScrollPocketInteraction, CoreInteractionRepresentableAdaptor<ScrollPocketElementInteractionRepresentable>>) id=- label=- frame=0,0,38x44 hidden=false alpha=1.0 interaction=true
+view(_UIInteractionView<_UIScrollPocketInteraction, CoreInteractionRepresentableAdaptor<ScrollPocketElementInteractionRepresentable>>) id=- label=- frame=0,3,38x38 hidden=false alpha=1.0 interaction=true
+view(PlatterView) id=- label=- frame=20,0,52x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=-2,-2,56x48 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=2,1,47x40 hidden=false alpha=1.0 interaction=true
+view(PlatterContentView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(PlatterGlassView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(SubviewContainerView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(PlatterItemView) id=- label=- frame=4,0,44x44 hidden=false alpha=1.0 interaction=true
+view(ItemWrapperView) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=true
+view(_UITAMICAdaptorView) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=true
+view(UIKitBarItemHost<BarItemView>) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=true
+view(_UIInteractionView<_UIScrollPocketInteraction, CoreInteractionRepresentableAdaptor<ScrollPocketElementInteractionRepresentable>>) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=true
+view(_UIInteractionView<_UIScrollPocketInteraction, CoreInteractionRepresentableAdaptor<ScrollPocketElementInteractionRepresentable>>) id=- label=- frame=4,4,36x36 hidden=false alpha=1.0 interaction=true
+view(UIView) id=- label=- frame=0,0,420x54 hidden=false alpha=1.0 interaction=false
+view(HostedViewContainer) id=- label=- frame=0,0,420x54 hidden=false alpha=1.0 interaction=true
+view(_UIBarBackground) id=- label=- frame=0,-68,420x122 hidden=false alpha=1.0 interaction=false
+view(UINavigationTransitionView) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(UIViewControllerWrapperView) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(HostingView) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(_UIInheritedView) id=- label=- frame=10,764,400x104 hidden=false alpha=1.0 interaction=true
+view(_UIInheritedView) id=- label=- frame=0,0,400x104 hidden=false alpha=1.0 interaction=true
+view(_UIInheritedView) id=- label=- frame=0,0,0x0 hidden=false alpha=1.0 interaction=true
+view(UIPlatformGlassInteractionView) id=- label=- frame=0,0,400x104 hidden=false alpha=1.0 interaction=true
+view(_UIInheritedView) id=- label=- frame=0,0,400x104 hidden=false alpha=1.0 interaction=true
+view(PortalGroupMarkerView) id=- label=- frame=348,53,44x44 hidden=false alpha=1.0 interaction=true
+view(UIKitButtonHost) id=- label=- frame=304,53,44x44 hidden=false alpha=1.0 interaction=true
+view(HostingUIButton) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=false controlEnabled=false
+view(UIKitButtonHost) id=- label=- frame=260,53,44x44 hidden=false alpha=1.0 interaction=true
+view(HostingUIButton) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=false controlEnabled=false
+view(UIKitButtonHost) id=- label=- frame=178,53,82x44 hidden=false alpha=1.0 interaction=true
+view(HostingUIButton) id=- label=- frame=0,0,82x44 hidden=false alpha=1.0 interaction=false controlEnabled=false
+view(UIKitButtonHost) id=- label=- frame=7,53,44x44 hidden=false alpha=1.0 interaction=true
+view(HostingUIButton) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=false controlEnabled=false
+view(UIKitPlatformViewHost<PlatformViewRepresentableAdaptor<ChatComposerTextViewIOS>>) id=- label=- frame=13,11,372x24 hidden=false alpha=1.0 interaction=false
+view(ChatComposerUITextView) id=chat-message-input label=- frame=0,0,372x24 hidden=false alpha=1.0 interaction=true
+view(_UIScrollViewScrollIndicator) id=- label=- frame=3,18,366x3 hidden=false alpha=0.0 interaction=true
+view(UIView) id=- label=- frame=0,0,366x3 hidden=false alpha=1.0 interaction=true
+view(_UITextContainerView) id=- label=- frame=0,0,372x17 hidden=false alpha=1.0 interaction=true
+view(_UITextLayoutCanvasView) id=- label=- frame=0,0,372x17 hidden=false alpha=1.0 interaction=true
+view(_UITextLayoutFragmentView) id=- label=- frame=0,0,0x17 hidden=false alpha=1.0 interaction=true
+view(UIView) id=- label=- frame=0,0,372x17 hidden=false alpha=1.0 interaction=true
+view(_UITextLayoutView) id=- label=- frame=0,0,0x0 hidden=false alpha=1.0 interaction=true
+view(PlatformContainer) id=- label=- frame=6,128,408x626 hidden=false alpha=1.0 interaction=false
+view(HostingScrollView) id=- label=- frame=0,0,408x626 hidden=false alpha=1.0 interaction=true
+view(PlatformGroupContainer) id=- label=- frame=0,0,408x61 hidden=false alpha=1.0 interaction=true
+view(UIKitPlatformViewHost<PlatformViewRepresentableAdaptor<CircularUIKitProgressView>>) id=- label=- frame=30,19,14x14 hidden=false alpha=1.0 interaction=true
+view(SwiftUIActivityIndicatorView) id=- label=- frame=0,0,14x14 hidden=false alpha=1.0 interaction=true
+view(UIImageView) id=- label=- frame=0,0,14x14 hidden=false alpha=1.0 interaction=false

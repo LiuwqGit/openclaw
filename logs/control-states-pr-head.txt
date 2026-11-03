@@ -1,0 +1,6 @@
+recovery-toolbar-live-while-chat-locked
+toolbarItems: 3
+toolbarInteractive: 3
+toolbarDimmed: 0
+lockedChatControls: 4
+composerRendered: true

@@ -1,0 +1,8 @@
+host: 26.6.2 / Xcode 26.6 Build version 17F113
+head proven: c8f0e75fb99f71c7429ed1f3e3a8157b38fc1649 (PR head 2d584dfbf6774a422dff07978c8ef99f1683c2b4)
+simulator: 1F0A9C4B-2DFC-444E-B162-696E5078A72B
+RESULT prepare: simulator booted, project generated
+RESULT head build-for-testing: SUCCEEDED
+RESULT head execution: GREEN (xcodebuild exit 0)
+RESULT behaviour-reverted build: SUCCEEDED
+RESULT behaviour-reverted execution: RED (xcodebuild exit 65), as required

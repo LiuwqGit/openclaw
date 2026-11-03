@@ -1,0 +1,60 @@
+    /usr/bin/codesign --force --sign - --timestamp\=none --preserve-metadata\=identifier,entitlements,flags --generate-entitlement-der /Users/runner/work/_temp/DerivedData/Build/Products/Debug-iphonesimulator/OpenClaw.app/PlugIns/OpenClawTests.xctest/Frameworks/SwabbleKit_-13478B7CD4DB720E_PackageProduct.framework
+/Users/runner/work/_temp/DerivedData/Build/Products/Debug-iphonesimulator/OpenClaw.app/PlugIns/OpenClawTests.xctest/Frameworks/SwabbleKit_-13478B7CD4DB720E_PackageProduct.framework: replacing existing signature
+
+ProcessInfoPlistFile /Users/runner/work/_temp/DerivedData/Build/Products/Debug-iphonesimulator/OpenClaw.app/PlugIns/OpenClawTests.xctest/Info.plist /Users/runner/work/openclaw/openclaw/apps/ios/Tests/Info.plist (in target 'OpenClawTests' from project 'OpenClaw')
+    cd /Users/runner/work/openclaw/openclaw/apps/ios
+    builtin-infoPlistUtility /Users/runner/work/openclaw/openclaw/apps/ios/Tests/Info.plist -producttype com.apple.product-type.bundle.unit-test -expandbuildsettings -format binary -platform iphonesimulator -scanforprivacyfile /Users/runner/work/_temp/DerivedData/Build/Products/Debug-iphonesimulator/OpenClaw.app/PlugIns/OpenClawTests.xctest/GRDB_GRDB.bundle -scanforprivacyfile /Users/runner/work/_temp/DerivedData/Build/Products/Debug-iphonesimulator/OpenClaw.app/PlugIns/OpenClawTests.xctest/OpenClawKit_OpenClawChatUI.bundle -scanforprivacyfile /Users/runner/work/_temp/DerivedData/Build/Products/Debug-iphonesimulator/OpenClaw.app/PlugIns/OpenClawTests.xctest/OpenClawKit_OpenClawKit.bundle -scanforprivacyfile /Users/runner/work/_temp/DerivedData/Build/Products/Debug-iphonesimulator/OpenClaw.app/PlugIns/OpenClawTests.xctest/OpenClawKit_OpenClawProtocol.bundle -scanforprivacyfile /Users/runner/work/_temp/DerivedData/Build/Products/Debug-iphonesimulator/OpenClaw.app/PlugIns/OpenClawTests.xctest/SwiftMath_SwiftMath.bundle -o /Users/runner/work/_temp/DerivedData/Build/Products/Debug-iphonesimulator/OpenClaw.app/PlugIns/OpenClawTests.xctest/Info.plist
+
+ExtractAppIntentsMetadata (in target 'OpenClawTests' from project 'OpenClaw')
+    cd /Users/runner/work/openclaw/openclaw/apps/ios
+    /Applications/Xcode_26.6.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/appintentsmetadataprocessor --toolchain-dir /var/run/com.apple.security.cryptexd/mnt/com.apple.MobileAsset.MetalToolchain-v17.6.109.0.YX87Qy/Metal.xctoolchain --module-name OpenClawTests --sdk-root /Applications/Xcode_26.6.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator26.5.sdk --xcode-version 17F113 --platform-family iOS --deployment-target 26.2 --bundle-identifier ai.openclawfoundation.app.debug.tests --output /Users/runner/work/_temp/DerivedData/Build/Products/Debug-iphonesimulator/OpenClaw.app/PlugIns/OpenClawTests.xctest --target-triple arm64-apple-ios26.2-simulator --binary-file /Users/runner/work/_temp/DerivedData/Build/Products/Debug-iphonesimulator/OpenClaw.app/PlugIns/OpenClawTests.xctest/OpenClawTests --dependency-file /Users/runner/work/_temp/DerivedData/Build/Intermediates.noindex/OpenClaw.build/Debug-iphonesimulator/OpenClawTests.build/Objects-normal/arm64/OpenClawTests_dependency_info.dat --stringsdata-file /Users/runner/work/_temp/DerivedData/Build/Intermediates.noindex/OpenClaw.build/Debug-iphonesimulator/OpenClawTests.build/Objects-normal/arm64/ExtractedAppShortcutsMetadata.stringsdata --source-file-list /Users/runner/work/_temp/DerivedData/Build/Intermediates.noindex/OpenClaw.build/Debug-iphonesimulator/OpenClawTests.build/Objects-normal/arm64/OpenClawTests.SwiftFileList --metadata-file-list /Users/runner/work/_temp/DerivedData/Build/Intermediates.noindex/OpenClaw.build/Debug-iphonesimulator/OpenClawTests.build/OpenClawTests.DependencyMetadataFileList --static-metadata-file-list /Users/runner/work/_temp/DerivedData/Build/Intermediates.noindex/OpenClaw.build/Debug-iphonesimulator/OpenClawTests.build/OpenClawTests.DependencyStaticMetadataFileList --swift-const-vals-list /Users/runner/work/_temp/DerivedData/Build/Intermediates.noindex/OpenClaw.build/Debug-iphonesimulator/OpenClawTests.build/Objects-normal/arm64/OpenClawTests.SwiftConstValuesFileList --compile-time-extraction --deployment-aware-processing --validate-assistant-intents --no-app-shortcuts-localization
+2026-11-03 11:28:10.133 appintentsmetadataprocessor[22172:68126] Starting appintentsmetadataprocessor export
+2026-11-03 11:28:10.838 appintentsmetadataprocessor[22172:68126] Extracted no relevant App Intents symbols, skipping writing output
+
+CopySwiftLibs /Users/runner/work/_temp/DerivedData/Build/Products/Debug-iphonesimulator/OpenClaw.app/PlugIns/OpenClawTests.xctest (in target 'OpenClawTests' from project 'OpenClaw')
+    cd /Users/runner/work/openclaw/openclaw/apps/ios
+    builtin-swiftStdLibTool --copy --verbose --sign - --scan-executable /Users/runner/work/_temp/DerivedData/Build/Products/Debug-iphonesimulator/OpenClaw.app/PlugIns/OpenClawTests.xctest/OpenClawTests --scan-folder /Users/runner/work/_temp/DerivedData/Build/Products/Debug-iphonesimulator/OpenClaw.app/PlugIns/OpenClawTests.xctest/Frameworks --scan-folder /Users/runner/work/_temp/DerivedData/Build/Products/Debug-iphonesimulator/OpenClaw.app/PlugIns/OpenClawTests.xctest/PlugIns --scan-folder /Users/runner/work/_temp/DerivedData/Build/Products/Debug-iphonesimulator/OpenClaw.app/PlugIns/OpenClawTests.xctest/SystemExtensions --scan-folder /Users/runner/work/_temp/DerivedData/Build/Products/Debug-iphonesimulator/OpenClaw.app/PlugIns/OpenClawTests.xctest/Extensions --scan-folder /Users/runner/work/_temp/DerivedData/Build/Products/Debug-iphonesimulator/PackageFrameworks/SwabbleKit_-13478B7CD4DB720E_PackageProduct.framework --scan-folder /Applications/Xcode_26.6.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator26.5.sdk/System/Library/Frameworks/AppIntents.framework --platform iphonesimulator --toolchain /var/run/com.apple.security.cryptexd/mnt/com.apple.MobileAsset.MetalToolchain-v17.6.109.0.YX87Qy/Metal.xctoolchain --toolchain /Applications/Xcode_26.6.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain --destination /Users/runner/work/_temp/DerivedData/Build/Products/Debug-iphonesimulator/OpenClaw.app/PlugIns/OpenClawTests.xctest/Frameworks --strip-bitcode --scan-executable /Applications/Xcode_26.6.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/usr/lib/libXCTestSwiftSupport.dylib --strip-bitcode-tool /Applications/Xcode_26.6.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/bitcode_strip --emit-dependency-info /Users/runner/work/_temp/DerivedData/Build/Intermediates.noindex/OpenClaw.build/Debug-iphonesimulator/OpenClawTests.build/SwiftStdLibToolInputDependencies.dep --filter-for-swift-os
+
+CodeSign /Users/runner/work/_temp/DerivedData/Build/Products/Debug-iphonesimulator/OpenClaw.app/PlugIns/OpenClawTests.xctest (in target 'OpenClawTests' from project 'OpenClaw')
+    cd /Users/runner/work/openclaw/openclaw/apps/ios
+    
+    Signing Identity:     "Sign to Run Locally"
+    
+    /usr/bin/codesign --force --sign - --timestamp\=none --generate-entitlement-der /Users/runner/work/_temp/DerivedData/Build/Products/Debug-iphonesimulator/OpenClaw.app/PlugIns/OpenClawTests.xctest
+
+CodeSign /Users/runner/work/_temp/DerivedData/Build/Products/Debug-iphonesimulator/OpenClaw.app/OpenClaw.debug.dylib (in target 'OpenClaw' from project 'OpenClaw')
+    cd /Users/runner/work/openclaw/openclaw/apps/ios
+    
+    Signing Identity:     "Sign to Run Locally"
+    
+    /usr/bin/codesign --force --sign - --timestamp\=none --generate-entitlement-der /Users/runner/work/_temp/DerivedData/Build/Products/Debug-iphonesimulator/OpenClaw.app/OpenClaw.debug.dylib
+
+CodeSign /Users/runner/work/_temp/DerivedData/Build/Products/Debug-iphonesimulator/OpenClaw.app/__preview.dylib (in target 'OpenClaw' from project 'OpenClaw')
+    cd /Users/runner/work/openclaw/openclaw/apps/ios
+    
+    Signing Identity:     "Sign to Run Locally"
+    
+    /usr/bin/codesign --force --sign - --timestamp\=none --generate-entitlement-der /Users/runner/work/_temp/DerivedData/Build/Products/Debug-iphonesimulator/OpenClaw.app/__preview.dylib
+/Users/runner/work/_temp/DerivedData/Build/Products/Debug-iphonesimulator/OpenClaw.app/__preview.dylib: replacing existing signature
+
+CodeSign /Users/runner/work/_temp/DerivedData/Build/Products/Debug-iphonesimulator/OpenClaw.app (in target 'OpenClaw' from project 'OpenClaw')
+    cd /Users/runner/work/openclaw/openclaw/apps/ios
+    
+    Signing Identity:     "Sign to Run Locally"
+    
+    /usr/bin/codesign --force --sign - --entitlements /Users/runner/work/_temp/DerivedData/Build/Intermediates.noindex/OpenClaw.build/Debug-iphonesimulator/OpenClaw.build/OpenClaw.app.xcent --timestamp\=none --generate-entitlement-der /Users/runner/work/_temp/DerivedData/Build/Products/Debug-iphonesimulator/OpenClaw.app
+
+Validate /Users/runner/work/_temp/DerivedData/Build/Products/Debug-iphonesimulator/OpenClaw.app (in target 'OpenClaw' from project 'OpenClaw')
+    cd /Users/runner/work/openclaw/openclaw/apps/ios
+    builtin-validationUtility /Users/runner/work/_temp/DerivedData/Build/Products/Debug-iphonesimulator/OpenClaw.app -shallow-bundle -infoplist-subpath Info.plist
+
+ValidateEmbeddedBinary /Users/runner/work/_temp/DerivedData/Build/Products/Debug-iphonesimulator/OpenClaw.app/PlugIns/OpenClawShareExtension.appex (in target 'OpenClaw' from project 'OpenClaw')
+    cd /Users/runner/work/openclaw/openclaw/apps/ios
+    /Applications/Xcode_26.6.app/Contents/Developer/usr/bin/embeddedBinaryValidationUtility /Users/runner/work/_temp/DerivedData/Build/Products/Debug-iphonesimulator/OpenClaw.app/PlugIns/OpenClawShareExtension.appex -signing-cert - -info-plist-path /Users/runner/work/_temp/DerivedData/Build/Products/Debug-iphonesimulator/OpenClaw.app/Info.plist
+
+ValidateEmbeddedBinary /Users/runner/work/_temp/DerivedData/Build/Products/Debug-iphonesimulator/OpenClaw.app/PlugIns/OpenClawActivityWidget.appex (in target 'OpenClaw' from project 'OpenClaw')
+    cd /Users/runner/work/openclaw/openclaw/apps/ios
+    /Applications/Xcode_26.6.app/Contents/Developer/usr/bin/embeddedBinaryValidationUtility /Users/runner/work/_temp/DerivedData/Build/Products/Debug-iphonesimulator/OpenClaw.app/PlugIns/OpenClawActivityWidget.appex -signing-cert - -info-plist-path /Users/runner/work/_temp/DerivedData/Build/Products/Debug-iphonesimulator/OpenClaw.app/Info.plist
+
+** TEST BUILD SUCCEEDED **
+

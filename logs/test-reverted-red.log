@@ -1,0 +1,641 @@
+Command line invocation:
+    /Applications/Xcode_26.6.app/Contents/Developer/usr/bin/xcodebuild -project apps/ios/OpenClaw.xcodeproj -scheme OpenClaw -configuration Debug CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=NO CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER= COMPILER_INDEX_STORE_ENABLE=NO ARCHS=arm64 ONLY_ACTIVE_ARCH=YES -destination "platform=iOS Simulator,id=1F0A9C4B-2DFC-444E-B162-696E5078A72B" -derivedDataPath /Users/runner/work/_temp/DerivedData -resultBundlePath /Users/runner/work/_temp/proof/reverted-red.xcresult -parallel-testing-enabled NO -collect-test-diagnostics never -test-timeouts-enabled YES -default-test-execution-time-allowance 600 -maximum-test-execution-time-allowance 1200 "-only-testing:OpenClawTests/ChatProTabRecoveryControlsTests" test-without-building
+
+Build settings from command line:
+    ARCHS = arm64
+    CODE_SIGN_IDENTITY = -
+    CODE_SIGN_STYLE = Manual
+    CODE_SIGNING_ALLOWED = YES
+    CODE_SIGNING_REQUIRED = NO
+    COMPILER_INDEX_STORE_ENABLE = NO
+    DEVELOPMENT_TEAM = 
+    ONLY_ACTIVE_ARCH = YES
+    PROVISIONING_PROFILE_SPECIFIER = 
+
+Resolve Package Graph
+
+
+Resolved source packages:
+  swabble: /Users/runner/work/openclaw/openclaw/apps/swabble
+  swift-markdown: https://github.com/swiftlang/swift-markdown @ 0.9.0
+  Commander: https://github.com/steipete/Commander.git @ 0.3.0
+  Sodium: https://github.com/jedisct1/swift-sodium.git @ cfd195c
+  cmark-gfm: https://github.com/swiftlang/swift-cmark.git @ 0.9.0
+  GRDB: https://github.com/groue/GRDB.swift.git @ 7.11.1
+  SwiftMath: https://github.com/mgriebling/SwiftMath @ 1.7.3
+  OpenClawKit: /Users/runner/work/openclaw/openclaw/apps/shared/OpenClawKit
+  WebRTC: https://github.com/stasel/WebRTC.git @ 154.0.0
+  ElevenLabsKit: https://github.com/steipete/ElevenLabsKit @ 0.1.3
+
+Writing result bundle at path:
+	/Users/runner/work/_temp/proof/reverted-red.xcresult
+
+--- xcodebuild: WARNING: Using the first of multiple matching destinations:
+{ platform:iOS Simulator, arch:arm64, id:1F0A9C4B-2DFC-444E-B162-696E5078A72B, OS:26.5, name:iPhone Air }
+{ platform:iOS Simulator, arch:x86_64, id:1F0A9C4B-2DFC-444E-B162-696E5078A72B, OS:26.5, name:iPhone Air }
+2026-11-03 11:28:52.859026+0000 OpenClaw[24277:73775] OpenClaw: installing uncaught exception handler
+2026-11-03 11:28:52.944523+0000 OpenClaw[24277:73895] [WC] -[WCSession onqueue_handleUpdateSessionState:]_block_invoke dropping as pairingIDs no longer match. pairingID (null), client pairingID: (null)
+2026-11-03 11:28:52.957171+0000 OpenClaw[24277:73896] [GatewayDiag] [2026-11-03T11:28:52.933Z] watch messaging: activation complete state=activated error=none
+2026-11-03 11:28:52.961420+0000 OpenClaw[24277:73895] [WC] WCSession is not paired
+2026-11-03 11:28:52.979228+0000 OpenClaw[24277:73775] [TalkMode] disabled
+2026-11-03 11:28:53.039115+0000 OpenClaw[24277:73895] [GatewayDiag] [2026-11-03T11:28:53.039Z] app delegate: didFinishLaunching
+IOSurfaceClientSetSurfaceNotify failed e00002c7
+2026-11-03 11:28:54.078844+0000 OpenClaw[24277:73775] [OpenClawChatUI] refresh history failed not connected
+2026-11-03 11:28:54.096974+0000 OpenClaw[24277:73775] [OpenClawChatUI] refresh history failed not connected
+Test Suite 'Selected tests' started at 2026-11-03 11:28:54.521.
+Test Suite 'OpenClawTests.xctest' started at 2026-11-03 11:28:54.521.
+Test Suite 'ChatProTabRecoveryControlsTests' started at 2026-11-03 11:28:54.521.
+Test Case '-[OpenClawTests.ChatProTabRecoveryControlsTests testChatMutationLockCoversEveryPendingGatewayOwner]' started.
+Test Case '-[OpenClawTests.ChatProTabRecoveryControlsTests testChatMutationLockCoversEveryPendingGatewayOwner]' passed (0.001 seconds).
+Test Case '-[OpenClawTests.ChatProTabRecoveryControlsTests testRecoveryControlsStayReachableWhileAutomaticPreflightRetries]' started.
+2026-11-03 11:28:54.607235+0000 OpenClaw[24277:73775] [WC] already in progress or activated
+2026-11-03 11:28:54.608571+0000 OpenClaw[24277:73775] [TalkMode] disabled
+2026-11-03 11:28:54.863698+0000 OpenClaw[24277:73775] [OpenClawChatUI] refresh history failed not connected
+/Users/runner/work/openclaw/openclaw/apps/ios/Tests/ChatProTabRecoveryControlsTests.swift:147: error: -[OpenClawTests.ChatProTabRecoveryControlsTests testRecoveryControlsStayReachableWhileAutomaticPreflightRetries] : XCTAssertTrue failed - Toolbar item 0 must stay tappable while the automatic reconnect retries.
+Rendered controls:
+view(UIWindow) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(UITransitionView) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(UIDropShadowView) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(_UIHostingView<ModifiedContent<ModifiedContent<ModifiedContent<ModifiedContent<ChatRecoveryRenderedOwner, _EnvironmentKeyWritingModifier<Optional<AppAppearanceModel>>>, _EnvironmentKeyWritingModifier<Optional<NodeAppModel>>>, _EnvironmentKeyWritingModifier<Optional<VoiceWakeManager>>>, _EnvironmentKeyWritingModifier<Optional<GatewayConnectionController>>>>) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(UIKitPlatformViewHost<PlatformViewControllerRepresentableAdaptor<NavigationStackRepresentable>>) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(UILayoutContainerView) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(FloatingBarContainerView) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(_UIPointerInteractionAssistantEffectContainerView) id=- label=- frame=0,0,0x0 hidden=false alpha=1.0 interaction=false
+view(FloatingBarHostingView<FloatingBarContainer>) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(UIKitNavigationBar) id=- label=- frame=0,68,420x54 hidden=false alpha=1.0 interaction=true
+view(_UIPointerInteractionAssistantEffectContainerView) id=- label=- frame=0,0,0x0 hidden=false alpha=1.0 interaction=false
+view(NavigationBarContentView) id=- label=- frame=0,0,420x54 hidden=false alpha=1.0 interaction=true
+view(NavigationBarTransitionContainer) id=- label=- frame=0,0,420x54 hidden=false alpha=1.0 interaction=true
+view(NavigationBarPlatterContainer) id=- label=- frame=0,0,420x54 hidden=false alpha=1.0 interaction=true
+view(PlatterView) id=- label=- frame=348,0,52x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=-2,-2,56x48 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=2,1,47x40 hidden=false alpha=1.0 interaction=true
+view(PlatterContentView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(PlatterGlassView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(SubviewContainerView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(PlatterItemView) id=- label=- frame=4,0,44x44 hidden=false alpha=1.0 interaction=true
+view(ItemWrapperView) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=true
+view(_UITAMICAdaptorView) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=true
+view(UIKitBarItemHost<BarItemView>) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=false
+view(_UIInteractionView<_UIScrollPocketInteraction, CoreInteractionRepresentableAdaptor<ScrollPocketElementInteractionRepresentable>>) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=true
+view(_UIInteractionView<_UIScrollPocketInteraction, CoreInteractionRepresentableAdaptor<ScrollPocketElementInteractionRepresentable>>) id=- label=- frame=5,5,32x32 hidden=false alpha=0.5 interaction=true
+view(PlatterView) id=- label=- frame=84,0,46x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=0,0,46x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=0,0,46x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=-2,-2,50x48 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=2,1,41x40 hidden=false alpha=1.0 interaction=true
+view(PlatterContentView) id=- label=- frame=0,0,46x44 hidden=false alpha=1.0 interaction=true
+view(PlatterGlassView) id=- label=- frame=0,0,46x44 hidden=false alpha=1.0 interaction=true
+view(SubviewContainerView) id=- label=- frame=0,0,46x44 hidden=false alpha=1.0 interaction=true
+view(PlatterItemView) id=- label=- frame=4,0,38x44 hidden=false alpha=1.0 interaction=true
+view(ItemWrapperView) id=- label=- frame=0,0,38x44 hidden=false alpha=1.0 interaction=true
+view(_UITAMICAdaptorView) id=- label=- frame=0,0,38x44 hidden=false alpha=1.0 interaction=true
+view(UIKitBarItemHost<BarItemView>) id=- label=- frame=0,0,38x44 hidden=false alpha=1.0 interaction=false
+view(_UIInteractionView<_UIScrollPocketInteraction, CoreInteractionRepresentableAdaptor<ScrollPocketElementInteractionRepresentable>>) id=- label=- frame=0,0,38x44 hidden=false alpha=1.0 interaction=true
+view(_UIInteractionView<_UIScrollPocketInteraction, CoreInteractionRepresentableAdaptor<ScrollPocketElementInteractionRepresentable>>) id=- label=- frame=0,3,38x38 hidden=false alpha=0.5 interaction=true
+view(PlatterView) id=- label=- frame=20,0,52x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=-2,-2,56x48 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=2,1,47x40 hidden=false alpha=1.0 interaction=true
+view(PlatterContentView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(PlatterGlassView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(SubviewContainerView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(PlatterItemView) id=- label=- frame=4,0,44x44 hidden=false alpha=1.0 interaction=true
+view(ItemWrapperView) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=true
+view(_UITAMICAdaptorView) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=true
+view(UIKitBarItemHost<BarItemView>) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=false
+view(_UIInteractionView<_UIScrollPocketInteraction, CoreInteractionRepresentableAdaptor<ScrollPocketElementInteractionRepresentable>>) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=true
+view(_UIInteractionView<_UIScrollPocketInteraction, CoreInteractionRepresentableAdaptor<ScrollPocketElementInteractionRepresentable>>) id=- label=- frame=4,4,36x36 hidden=false alpha=0.5 interaction=true
+view(UIView) id=- label=- frame=0,0,420x54 hidden=false alpha=1.0 interaction=false
+view(HostedViewContainer) id=- label=- frame=0,0,420x54 hidden=false alpha=1.0 interaction=true
+view(_UIBarBackground) id=- label=- frame=0,-68,420x122 hidden=false alpha=1.0 interaction=false
+view(UINavigationTransitionView) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(UIViewControllerWrapperView) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(HostingView) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(_UIInheritedView) id=- label=- frame=10,764,400x104 hidden=false alpha=1.0 interaction=true
+view(_UIInheritedView) id=- label=- frame=0,0,400x104 hidden=false alpha=1.0 interaction=true
+view(_UIInheritedView) id=- label=- frame=0,0,0x0 hidden=false alpha=1.0 interaction=true
+view(UIPlatformGlassInteractionView) id=- label=- frame=0,0,400x104 hidden=false alpha=1.0 interaction=true
+view(_UIInheritedView) id=- label=- frame=0,0,400x104 hidden=false alpha=1.0 interaction=true
+view(PortalGroupMarkerView) id=- label=- frame=348,53,44x44 hidden=false alpha=1.0 interaction=true
+view(UIKitButtonHost) id=- label=- frame=304,53,44x44 hidden=false alpha=1.0 interaction=true
+view(HostingUIButton) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=false controlEnabled=false
+view(UIKitButtonHost) id=- label=- frame=260,53,44x44 hidden=false alpha=1.0 interaction=true
+view(HostingUIButton) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=false controlEnabled=false
+view(UIKitButtonHost) id=- label=- frame=178,53,82x44 hidden=false alpha=1.0 interaction=true
+view(HostingUIButton) id=- label=- frame=0,0,82x44 hidden=false alpha=1.0 interaction=false controlEnabled=false
+view(UIKitButtonHost) id=- label=- frame=7,53,44x44 hidden=false alpha=1.0 interaction=true
+view(HostingUIButton) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=false controlEnabled=false
+view(UIKitPlatformViewHost<PlatformViewRepresentableAdaptor<ChatComposerTextViewIOS>>) id=- label=- frame=13,11,372x24 hidden=false alpha=1.0 interaction=false
+view(ChatComposerUITextView) id=chat-message-input label=- frame=0,0,372x24 hidden=false alpha=1.0 interaction=true
+view(_UIScrollViewScrollIndicator) id=- label=- frame=3,18,366x3 hidden=false alpha=0.0 interaction=true
+view(UIView) id=- label=- frame=0,0,366x3 hidden=false alpha=1.0 interaction=true
+view(_UITextContainerView) id=- label=- frame=0,0,372x17 hidden=false alpha=1.0 interaction=true
+view(_UITextLayoutCanvasView) id=- label=- frame=0,0,372x17 hidden=false alpha=1.0 interaction=true
+view(_UITextLayoutFragmentView) id=- label=- frame=0,0,0x17 hidden=false alpha=1.0 interaction=true
+view(UIView) id=- label=- frame=0,0,372x17 hidden=false alpha=1.0 interaction=true
+view(_UITextLayoutView) id=- label=- frame=0,0,0x0 hidden=false alpha=1.0 interaction=true
+view(PlatformContainer) id=- label=- frame=6,128,408x626 hidden=false alpha=1.0 interaction=false
+view(HostingScrollView) id=- label=- frame=0,0,408x626 hidden=false alpha=1.0 interaction=true
+view(PlatformGroupContainer) id=- label=- frame=0,0,408x61 hidden=false alpha=1.0 interaction=true
+view(UIKitPlatformViewHost<PlatformViewRepresentableAdaptor<CircularUIKitProgressView>>) id=- label=- frame=30,19,14x14 hidden=false alpha=1.0 interaction=true
+view(SwiftUIActivityIndicatorView) id=- label=- frame=0,0,14x14 hidden=false alpha=1.0 interaction=true
+view(UIImageView) id=- label=- frame=0,0,14x14 hidden=false alpha=1.0 interaction=false
+/Users/runner/work/openclaw/openclaw/apps/ios/Tests/ChatProTabRecoveryControlsTests.swift:150: error: -[OpenClawTests.ChatProTabRecoveryControlsTests testRecoveryControlsStayReachableWhileAutomaticPreflightRetries] : XCTAssertFalse failed - Toolbar item 0 must not render dimmed while the automatic reconnect retries.
+Rendered controls:
+view(UIWindow) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(UITransitionView) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(UIDropShadowView) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(_UIHostingView<ModifiedContent<ModifiedContent<ModifiedContent<ModifiedContent<ChatRecoveryRenderedOwner, _EnvironmentKeyWritingModifier<Optional<AppAppearanceModel>>>, _EnvironmentKeyWritingModifier<Optional<NodeAppModel>>>, _EnvironmentKeyWritingModifier<Optional<VoiceWakeManager>>>, _EnvironmentKeyWritingModifier<Optional<GatewayConnectionController>>>>) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(UIKitPlatformViewHost<PlatformViewControllerRepresentableAdaptor<NavigationStackRepresentable>>) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(UILayoutContainerView) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(FloatingBarContainerView) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(_UIPointerInteractionAssistantEffectContainerView) id=- label=- frame=0,0,0x0 hidden=false alpha=1.0 interaction=false
+view(FloatingBarHostingView<FloatingBarContainer>) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(UIKitNavigationBar) id=- label=- frame=0,68,420x54 hidden=false alpha=1.0 interaction=true
+view(_UIPointerInteractionAssistantEffectContainerView) id=- label=- frame=0,0,0x0 hidden=false alpha=1.0 interaction=false
+view(NavigationBarContentView) id=- label=- frame=0,0,420x54 hidden=false alpha=1.0 interaction=true
+view(NavigationBarTransitionContainer) id=- label=- frame=0,0,420x54 hidden=false alpha=1.0 interaction=true
+view(NavigationBarPlatterContainer) id=- label=- frame=0,0,420x54 hidden=false alpha=1.0 interaction=true
+view(PlatterView) id=- label=- frame=348,0,52x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=-2,-2,56x48 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=2,1,47x40 hidden=false alpha=1.0 interaction=true
+view(PlatterContentView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(PlatterGlassView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(SubviewContainerView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(PlatterItemView) id=- label=- frame=4,0,44x44 hidden=false alpha=1.0 interaction=true
+view(ItemWrapperView) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=true
+view(_UITAMICAdaptorView) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=true
+view(UIKitBarItemHost<BarItemView>) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=false
+view(_UIInteractionView<_UIScrollPocketInteraction, CoreInteractionRepresentableAdaptor<ScrollPocketElementInteractionRepresentable>>) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=true
+view(_UIInteractionView<_UIScrollPocketInteraction, CoreInteractionRepresentableAdaptor<ScrollPocketElementInteractionRepresentable>>) id=- label=- frame=5,5,32x32 hidden=false alpha=0.5 interaction=true
+view(PlatterView) id=- label=- frame=84,0,46x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=0,0,46x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=0,0,46x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=-2,-2,50x48 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=2,1,41x40 hidden=false alpha=1.0 interaction=true
+view(PlatterContentView) id=- label=- frame=0,0,46x44 hidden=false alpha=1.0 interaction=true
+view(PlatterGlassView) id=- label=- frame=0,0,46x44 hidden=false alpha=1.0 interaction=true
+view(SubviewContainerView) id=- label=- frame=0,0,46x44 hidden=false alpha=1.0 interaction=true
+view(PlatterItemView) id=- label=- frame=4,0,38x44 hidden=false alpha=1.0 interaction=true
+view(ItemWrapperView) id=- label=- frame=0,0,38x44 hidden=false alpha=1.0 interaction=true
+view(_UITAMICAdaptorView) id=- label=- frame=0,0,38x44 hidden=false alpha=1.0 interaction=true
+view(UIKitBarItemHost<BarItemView>) id=- label=- frame=0,0,38x44 hidden=false alpha=1.0 interaction=false
+view(_UIInteractionView<_UIScrollPocketInteraction, CoreInteractionRepresentableAdaptor<ScrollPocketElementInteractionRepresentable>>) id=- label=- frame=0,0,38x44 hidden=false alpha=1.0 interaction=true
+view(_UIInteractionView<_UIScrollPocketInteraction, CoreInteractionRepresentableAdaptor<ScrollPocketElementInteractionRepresentable>>) id=- label=- frame=0,3,38x38 hidden=false alpha=0.5 interaction=true
+view(PlatterView) id=- label=- frame=20,0,52x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=-2,-2,56x48 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=2,1,47x40 hidden=false alpha=1.0 interaction=true
+view(PlatterContentView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(PlatterGlassView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(SubviewContainerView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(PlatterItemView) id=- label=- frame=4,0,44x44 hidden=false alpha=1.0 interaction=true
+view(ItemWrapperView) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=true
+view(_UITAMICAdaptorView) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=true
+view(UIKitBarItemHost<BarItemView>) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=false
+view(_UIInteractionView<_UIScrollPocketInteraction, CoreInteractionRepresentableAdaptor<ScrollPocketElementInteractionRepresentable>>) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=true
+view(_UIInteractionView<_UIScrollPocketInteraction, CoreInteractionRepresentableAdaptor<ScrollPocketElementInteractionRepresentable>>) id=- label=- frame=4,4,36x36 hidden=false alpha=0.5 interaction=true
+view(UIView) id=- label=- frame=0,0,420x54 hidden=false alpha=1.0 interaction=false
+view(HostedViewContainer) id=- label=- frame=0,0,420x54 hidden=false alpha=1.0 interaction=true
+view(_UIBarBackground) id=- label=- frame=0,-68,420x122 hidden=false alpha=1.0 interaction=false
+view(UINavigationTransitionView) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(UIViewControllerWrapperView) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(HostingView) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(_UIInheritedView) id=- label=- frame=10,764,400x104 hidden=false alpha=1.0 interaction=true
+view(_UIInheritedView) id=- label=- frame=0,0,400x104 hidden=false alpha=1.0 interaction=true
+view(_UIInheritedView) id=- label=- frame=0,0,0x0 hidden=false alpha=1.0 interaction=true
+view(UIPlatformGlassInteractionView) id=- label=- frame=0,0,400x104 hidden=false alpha=1.0 interaction=true
+view(_UIInheritedView) id=- label=- frame=0,0,400x104 hidden=false alpha=1.0 interaction=true
+view(PortalGroupMarkerView) id=- label=- frame=348,53,44x44 hidden=false alpha=1.0 interaction=true
+view(UIKitButtonHost) id=- label=- frame=304,53,44x44 hidden=false alpha=1.0 interaction=true
+view(HostingUIButton) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=false controlEnabled=false
+view(UIKitButtonHost) id=- label=- frame=260,53,44x44 hidden=false alpha=1.0 interaction=true
+view(HostingUIButton) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=false controlEnabled=false
+view(UIKitButtonHost) id=- label=- frame=178,53,82x44 hidden=false alpha=1.0 interaction=true
+view(HostingUIButton) id=- label=- frame=0,0,82x44 hidden=false alpha=1.0 interaction=false controlEnabled=false
+view(UIKitButtonHost) id=- label=- frame=7,53,44x44 hidden=false alpha=1.0 interaction=true
+view(HostingUIButton) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=false controlEnabled=false
+view(UIKitPlatformViewHost<PlatformViewRepresentableAdaptor<ChatComposerTextViewIOS>>) id=- label=- frame=13,11,372x24 hidden=false alpha=1.0 interaction=false
+view(ChatComposerUITextView) id=chat-message-input label=- frame=0,0,372x24 hidden=false alpha=1.0 interaction=true
+view(_UIScrollViewScrollIndicator) id=- label=- frame=3,18,366x3 hidden=false alpha=0.0 interaction=true
+view(UIView) id=- label=- frame=0,0,366x3 hidden=false alpha=1.0 interaction=true
+view(_UITextContainerView) id=- label=- frame=0,0,372x17 hidden=false alpha=1.0 interaction=true
+view(_UITextLayoutCanvasView) id=- label=- frame=0,0,372x17 hidden=false alpha=1.0 interaction=true
+view(_UITextLayoutFragmentView) id=- label=- frame=0,0,0x17 hidden=false alpha=1.0 interaction=true
+view(UIView) id=- label=- frame=0,0,372x17 hidden=false alpha=1.0 interaction=true
+view(_UITextLayoutView) id=- label=- frame=0,0,0x0 hidden=false alpha=1.0 interaction=true
+view(PlatformContainer) id=- label=- frame=6,128,408x626 hidden=false alpha=1.0 interaction=false
+view(HostingScrollView) id=- label=- frame=0,0,408x626 hidden=false alpha=1.0 interaction=true
+view(PlatformGroupContainer) id=- label=- frame=0,0,408x61 hidden=false alpha=1.0 interaction=true
+view(UIKitPlatformViewHost<PlatformViewRepresentableAdaptor<CircularUIKitProgressView>>) id=- label=- frame=30,19,14x14 hidden=false alpha=1.0 interaction=true
+view(SwiftUIActivityIndicatorView) id=- label=- frame=0,0,14x14 hidden=false alpha=1.0 interaction=true
+view(UIImageView) id=- label=- frame=0,0,14x14 hidden=false alpha=1.0 interaction=false
+/Users/runner/work/openclaw/openclaw/apps/ios/Tests/ChatProTabRecoveryControlsTests.swift:147: error: -[OpenClawTests.ChatProTabRecoveryControlsTests testRecoveryControlsStayReachableWhileAutomaticPreflightRetries] : XCTAssertTrue failed - Toolbar item 1 must stay tappable while the automatic reconnect retries.
+Rendered controls:
+view(UIWindow) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(UITransitionView) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(UIDropShadowView) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(_UIHostingView<ModifiedContent<ModifiedContent<ModifiedContent<ModifiedContent<ChatRecoveryRenderedOwner, _EnvironmentKeyWritingModifier<Optional<AppAppearanceModel>>>, _EnvironmentKeyWritingModifier<Optional<NodeAppModel>>>, _EnvironmentKeyWritingModifier<Optional<VoiceWakeManager>>>, _EnvironmentKeyWritingModifier<Optional<GatewayConnectionController>>>>) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(UIKitPlatformViewHost<PlatformViewControllerRepresentableAdaptor<NavigationStackRepresentable>>) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(UILayoutContainerView) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(FloatingBarContainerView) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(_UIPointerInteractionAssistantEffectContainerView) id=- label=- frame=0,0,0x0 hidden=false alpha=1.0 interaction=false
+view(FloatingBarHostingView<FloatingBarContainer>) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(UIKitNavigationBar) id=- label=- frame=0,68,420x54 hidden=false alpha=1.0 interaction=true
+view(_UIPointerInteractionAssistantEffectContainerView) id=- label=- frame=0,0,0x0 hidden=false alpha=1.0 interaction=false
+view(NavigationBarContentView) id=- label=- frame=0,0,420x54 hidden=false alpha=1.0 interaction=true
+view(NavigationBarTransitionContainer) id=- label=- frame=0,0,420x54 hidden=false alpha=1.0 interaction=true
+view(NavigationBarPlatterContainer) id=- label=- frame=0,0,420x54 hidden=false alpha=1.0 interaction=true
+view(PlatterView) id=- label=- frame=348,0,52x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=-2,-2,56x48 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=2,1,47x40 hidden=false alpha=1.0 interaction=true
+view(PlatterContentView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(PlatterGlassView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(SubviewContainerView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(PlatterItemView) id=- label=- frame=4,0,44x44 hidden=false alpha=1.0 interaction=true
+view(ItemWrapperView) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=true
+view(_UITAMICAdaptorView) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=true
+view(UIKitBarItemHost<BarItemView>) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=false
+view(_UIInteractionView<_UIScrollPocketInteraction, CoreInteractionRepresentableAdaptor<ScrollPocketElementInteractionRepresentable>>) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=true
+view(_UIInteractionView<_UIScrollPocketInteraction, CoreInteractionRepresentableAdaptor<ScrollPocketElementInteractionRepresentable>>) id=- label=- frame=5,5,32x32 hidden=false alpha=0.5 interaction=true
+view(PlatterView) id=- label=- frame=84,0,46x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=0,0,46x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=0,0,46x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=-2,-2,50x48 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=2,1,41x40 hidden=false alpha=1.0 interaction=true
+view(PlatterContentView) id=- label=- frame=0,0,46x44 hidden=false alpha=1.0 interaction=true
+view(PlatterGlassView) id=- label=- frame=0,0,46x44 hidden=false alpha=1.0 interaction=true
+view(SubviewContainerView) id=- label=- frame=0,0,46x44 hidden=false alpha=1.0 interaction=true
+view(PlatterItemView) id=- label=- frame=4,0,38x44 hidden=false alpha=1.0 interaction=true
+view(ItemWrapperView) id=- label=- frame=0,0,38x44 hidden=false alpha=1.0 interaction=true
+view(_UITAMICAdaptorView) id=- label=- frame=0,0,38x44 hidden=false alpha=1.0 interaction=true
+view(UIKitBarItemHost<BarItemView>) id=- label=- frame=0,0,38x44 hidden=false alpha=1.0 interaction=false
+view(_UIInteractionView<_UIScrollPocketInteraction, CoreInteractionRepresentableAdaptor<ScrollPocketElementInteractionRepresentable>>) id=- label=- frame=0,0,38x44 hidden=false alpha=1.0 interaction=true
+view(_UIInteractionView<_UIScrollPocketInteraction, CoreInteractionRepresentableAdaptor<ScrollPocketElementInteractionRepresentable>>) id=- label=- frame=0,3,38x38 hidden=false alpha=0.5 interaction=true
+view(PlatterView) id=- label=- frame=20,0,52x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=-2,-2,56x48 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=2,1,47x40 hidden=false alpha=1.0 interaction=true
+view(PlatterContentView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(PlatterGlassView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(SubviewContainerView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(PlatterItemView) id=- label=- frame=4,0,44x44 hidden=false alpha=1.0 interaction=true
+view(ItemWrapperView) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=true
+view(_UITAMICAdaptorView) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=true
+view(UIKitBarItemHost<BarItemView>) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=false
+view(_UIInteractionView<_UIScrollPocketInteraction, CoreInteractionRepresentableAdaptor<ScrollPocketElementInteractionRepresentable>>) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=true
+view(_UIInteractionView<_UIScrollPocketInteraction, CoreInteractionRepresentableAdaptor<ScrollPocketElementInteractionRepresentable>>) id=- label=- frame=4,4,36x36 hidden=false alpha=0.5 interaction=true
+view(UIView) id=- label=- frame=0,0,420x54 hidden=false alpha=1.0 interaction=false
+view(HostedViewContainer) id=- label=- frame=0,0,420x54 hidden=false alpha=1.0 interaction=true
+view(_UIBarBackground) id=- label=- frame=0,-68,420x122 hidden=false alpha=1.0 interaction=false
+view(UINavigationTransitionView) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(UIViewControllerWrapperView) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(HostingView) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(_UIInheritedView) id=- label=- frame=10,764,400x104 hidden=false alpha=1.0 interaction=true
+view(_UIInheritedView) id=- label=- frame=0,0,400x104 hidden=false alpha=1.0 interaction=true
+view(_UIInheritedView) id=- label=- frame=0,0,0x0 hidden=false alpha=1.0 interaction=true
+view(UIPlatformGlassInteractionView) id=- label=- frame=0,0,400x104 hidden=false alpha=1.0 interaction=true
+view(_UIInheritedView) id=- label=- frame=0,0,400x104 hidden=false alpha=1.0 interaction=true
+view(PortalGroupMarkerView) id=- label=- frame=348,53,44x44 hidden=false alpha=1.0 interaction=true
+view(UIKitButtonHost) id=- label=- frame=304,53,44x44 hidden=false alpha=1.0 interaction=true
+view(HostingUIButton) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=false controlEnabled=false
+view(UIKitButtonHost) id=- label=- frame=260,53,44x44 hidden=false alpha=1.0 interaction=true
+view(HostingUIButton) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=false controlEnabled=false
+view(UIKitButtonHost) id=- label=- frame=178,53,82x44 hidden=false alpha=1.0 interaction=true
+view(HostingUIButton) id=- label=- frame=0,0,82x44 hidden=false alpha=1.0 interaction=false controlEnabled=false
+view(UIKitButtonHost) id=- label=- frame=7,53,44x44 hidden=false alpha=1.0 interaction=true
+view(HostingUIButton) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=false controlEnabled=false
+view(UIKitPlatformViewHost<PlatformViewRepresentableAdaptor<ChatComposerTextViewIOS>>) id=- label=- frame=13,11,372x24 hidden=false alpha=1.0 interaction=false
+view(ChatComposerUITextView) id=chat-message-input label=- frame=0,0,372x24 hidden=false alpha=1.0 interaction=true
+view(_UIScrollViewScrollIndicator) id=- label=- frame=3,18,366x3 hidden=false alpha=0.0 interaction=true
+view(UIView) id=- label=- frame=0,0,366x3 hidden=false alpha=1.0 interaction=true
+view(_UITextContainerView) id=- label=- frame=0,0,372x17 hidden=false alpha=1.0 interaction=true
+view(_UITextLayoutCanvasView) id=- label=- frame=0,0,372x17 hidden=false alpha=1.0 interaction=true
+view(_UITextLayoutFragmentView) id=- label=- frame=0,0,0x17 hidden=false alpha=1.0 interaction=true
+view(UIView) id=- label=- frame=0,0,372x17 hidden=false alpha=1.0 interaction=true
+view(_UITextLayoutView) id=- label=- frame=0,0,0x0 hidden=false alpha=1.0 interaction=true
+view(PlatformContainer) id=- label=- frame=6,128,408x626 hidden=false alpha=1.0 interaction=false
+view(HostingScrollView) id=- label=- frame=0,0,408x626 hidden=false alpha=1.0 interaction=true
+view(PlatformGroupContainer) id=- label=- frame=0,0,408x61 hidden=false alpha=1.0 interaction=true
+view(UIKitPlatformViewHost<PlatformViewRepresentableAdaptor<CircularUIKitProgressView>>) id=- label=- frame=30,19,14x14 hidden=false alpha=1.0 interaction=true
+view(SwiftUIActivityIndicatorView) id=- label=- frame=0,0,14x14 hidden=false alpha=1.0 interaction=true
+view(UIImageView) id=- label=- frame=0,0,14x14 hidden=false alpha=1.0 interaction=false
+/Users/runner/work/openclaw/openclaw/apps/ios/Tests/ChatProTabRecoveryControlsTests.swift:150: error: -[OpenClawTests.ChatProTabRecoveryControlsTests testRecoveryControlsStayReachableWhileAutomaticPreflightRetries] : XCTAssertFalse failed - Toolbar item 1 must not render dimmed while the automatic reconnect retries.
+Rendered controls:
+view(UIWindow) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(UITransitionView) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(UIDropShadowView) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(_UIHostingView<ModifiedContent<ModifiedContent<ModifiedContent<ModifiedContent<ChatRecoveryRenderedOwner, _EnvironmentKeyWritingModifier<Optional<AppAppearanceModel>>>, _EnvironmentKeyWritingModifier<Optional<NodeAppModel>>>, _EnvironmentKeyWritingModifier<Optional<VoiceWakeManager>>>, _EnvironmentKeyWritingModifier<Optional<GatewayConnectionController>>>>) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(UIKitPlatformViewHost<PlatformViewControllerRepresentableAdaptor<NavigationStackRepresentable>>) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(UILayoutContainerView) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(FloatingBarContainerView) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(_UIPointerInteractionAssistantEffectContainerView) id=- label=- frame=0,0,0x0 hidden=false alpha=1.0 interaction=false
+view(FloatingBarHostingView<FloatingBarContainer>) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(UIKitNavigationBar) id=- label=- frame=0,68,420x54 hidden=false alpha=1.0 interaction=true
+view(_UIPointerInteractionAssistantEffectContainerView) id=- label=- frame=0,0,0x0 hidden=false alpha=1.0 interaction=false
+view(NavigationBarContentView) id=- label=- frame=0,0,420x54 hidden=false alpha=1.0 interaction=true
+view(NavigationBarTransitionContainer) id=- label=- frame=0,0,420x54 hidden=false alpha=1.0 interaction=true
+view(NavigationBarPlatterContainer) id=- label=- frame=0,0,420x54 hidden=false alpha=1.0 interaction=true
+view(PlatterView) id=- label=- frame=348,0,52x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=-2,-2,56x48 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=2,1,47x40 hidden=false alpha=1.0 interaction=true
+view(PlatterContentView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(PlatterGlassView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(SubviewContainerView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(PlatterItemView) id=- label=- frame=4,0,44x44 hidden=false alpha=1.0 interaction=true
+view(ItemWrapperView) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=true
+view(_UITAMICAdaptorView) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=true
+view(UIKitBarItemHost<BarItemView>) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=false
+view(_UIInteractionView<_UIScrollPocketInteraction, CoreInteractionRepresentableAdaptor<ScrollPocketElementInteractionRepresentable>>) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=true
+view(_UIInteractionView<_UIScrollPocketInteraction, CoreInteractionRepresentableAdaptor<ScrollPocketElementInteractionRepresentable>>) id=- label=- frame=5,5,32x32 hidden=false alpha=0.5 interaction=true
+view(PlatterView) id=- label=- frame=84,0,46x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=0,0,46x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=0,0,46x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=-2,-2,50x48 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=2,1,41x40 hidden=false alpha=1.0 interaction=true
+view(PlatterContentView) id=- label=- frame=0,0,46x44 hidden=false alpha=1.0 interaction=true
+view(PlatterGlassView) id=- label=- frame=0,0,46x44 hidden=false alpha=1.0 interaction=true
+view(SubviewContainerView) id=- label=- frame=0,0,46x44 hidden=false alpha=1.0 interaction=true
+view(PlatterItemView) id=- label=- frame=4,0,38x44 hidden=false alpha=1.0 interaction=true
+view(ItemWrapperView) id=- label=- frame=0,0,38x44 hidden=false alpha=1.0 interaction=true
+view(_UITAMICAdaptorView) id=- label=- frame=0,0,38x44 hidden=false alpha=1.0 interaction=true
+view(UIKitBarItemHost<BarItemView>) id=- label=- frame=0,0,38x44 hidden=false alpha=1.0 interaction=false
+view(_UIInteractionView<_UIScrollPocketInteraction, CoreInteractionRepresentableAdaptor<ScrollPocketElementInteractionRepresentable>>) id=- label=- frame=0,0,38x44 hidden=false alpha=1.0 interaction=true
+view(_UIInteractionView<_UIScrollPocketInteraction, CoreInteractionRepresentableAdaptor<ScrollPocketElementInteractionRepresentable>>) id=- label=- frame=0,3,38x38 hidden=false alpha=0.5 interaction=true
+view(PlatterView) id=- label=- frame=20,0,52x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=-2,-2,56x48 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=2,1,47x40 hidden=false alpha=1.0 interaction=true
+view(PlatterContentView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(PlatterGlassView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(SubviewContainerView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(PlatterItemView) id=- label=- frame=4,0,44x44 hidden=false alpha=1.0 interaction=true
+view(ItemWrapperView) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=true
+view(_UITAMICAdaptorView) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=true
+view(UIKitBarItemHost<BarItemView>) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=false
+view(_UIInteractionView<_UIScrollPocketInteraction, CoreInteractionRepresentableAdaptor<ScrollPocketElementInteractionRepresentable>>) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=true
+view(_UIInteractionView<_UIScrollPocketInteraction, CoreInteractionRepresentableAdaptor<ScrollPocketElementInteractionRepresentable>>) id=- label=- frame=4,4,36x36 hidden=false alpha=0.5 interaction=true
+view(UIView) id=- label=- frame=0,0,420x54 hidden=false alpha=1.0 interaction=false
+view(HostedViewContainer) id=- label=- frame=0,0,420x54 hidden=false alpha=1.0 interaction=true
+view(_UIBarBackground) id=- label=- frame=0,-68,420x122 hidden=false alpha=1.0 interaction=false
+view(UINavigationTransitionView) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(UIViewControllerWrapperView) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(HostingView) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(_UIInheritedView) id=- label=- frame=10,764,400x104 hidden=false alpha=1.0 interaction=true
+view(_UIInheritedView) id=- label=- frame=0,0,400x104 hidden=false alpha=1.0 interaction=true
+view(_UIInheritedView) id=- label=- frame=0,0,0x0 hidden=false alpha=1.0 interaction=true
+view(UIPlatformGlassInteractionView) id=- label=- frame=0,0,400x104 hidden=false alpha=1.0 interaction=true
+view(_UIInheritedView) id=- label=- frame=0,0,400x104 hidden=false alpha=1.0 interaction=true
+view(PortalGroupMarkerView) id=- label=- frame=348,53,44x44 hidden=false alpha=1.0 interaction=true
+view(UIKitButtonHost) id=- label=- frame=304,53,44x44 hidden=false alpha=1.0 interaction=true
+view(HostingUIButton) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=false controlEnabled=false
+view(UIKitButtonHost) id=- label=- frame=260,53,44x44 hidden=false alpha=1.0 interaction=true
+view(HostingUIButton) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=false controlEnabled=false
+view(UIKitButtonHost) id=- label=- frame=178,53,82x44 hidden=false alpha=1.0 interaction=true
+view(HostingUIButton) id=- label=- frame=0,0,82x44 hidden=false alpha=1.0 interaction=false controlEnabled=false
+view(UIKitButtonHost) id=- label=- frame=7,53,44x44 hidden=false alpha=1.0 interaction=true
+view(HostingUIButton) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=false controlEnabled=false
+view(UIKitPlatformViewHost<PlatformViewRepresentableAdaptor<ChatComposerTextViewIOS>>) id=- label=- frame=13,11,372x24 hidden=false alpha=1.0 interaction=false
+view(ChatComposerUITextView) id=chat-message-input label=- frame=0,0,372x24 hidden=false alpha=1.0 interaction=true
+view(_UIScrollViewScrollIndicator) id=- label=- frame=3,18,366x3 hidden=false alpha=0.0 interaction=true
+view(UIView) id=- label=- frame=0,0,366x3 hidden=false alpha=1.0 interaction=true
+view(_UITextContainerView) id=- label=- frame=0,0,372x17 hidden=false alpha=1.0 interaction=true
+view(_UITextLayoutCanvasView) id=- label=- frame=0,0,372x17 hidden=false alpha=1.0 interaction=true
+view(_UITextLayoutFragmentView) id=- label=- frame=0,0,0x17 hidden=false alpha=1.0 interaction=true
+view(UIView) id=- label=- frame=0,0,372x17 hidden=false alpha=1.0 interaction=true
+view(_UITextLayoutView) id=- label=- frame=0,0,0x0 hidden=false alpha=1.0 interaction=true
+view(PlatformContainer) id=- label=- frame=6,128,408x626 hidden=false alpha=1.0 interaction=false
+view(HostingScrollView) id=- label=- frame=0,0,408x626 hidden=false alpha=1.0 interaction=true
+view(PlatformGroupContainer) id=- label=- frame=0,0,408x61 hidden=false alpha=1.0 interaction=true
+view(UIKitPlatformViewHost<PlatformViewRepresentableAdaptor<CircularUIKitProgressView>>) id=- label=- frame=30,19,14x14 hidden=false alpha=1.0 interaction=true
+view(SwiftUIActivityIndicatorView) id=- label=- frame=0,0,14x14 hidden=false alpha=1.0 interaction=true
+view(UIImageView) id=- label=- frame=0,0,14x14 hidden=false alpha=1.0 interaction=false
+/Users/runner/work/openclaw/openclaw/apps/ios/Tests/ChatProTabRecoveryControlsTests.swift:147: error: -[OpenClawTests.ChatProTabRecoveryControlsTests testRecoveryControlsStayReachableWhileAutomaticPreflightRetries] : XCTAssertTrue failed - Toolbar item 2 must stay tappable while the automatic reconnect retries.
+Rendered controls:
+view(UIWindow) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(UITransitionView) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(UIDropShadowView) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(_UIHostingView<ModifiedContent<ModifiedContent<ModifiedContent<ModifiedContent<ChatRecoveryRenderedOwner, _EnvironmentKeyWritingModifier<Optional<AppAppearanceModel>>>, _EnvironmentKeyWritingModifier<Optional<NodeAppModel>>>, _EnvironmentKeyWritingModifier<Optional<VoiceWakeManager>>>, _EnvironmentKeyWritingModifier<Optional<GatewayConnectionController>>>>) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(UIKitPlatformViewHost<PlatformViewControllerRepresentableAdaptor<NavigationStackRepresentable>>) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(UILayoutContainerView) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(FloatingBarContainerView) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(_UIPointerInteractionAssistantEffectContainerView) id=- label=- frame=0,0,0x0 hidden=false alpha=1.0 interaction=false
+view(FloatingBarHostingView<FloatingBarContainer>) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(UIKitNavigationBar) id=- label=- frame=0,68,420x54 hidden=false alpha=1.0 interaction=true
+view(_UIPointerInteractionAssistantEffectContainerView) id=- label=- frame=0,0,0x0 hidden=false alpha=1.0 interaction=false
+view(NavigationBarContentView) id=- label=- frame=0,0,420x54 hidden=false alpha=1.0 interaction=true
+view(NavigationBarTransitionContainer) id=- label=- frame=0,0,420x54 hidden=false alpha=1.0 interaction=true
+view(NavigationBarPlatterContainer) id=- label=- frame=0,0,420x54 hidden=false alpha=1.0 interaction=true
+view(PlatterView) id=- label=- frame=348,0,52x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=-2,-2,56x48 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=2,1,47x40 hidden=false alpha=1.0 interaction=true
+view(PlatterContentView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(PlatterGlassView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(SubviewContainerView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(PlatterItemView) id=- label=- frame=4,0,44x44 hidden=false alpha=1.0 interaction=true
+view(ItemWrapperView) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=true
+view(_UITAMICAdaptorView) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=true
+view(UIKitBarItemHost<BarItemView>) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=false
+view(_UIInteractionView<_UIScrollPocketInteraction, CoreInteractionRepresentableAdaptor<ScrollPocketElementInteractionRepresentable>>) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=true
+view(_UIInteractionView<_UIScrollPocketInteraction, CoreInteractionRepresentableAdaptor<ScrollPocketElementInteractionRepresentable>>) id=- label=- frame=5,5,32x32 hidden=false alpha=0.5 interaction=true
+view(PlatterView) id=- label=- frame=84,0,46x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=0,0,46x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=0,0,46x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=-2,-2,50x48 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=2,1,41x40 hidden=false alpha=1.0 interaction=true
+view(PlatterContentView) id=- label=- frame=0,0,46x44 hidden=false alpha=1.0 interaction=true
+view(PlatterGlassView) id=- label=- frame=0,0,46x44 hidden=false alpha=1.0 interaction=true
+view(SubviewContainerView) id=- label=- frame=0,0,46x44 hidden=false alpha=1.0 interaction=true
+view(PlatterItemView) id=- label=- frame=4,0,38x44 hidden=false alpha=1.0 interaction=true
+view(ItemWrapperView) id=- label=- frame=0,0,38x44 hidden=false alpha=1.0 interaction=true
+view(_UITAMICAdaptorView) id=- label=- frame=0,0,38x44 hidden=false alpha=1.0 interaction=true
+view(UIKitBarItemHost<BarItemView>) id=- label=- frame=0,0,38x44 hidden=false alpha=1.0 interaction=false
+view(_UIInteractionView<_UIScrollPocketInteraction, CoreInteractionRepresentableAdaptor<ScrollPocketElementInteractionRepresentable>>) id=- label=- frame=0,0,38x44 hidden=false alpha=1.0 interaction=true
+view(_UIInteractionView<_UIScrollPocketInteraction, CoreInteractionRepresentableAdaptor<ScrollPocketElementInteractionRepresentable>>) id=- label=- frame=0,3,38x38 hidden=false alpha=0.5 interaction=true
+view(PlatterView) id=- label=- frame=20,0,52x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=-2,-2,56x48 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=2,1,47x40 hidden=false alpha=1.0 interaction=true
+view(PlatterContentView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(PlatterGlassView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(SubviewContainerView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(PlatterItemView) id=- label=- frame=4,0,44x44 hidden=false alpha=1.0 interaction=true
+view(ItemWrapperView) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=true
+view(_UITAMICAdaptorView) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=true
+view(UIKitBarItemHost<BarItemView>) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=false
+view(_UIInteractionView<_UIScrollPocketInteraction, CoreInteractionRepresentableAdaptor<ScrollPocketElementInteractionRepresentable>>) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=true
+view(_UIInteractionView<_UIScrollPocketInteraction, CoreInteractionRepresentableAdaptor<ScrollPocketElementInteractionRepresentable>>) id=- label=- frame=4,4,36x36 hidden=false alpha=0.5 interaction=true
+view(UIView) id=- label=- frame=0,0,420x54 hidden=false alpha=1.0 interaction=false
+view(HostedViewContainer) id=- label=- frame=0,0,420x54 hidden=false alpha=1.0 interaction=true
+view(_UIBarBackground) id=- label=- frame=0,-68,420x122 hidden=false alpha=1.0 interaction=false
+view(UINavigationTransitionView) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(UIViewControllerWrapperView) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(HostingView) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(_UIInheritedView) id=- label=- frame=10,764,400x104 hidden=false alpha=1.0 interaction=true
+view(_UIInheritedView) id=- label=- frame=0,0,400x104 hidden=false alpha=1.0 interaction=true
+view(_UIInheritedView) id=- label=- frame=0,0,0x0 hidden=false alpha=1.0 interaction=true
+view(UIPlatformGlassInteractionView) id=- label=- frame=0,0,400x104 hidden=false alpha=1.0 interaction=true
+view(_UIInheritedView) id=- label=- frame=0,0,400x104 hidden=false alpha=1.0 interaction=true
+view(PortalGroupMarkerView) id=- label=- frame=348,53,44x44 hidden=false alpha=1.0 interaction=true
+view(UIKitButtonHost) id=- label=- frame=304,53,44x44 hidden=false alpha=1.0 interaction=true
+view(HostingUIButton) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=false controlEnabled=false
+view(UIKitButtonHost) id=- label=- frame=260,53,44x44 hidden=false alpha=1.0 interaction=true
+view(HostingUIButton) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=false controlEnabled=false
+view(UIKitButtonHost) id=- label=- frame=178,53,82x44 hidden=false alpha=1.0 interaction=true
+view(HostingUIButton) id=- label=- frame=0,0,82x44 hidden=false alpha=1.0 interaction=false controlEnabled=false
+view(UIKitButtonHost) id=- label=- frame=7,53,44x44 hidden=false alpha=1.0 interaction=true
+view(HostingUIButton) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=false controlEnabled=false
+view(UIKitPlatformViewHost<PlatformViewRepresentableAdaptor<ChatComposerTextViewIOS>>) id=- label=- frame=13,11,372x24 hidden=false alpha=1.0 interaction=false
+view(ChatComposerUITextView) id=chat-message-input label=- frame=0,0,372x24 hidden=false alpha=1.0 interaction=true
+view(_UIScrollViewScrollIndicator) id=- label=- frame=3,18,366x3 hidden=false alpha=0.0 interaction=true
+view(UIView) id=- label=- frame=0,0,366x3 hidden=false alpha=1.0 interaction=true
+view(_UITextContainerView) id=- label=- frame=0,0,372x17 hidden=false alpha=1.0 interaction=true
+view(_UITextLayoutCanvasView) id=- label=- frame=0,0,372x17 hidden=false alpha=1.0 interaction=true
+view(_UITextLayoutFragmentView) id=- label=- frame=0,0,0x17 hidden=false alpha=1.0 interaction=true
+view(UIView) id=- label=- frame=0,0,372x17 hidden=false alpha=1.0 interaction=true
+view(_UITextLayoutView) id=- label=- frame=0,0,0x0 hidden=false alpha=1.0 interaction=true
+view(PlatformContainer) id=- label=- frame=6,128,408x626 hidden=false alpha=1.0 interaction=false
+view(HostingScrollView) id=- label=- frame=0,0,408x626 hidden=false alpha=1.0 interaction=true
+view(PlatformGroupContainer) id=- label=- frame=0,0,408x61 hidden=false alpha=1.0 interaction=true
+view(UIKitPlatformViewHost<PlatformViewRepresentableAdaptor<CircularUIKitProgressView>>) id=- label=- frame=30,19,14x14 hidden=false alpha=1.0 interaction=true
+view(SwiftUIActivityIndicatorView) id=- label=- frame=0,0,14x14 hidden=false alpha=1.0 interaction=true
+view(UIImageView) id=- label=- frame=0,0,14x14 hidden=false alpha=1.0 interaction=false
+/Users/runner/work/openclaw/openclaw/apps/ios/Tests/ChatProTabRecoveryControlsTests.swift:150: error: -[OpenClawTests.ChatProTabRecoveryControlsTests testRecoveryControlsStayReachableWhileAutomaticPreflightRetries] : XCTAssertFalse failed - Toolbar item 2 must not render dimmed while the automatic reconnect retries.
+Rendered controls:
+view(UIWindow) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(UITransitionView) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(UIDropShadowView) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(_UIHostingView<ModifiedContent<ModifiedContent<ModifiedContent<ModifiedContent<ChatRecoveryRenderedOwner, _EnvironmentKeyWritingModifier<Optional<AppAppearanceModel>>>, _EnvironmentKeyWritingModifier<Optional<NodeAppModel>>>, _EnvironmentKeyWritingModifier<Optional<VoiceWakeManager>>>, _EnvironmentKeyWritingModifier<Optional<GatewayConnectionController>>>>) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(UIKitPlatformViewHost<PlatformViewControllerRepresentableAdaptor<NavigationStackRepresentable>>) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(UILayoutContainerView) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(FloatingBarContainerView) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(_UIPointerInteractionAssistantEffectContainerView) id=- label=- frame=0,0,0x0 hidden=false alpha=1.0 interaction=false
+view(FloatingBarHostingView<FloatingBarContainer>) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(UIKitNavigationBar) id=- label=- frame=0,68,420x54 hidden=false alpha=1.0 interaction=true
+view(_UIPointerInteractionAssistantEffectContainerView) id=- label=- frame=0,0,0x0 hidden=false alpha=1.0 interaction=false
+view(NavigationBarContentView) id=- label=- frame=0,0,420x54 hidden=false alpha=1.0 interaction=true
+view(NavigationBarTransitionContainer) id=- label=- frame=0,0,420x54 hidden=false alpha=1.0 interaction=true
+view(NavigationBarPlatterContainer) id=- label=- frame=0,0,420x54 hidden=false alpha=1.0 interaction=true
+view(PlatterView) id=- label=- frame=348,0,52x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=-2,-2,56x48 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=2,1,47x40 hidden=false alpha=1.0 interaction=true
+view(PlatterContentView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(PlatterGlassView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(SubviewContainerView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(PlatterItemView) id=- label=- frame=4,0,44x44 hidden=false alpha=1.0 interaction=true
+view(ItemWrapperView) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=true
+view(_UITAMICAdaptorView) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=true
+view(UIKitBarItemHost<BarItemView>) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=false
+view(_UIInteractionView<_UIScrollPocketInteraction, CoreInteractionRepresentableAdaptor<ScrollPocketElementInteractionRepresentable>>) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=true
+view(_UIInteractionView<_UIScrollPocketInteraction, CoreInteractionRepresentableAdaptor<ScrollPocketElementInteractionRepresentable>>) id=- label=- frame=5,5,32x32 hidden=false alpha=0.5 interaction=true
+view(PlatterView) id=- label=- frame=84,0,46x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=0,0,46x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=0,0,46x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=-2,-2,50x48 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=2,1,41x40 hidden=false alpha=1.0 interaction=true
+view(PlatterContentView) id=- label=- frame=0,0,46x44 hidden=false alpha=1.0 interaction=true
+view(PlatterGlassView) id=- label=- frame=0,0,46x44 hidden=false alpha=1.0 interaction=true
+view(SubviewContainerView) id=- label=- frame=0,0,46x44 hidden=false alpha=1.0 interaction=true
+view(PlatterItemView) id=- label=- frame=4,0,38x44 hidden=false alpha=1.0 interaction=true
+view(ItemWrapperView) id=- label=- frame=0,0,38x44 hidden=false alpha=1.0 interaction=true
+view(_UITAMICAdaptorView) id=- label=- frame=0,0,38x44 hidden=false alpha=1.0 interaction=true
+view(UIKitBarItemHost<BarItemView>) id=- label=- frame=0,0,38x44 hidden=false alpha=1.0 interaction=false
+view(_UIInteractionView<_UIScrollPocketInteraction, CoreInteractionRepresentableAdaptor<ScrollPocketElementInteractionRepresentable>>) id=- label=- frame=0,0,38x44 hidden=false alpha=1.0 interaction=true
+view(_UIInteractionView<_UIScrollPocketInteraction, CoreInteractionRepresentableAdaptor<ScrollPocketElementInteractionRepresentable>>) id=- label=- frame=0,3,38x38 hidden=false alpha=0.5 interaction=true
+view(PlatterView) id=- label=- frame=20,0,52x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=-2,-2,56x48 hidden=false alpha=1.0 interaction=true
+view(AnimationView) id=- label=- frame=2,1,47x40 hidden=false alpha=1.0 interaction=true
+view(PlatterContentView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(PlatterGlassView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(SubviewContainerView) id=- label=- frame=0,0,52x44 hidden=false alpha=1.0 interaction=true
+view(PlatterItemView) id=- label=- frame=4,0,44x44 hidden=false alpha=1.0 interaction=true
+view(ItemWrapperView) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=true
+view(_UITAMICAdaptorView) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=true
+view(UIKitBarItemHost<BarItemView>) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=false
+view(_UIInteractionView<_UIScrollPocketInteraction, CoreInteractionRepresentableAdaptor<ScrollPocketElementInteractionRepresentable>>) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=true
+view(_UIInteractionView<_UIScrollPocketInteraction, CoreInteractionRepresentableAdaptor<ScrollPocketElementInteractionRepresentable>>) id=- label=- frame=4,4,36x36 hidden=false alpha=0.5 interaction=true
+view(UIView) id=- label=- frame=0,0,420x54 hidden=false alpha=1.0 interaction=false
+view(HostedViewContainer) id=- label=- frame=0,0,420x54 hidden=false alpha=1.0 interaction=true
+view(_UIBarBackground) id=- label=- frame=0,-68,420x122 hidden=false alpha=1.0 interaction=false
+view(UINavigationTransitionView) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(UIViewControllerWrapperView) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(HostingView) id=- label=- frame=0,0,420x912 hidden=false alpha=1.0 interaction=true
+view(_UIInheritedView) id=- label=- frame=10,764,400x104 hidden=false alpha=1.0 interaction=true
+view(_UIInheritedView) id=- label=- frame=0,0,400x104 hidden=false alpha=1.0 interaction=true
+view(_UIInheritedView) id=- label=- frame=0,0,0x0 hidden=false alpha=1.0 interaction=true
+view(UIPlatformGlassInteractionView) id=- label=- frame=0,0,400x104 hidden=false alpha=1.0 interaction=true
+view(_UIInheritedView) id=- label=- frame=0,0,400x104 hidden=false alpha=1.0 interaction=true
+view(PortalGroupMarkerView) id=- label=- frame=348,53,44x44 hidden=false alpha=1.0 interaction=true
+view(UIKitButtonHost) id=- label=- frame=304,53,44x44 hidden=false alpha=1.0 interaction=true
+view(HostingUIButton) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=false controlEnabled=false
+view(UIKitButtonHost) id=- label=- frame=260,53,44x44 hidden=false alpha=1.0 interaction=true
+view(HostingUIButton) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=false controlEnabled=false
+view(UIKitButtonHost) id=- label=- frame=178,53,82x44 hidden=false alpha=1.0 interaction=true
+view(HostingUIButton) id=- label=- frame=0,0,82x44 hidden=false alpha=1.0 interaction=false controlEnabled=false
+view(UIKitButtonHost) id=- label=- frame=7,53,44x44 hidden=false alpha=1.0 interaction=true
+view(HostingUIButton) id=- label=- frame=0,0,44x44 hidden=false alpha=1.0 interaction=false controlEnabled=false
+view(UIKitPlatformViewHost<PlatformViewRepresentableAdaptor<ChatComposerTextViewIOS>>) id=- label=- frame=13,11,372x24 hidden=false alpha=1.0 interaction=false
+view(ChatComposerUITextView) id=chat-message-input label=- frame=0,0,372x24 hidden=false alpha=1.0 interaction=true
+view(_UIScrollViewScrollIndicator) id=- label=- frame=3,18,366x3 hidden=false alpha=0.0 interaction=true
+view(UIView) id=- label=- frame=0,0,366x3 hidden=false alpha=1.0 interaction=true
+view(_UITextContainerView) id=- label=- frame=0,0,372x17 hidden=false alpha=1.0 interaction=true
+view(_UITextLayoutCanvasView) id=- label=- frame=0,0,372x17 hidden=false alpha=1.0 interaction=true
+view(_UITextLayoutFragmentView) id=- label=- frame=0,0,0x17 hidden=false alpha=1.0 interaction=true
+view(UIView) id=- label=- frame=0,0,372x17 hidden=false alpha=1.0 interaction=true
+view(_UITextLayoutView) id=- label=- frame=0,0,0x0 hidden=false alpha=1.0 interaction=true
+view(PlatformContainer) id=- label=- frame=6,128,408x626 hidden=false alpha=1.0 interaction=false
+view(HostingScrollView) id=- label=- frame=0,0,408x626 hidden=false alpha=1.0 interaction=true
+view(PlatformGroupContainer) id=- label=- frame=0,0,408x61 hidden=false alpha=1.0 interaction=true
+view(UIKitPlatformViewHost<PlatformViewRepresentableAdaptor<CircularUIKitProgressView>>) id=- label=- frame=30,19,14x14 hidden=false alpha=1.0 interaction=true
+view(SwiftUIActivityIndicatorView) id=- label=- frame=0,0,14x14 hidden=false alpha=1.0 interaction=true
+view(UIImageView) id=- label=- frame=0,0,14x14 hidden=false alpha=1.0 interaction=false
+Test Case '-[OpenClawTests.ChatProTabRecoveryControlsTests testRecoveryControlsStayReachableWhileAutomaticPreflightRetries]' failed (2.019 seconds).
+Test Suite 'ChatProTabRecoveryControlsTests' failed at 2026-11-03 11:28:56.544.
+	 Executed 2 tests, with 6 failures (0 unexpected) in 2.020 (2.022) seconds
+Test Suite 'OpenClawTests.xctest' failed at 2026-11-03 11:28:56.544.
+	 Executed 2 tests, with 6 failures (0 unexpected) in 2.020 (2.023) seconds
+Test Suite 'Selected tests' failed at 2026-11-03 11:28:56.545.
+	 Executed 2 tests, with 6 failures (0 unexpected) in 2.020 (2.024) seconds
+2026-11-03 11:28:56.618928+0000 OpenClaw[24277:73775] [WatchExecApproval] watch approval snapshot failed reason=gateway_changed
+2026-11-03 11:28:56.619128+0000 OpenClaw[24277:73775] [WatchExecApproval] watch approval snapshot error=WATCH_UNAVAILABLE: no paired Apple Watch
+2026-11-03 11:28:56.619315+0000 OpenClaw[24277:73896] [GatewayDiag] [2026-11-03T11:28:56.619Z] watch exec approval: sync snapshot failed reason=gateway_changed error=WATCH_UNAVAILABLE: no paired Apple Watch
+2026-11-03 11:28:56.630857+0000 OpenClaw[24277:73775] Unbalanced calls to begin/end appearance transitions for <_TtGC7SwiftUI19UIHostingControllerGVS_15ModifiedContentGS1_GS1_GS1_V13OpenClawTestsP10$11407a1f025ChatRecoveryRenderedOwnerGVS_30_EnvironmentKeyWritingModifierGSqC8OpenClaw18AppAppearanceModel___GS4_GSqCS5_12NodeAppModel___GS4_GSqCS5_16VoiceWakeManager___GS4_GSqCS5_27GatewayConnectionController____: 0x108645400>.
+2026-11-03 11:28:56.641503+0000 OpenClaw[24277:73775] [OpenClawChatUI] refresh history failed not connected
+2026-11-03 11:28:57.119 xcodebuild[23006:70274] [MT] IDETestOperationsObserverDebug: 8.220 elapsed -- Testing started completed.
+2026-11-03 11:28:57.119 xcodebuild[23006:70274] [MT] IDETestOperationsObserverDebug: 0.000 sec, +0.000 sec -- start
+2026-11-03 11:28:57.119 xcodebuild[23006:70274] [MT] IDETestOperationsObserverDebug: 8.220 sec, +8.220 sec -- end
+
+Test session results, code coverage, and logs:
+	/Users/runner/work/_temp/proof/reverted-red.xcresult
+
+Failing tests:
+	ChatProTabRecoveryControlsTests.testRecoveryControlsStayReachableWhileAutomaticPreflightRetries()
+	ChatProTabRecoveryControlsTests.testRecoveryControlsStayReachableWhileAutomaticPreflightRetries()
+	ChatProTabRecoveryControlsTests.testRecoveryControlsStayReachableWhileAutomaticPreflightRetries()
+	ChatProTabRecoveryControlsTests.testRecoveryControlsStayReachableWhileAutomaticPreflightRetries()
+	ChatProTabRecoveryControlsTests.testRecoveryControlsStayReachableWhileAutomaticPreflightRetries()
+	ChatProTabRecoveryControlsTests.testRecoveryControlsStayReachableWhileAutomaticPreflightRetries()
+
+** TEST EXECUTE FAILED **
+
+Testing started

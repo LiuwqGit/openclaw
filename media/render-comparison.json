@@ -1,0 +1,41 @@
+{
+  "image_size": [
+    1260,
+    2736
+  ],
+  "toolbar_band_px": [
+    0,
+    190,
+    1260,
+    380
+  ],
+  "head": {
+    "box": [
+      0,
+      190,
+      1260,
+      380
+    ],
+    "mean_luminance": 242.877,
+    "min": 33.0,
+    "max": 255.0
+  },
+  "main_lock": {
+    "box": [
+      0,
+      190,
+      1260,
+      380
+    ],
+    "mean_luminance": 245.832,
+    "min": 140.0,
+    "max": 252.33333333333334
+  },
+  "whole_screen": {
+    "head_mean_luminance": 249.602,
+    "main_lock_mean_luminance": 249.807
+  },
+  "pixels_differing_gt4": 8445,
+  "pixels_total": 3447360,
+  "changed_fraction_in_toolbar_band": 0.0353
+}
