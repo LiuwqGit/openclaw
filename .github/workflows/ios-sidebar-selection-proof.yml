@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   proof:
-    runs-on: macos-latest
+    runs-on: xcode-27
     timeout-minutes: 300
     steps:
       - uses: actions/checkout@v4
