@@ -1,0 +1,32 @@
+name: probe-macos-runners
+
+on:
+  push:
+    branches: [evidence/193789-runner-probe]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-26, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - name: Runner facts
+        run: |
+          set -x
+          sw_vers || true
+          uname -a
+          ls /Applications | grep -i xcode || true
+          xcode-select -p
+          xcodebuild -version || true
+          xcodebuild -showsdks 2>/dev/null | head -30 || true
+          xcrun simctl list runtimes 2>/dev/null | head -20 || true
+          xcrun simctl list devices available 2>/dev/null | head -40 || true
+          swift --version || true
+          df -h / || true
+          sysctl -n hw.ncpu hw.memsize || true
