@@ -33,7 +33,7 @@ concurrency:
 
 jobs:
   proof:
-    runs-on: macos-26
+    runs-on: macos-latest
     timeout-minutes: 180
     env:
       NODE_VERSION: "24.22.1"
