@@ -1,0 +1,136 @@
+name: OpenClawKit thinking inheritance proof (PR 194180)
+
+# Fork-local evidence run for openclaw/openclaw PR #194180 (issue #194163).
+#
+# The upstream `macos-swift` lane owns `swift test --package-path
+# apps/shared/OpenClawKit`, but it is gated behind `!ordinaryPullRequest`
+# (scripts/ci-build-manifest.mjs), so a fork PR never executes the shared
+# OpenClawKit Swift suite. This workflow reproduces that command on a hosted
+# macOS runner, phased so a later phase running out of time cannot take earlier
+# evidence with it (every phase is followed by an always() artifact upload):
+#
+#   head-regression -> the PR's own regression suites, expected GREEN
+#   head-wire       -> captured chat.send wire payload at the PR head
+#   revert          -> the two fixed sources replaced with the recorded base
+#   base-regression -> the same suites, expected RED (defect reproduced)
+#   base-wire       -> captured chat.send wire payload on base logic
+#   base-seed       -> durable outbox written by base logic
+#   head-upgrade    -> base-written rows loaded and replayed by patched code
+#   head-restart    -> inherited row survives a simulated app restart
+#
+# Harness only; it lives on this proof branch and is not part of the PR diff.
+on:
+  push:
+    branches: ["proof/pr-194180-thinking-inheritance"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openclawkit-thinking-proof-194180
+  cancel-in-progress: false
+
+jobs:
+  proof:
+    runs-on: macos-26
+    timeout-minutes: 180
+    env:
+      NODE_VERSION: "24.22.1"
+      BASE_SHA: "50ca1f4a5aa6b955acda60219d67ab97629786f7"
+      HEAD_SHA: "f6843e214728cb8f91ba694538bef0ee5add5016"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Prepare toolchain, node assets and base reference
+        run: bash proof/thinking-proof.sh prepare
+
+      - name: Execute the PR regression suites at the PR head (expected GREEN)
+        if: ${{ !cancelled() }}
+        run: bash proof/thinking-proof.sh head-regression
+
+      - name: Upload proof evidence (after head regression)
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: openclawkit-thinking-proof
+          path: |
+            ${{ runner.temp }}/proof-194180/summary.txt
+            ${{ runner.temp }}/proof-194180/proof-markers.txt
+            ${{ runner.temp }}/proof-194180/toolchain.txt
+            ${{ runner.temp }}/proof-194180/head.txt
+            ${{ runner.temp }}/proof-194180/base-sha.txt
+            ${{ runner.temp }}/proof-194180/base-vs-main.txt
+            ${{ runner.temp }}/proof-194180/*.txt
+            ${{ runner.temp }}/proof-194180/*.patch
+            ${{ runner.temp }}/proof-194180/logs/*.log
+          if-no-files-found: warn
+          retention-days: 60
+          overwrite: true
+
+      - name: Capture the chat.send wire payload at the PR head
+        if: ${{ !cancelled() }}
+        run: bash proof/thinking-proof.sh head-wire
+
+      - name: Replace the fix with the recorded base sources
+        if: ${{ !cancelled() }}
+        run: bash proof/thinking-proof.sh revert
+
+      - name: Execute the PR regression suites on base logic (expected RED)
+        if: ${{ !cancelled() }}
+        run: bash proof/thinking-proof.sh base-regression
+
+      - name: Capture the chat.send wire payload on base logic (expected RED)
+        if: ${{ !cancelled() }}
+        run: bash proof/thinking-proof.sh base-wire
+
+      - name: Write the durable outbox with base logic
+        if: ${{ !cancelled() }}
+        run: bash proof/thinking-proof.sh base-seed
+
+      - name: Restore the PR head sources
+        if: ${{ !cancelled() }}
+        run: bash proof/thinking-proof.sh restore
+
+      - name: Load and replay the base-written rows with the patched build
+        if: ${{ !cancelled() }}
+        run: bash proof/thinking-proof.sh head-upgrade
+
+      - name: Restart and replay an inherited queue row with the patched build
+        if: ${{ !cancelled() }}
+        run: bash proof/thinking-proof.sh head-restart
+
+      - name: Report the per-test outcome matrix
+        if: ${{ always() }}
+        run: bash proof/thinking-proof.sh report
+
+      - name: Write the step summary
+        if: ${{ always() }}
+        run: bash proof/thinking-proof.sh summary
+
+      - name: Upload proof evidence (final)
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: openclawkit-thinking-proof
+          path: |
+            ${{ runner.temp }}/proof-194180/summary.txt
+            ${{ runner.temp }}/proof-194180/proof-markers.txt
+            ${{ runner.temp }}/proof-194180/toolchain.txt
+            ${{ runner.temp }}/proof-194180/head.txt
+            ${{ runner.temp }}/proof-194180/base-sha.txt
+            ${{ runner.temp }}/proof-194180/base-vs-main.txt
+            ${{ runner.temp }}/proof-194180/new-test-matrix.txt
+            ${{ runner.temp }}/proof-194180/sqlite-dump-*.txt
+            ${{ runner.temp }}/proof-194180/*.txt
+            ${{ runner.temp }}/proof-194180/*.patch
+            ${{ runner.temp }}/proof-194180/logs/*.log
+          if-no-files-found: warn
+          retention-days: 60
+          overwrite: true
