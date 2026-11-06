@@ -9,6 +9,8 @@ name: ios-partial-sessions-proof
 # Artifacts: simulator screenshots, xcresult summaries, xcodebuild logs.
 
 on:
+  push:
+    branches: [evidence/193789-ios-proof]
   workflow_dispatch:
     inputs:
       head_ref:
@@ -17,6 +19,10 @@ on:
       base_sha:
         description: Upstream base commit of the PR
         default: "195efadb71386518658d21e0b70c4fc9650b2f8b"
+
+concurrency:
+  group: ios-partial-sessions-proof
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -37,13 +43,17 @@ jobs:
           fetch-depth: 0
 
       - name: Fetch head and base revisions
+        env:
+          HEAD_REF: ${{ inputs.head_ref || 'feat/issue-193789-ios-sessions-incomplete-list' }}
+          BASE_SHA: ${{ inputs.base_sha || '195efadb71386518658d21e0b70c4fc9650b2f8b' }}
         run: |
           set -euo pipefail
           git remote add upstream https://github.com/openclaw/openclaw.git || true
-          git fetch --quiet origin "${{ inputs.head_ref }}"
-          git fetch --quiet upstream "${{ inputs.base_sha }}"
-          git rev-parse "origin/${{ inputs.head_ref }}" | tee /tmp/head_sha.txt
-          echo "${{ inputs.base_sha }}" > /tmp/base_sha.txt
+          git fetch --quiet origin "$HEAD_REF"
+          git fetch --quiet upstream "$BASE_SHA"
+          git rev-parse FETCH_HEAD > /dev/null
+          git rev-parse "origin/$HEAD_REF" | tee /tmp/head_sha.txt
+          git rev-parse "$BASE_SHA" | tee /tmp/base_sha.txt
 
       - name: Setup Node
         uses: actions/setup-node@v4
