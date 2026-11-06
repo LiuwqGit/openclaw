@@ -70,6 +70,8 @@ jobs:
             ${{ runner.temp }}/proof-194180/*.txt
             ${{ runner.temp }}/proof-194180/*.patch
             ${{ runner.temp }}/proof-194180/logs/*.log
+            ${{ runner.temp }}/proof-194180/markers/*.txt
+            ${{ runner.temp }}/proof-194180/durable-copy/**
           if-no-files-found: warn
           retention-days: 60
           overwrite: true
@@ -106,6 +108,15 @@ jobs:
         if: ${{ !cancelled() }}
         run: bash proof/thinking-proof.sh head-restart
 
+      - name: Copy the durable outbox databases into the evidence tree
+        if: ${{ always() }}
+        run: |
+          set -uo pipefail
+          dest="${RUNNER_TEMP}/proof-194180/durable-copy"
+          mkdir -p "$dest"
+          cp -R "${RUNNER_TEMP}/proof-194180/durable/." "$dest/" 2>/dev/null || true
+          ls -laR "$dest" | head -40
+
       - name: Report the per-test outcome matrix
         if: ${{ always() }}
         run: bash proof/thinking-proof.sh report
@@ -131,6 +142,8 @@ jobs:
             ${{ runner.temp }}/proof-194180/*.txt
             ${{ runner.temp }}/proof-194180/*.patch
             ${{ runner.temp }}/proof-194180/logs/*.log
+            ${{ runner.temp }}/proof-194180/markers/*.txt
+            ${{ runner.temp }}/proof-194180/durable-copy/**
           if-no-files-found: warn
           retention-days: 60
           overwrite: true

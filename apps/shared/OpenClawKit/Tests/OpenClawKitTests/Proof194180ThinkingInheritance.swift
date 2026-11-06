@@ -37,8 +37,29 @@ enum Proof194180 {
             .appendingPathComponent("proof-194180-durable", isDirectory: true)
     }
 
+    /// Markers go to stdout *and* to `$PROOF_194180_MARKERS` when set, because a
+    /// test runner may capture the stdout of a passing test. The file is the
+    /// artifact the workflow collects.
     static func emit(_ key: String, _ value: String) {
-        print("PROOF194180_\(key)=\(value)")
+        let line = "PROOF194180_\(key)=\(value)"
+        print(line)
+        guard let path = ProcessInfo.processInfo.environment["PROOF_194180_MARKERS"],
+              !path.isEmpty,
+              let data = (line + "\n").data(using: .utf8)
+        else { return }
+        let url = URL(fileURLWithPath: path)
+        try? FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        if FileManager.default.fileExists(atPath: path),
+           let handle = try? FileHandle(forWritingTo: url)
+        {
+            defer { try? handle.close() }
+            handle.seekToEndOfFile()
+            try? handle.write(contentsOf: data)
+            return
+        }
+        try? data.write(to: url)
     }
 
     static func quoted(_ value: String) -> String {

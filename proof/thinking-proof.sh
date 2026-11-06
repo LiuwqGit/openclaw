@@ -55,10 +55,15 @@ run_tests() {
   local label="$1" filter="$2" expected="$3"
   local logfile="$LOGS/$label.log"
   log "$label (filter=$filter expected=$expected)"
+  mkdir -p "$PROOF_DIR/markers"
+  export PROOF_194180_MARKERS="$PROOF_DIR/markers/$label.txt"
+  : >"$PROOF_194180_MARKERS"
   swift test "${SWIFT_ARGS[@]}" --filter "$filter" >"$logfile" 2>&1
   local status=$?
   tail -n 60 "$logfile"
-  grep -E 'PROOF194180_' "$logfile" | tee -a "$MARKERS" >/dev/null || true
+  grep -E 'PROOF194180_' "$logfile" >>"$MARKERS" 2>/dev/null || true
+  sed "s|^|[$label] |" "$PROOF_194180_MARKERS" >>"$MARKERS" 2>/dev/null || true
+  cat "$PROOF_194180_MARKERS" 2>/dev/null || true
   printf -- '--- %s exit=%s expected=%s\n' "$label" "$status" "$expected"
   echo "$label exit=$status expected=$expected" >>"$SUMMARY_FILE"
   if [[ "$expected" == "green" ]]; then
