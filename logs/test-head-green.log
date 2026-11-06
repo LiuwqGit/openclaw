@@ -1,0 +1,172 @@
+Command line invocation:
+    /Applications/Xcode_26.6.app/Contents/Developer/usr/bin/xcodebuild -project apps/ios/OpenClaw.xcodeproj -scheme OpenClawUITests -configuration Debug CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=NO CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER= COMPILER_INDEX_STORE_ENABLE=NO ARCHS=arm64 ONLY_ACTIVE_ARCH=YES -destination "platform=iOS Simulator,id=1F0A9C4B-2DFC-444E-B162-696E5078A72B" -derivedDataPath /Users/runner/work/_temp/DerivedData -resultBundlePath /Users/runner/work/_temp/proof/head-green.xcresult -parallel-testing-enabled NO -collect-test-diagnostics never -test-timeouts-enabled YES -default-test-execution-time-allowance 600 -maximum-test-execution-time-allowance 1200 "-only-testing:OpenClawUITests/CommandSessionsPartialRosterUITests" test-without-building
+
+Build settings from command line:
+    ARCHS = arm64
+    CODE_SIGN_IDENTITY = -
+    CODE_SIGN_STYLE = Manual
+    CODE_SIGNING_ALLOWED = YES
+    CODE_SIGNING_REQUIRED = NO
+    COMPILER_INDEX_STORE_ENABLE = NO
+    DEVELOPMENT_TEAM = 
+    ONLY_ACTIVE_ARCH = YES
+    PROVISIONING_PROFILE_SPECIFIER = 
+
+Resolve Package Graph
+Invalid Exclude '/Users/runner/work/openclaw/openclaw/apps/ios/ThirdParty/ESPProvision/ESPProvision/Pods': File not found.Invalid Exclude '/Users/runner/work/openclaw/openclaw/apps/ios/ThirdParty/ESPProvision/ESPProvision/Tests': File not found.Invalid Exclude '/Users/runner/work/openclaw/openclaw/apps/ios/ThirdParty/ESPProvision/ESPProvision/Example': File not found.
+
+Resolved source packages:
+  WebRTC: https://github.com/stasel/WebRTC.git @ 154.0.0
+  Commander: https://github.com/steipete/Commander.git @ 0.3.0
+  Sodium: https://github.com/jedisct1/swift-sodium.git @ cfd195c
+  OpenClawKit: /Users/runner/work/openclaw/openclaw/apps/shared/OpenClawKit
+  ESPProvision: /Users/runner/work/openclaw/openclaw/apps/ios/ThirdParty/ESPProvision
+  swabble: /Users/runner/work/openclaw/openclaw/apps/swabble
+  swift-markdown: https://github.com/swiftlang/swift-markdown @ 0.9.0
+  SwiftProtobuf: https://github.com/apple/swift-protobuf.git @ 1.39.0
+  GRDB: https://github.com/groue/GRDB.swift.git @ 7.11.1
+  ElevenLabsKit: https://github.com/steipete/ElevenLabsKit @ 0.1.3
+  SwiftMath: https://github.com/mgriebling/SwiftMath @ 1.7.3
+  cmark-gfm: https://github.com/swiftlang/swift-cmark.git @ 0.9.0
+
+Writing result bundle at path:
+	/Users/runner/work/_temp/proof/head-green.xcresult
+
+--- xcodebuild: WARNING: Using the first of multiple matching destinations:
+{ platform:iOS Simulator, arch:arm64, id:1F0A9C4B-2DFC-444E-B162-696E5078A72B, OS:26.5, name:iPhone Air }
+{ platform:iOS Simulator, arch:x86_64, id:1F0A9C4B-2DFC-444E-B162-696E5078A72B, OS:26.5, name:iPhone Air }
+2026-11-06 13:39:05.657603+0000 OpenClawUITests-Runner[28417:81747] [Default] Running tests...
+objc[28417]: Class UIAccessibilityLoaderWebShared is implemented in both /Library/Developer/CoreSimulator/Volumes/iOS_23F77/Library/Developer/CoreSimulator/Profiles/Runtimes/iOS 26.5.simruntime/Contents/Resources/RuntimeRoot/System/Library/AccessibilityBundles/WebCore.axbundle/WebCore (0x108478310) and /Library/Developer/CoreSimulator/Volumes/iOS_23F77/Library/Developer/CoreSimulator/Profiles/Runtimes/iOS 26.5.simruntime/Contents/Resources/RuntimeRoot/System/Library/AccessibilityBundles/WebKit.axbundle/WebKit (0x1084ac398). This may cause spurious casting failures and mysterious crashes. One of the duplicates must be removed or renamed.
+    t =      nans Interface orientation changed to Portrait
+Test Suite 'Selected tests' started at 2026-11-06 13:39:17.781.
+Test Suite 'OpenClawUITests.xctest' started at 2026-11-06 13:39:17.782.
+Test Suite 'CommandSessionsPartialRosterUITests' started at 2026-11-06 13:39:17.782.
+Test Case '-[OpenClawUITests.CommandSessionsPartialRosterUITests testPartialRosterNoticeRetainsRowsAndRefreshRecovers]' started.
+    t =     0.00s Start Test at 2026-11-06 13:39:17.783
+2026-11-06 13:39:21.508 xcodebuild[26605:76987] [MT] IDELaunchParametersSnapshot: The operation couldn’t be completed. (DebuggerLLDB.DebuggerVersionStore.StoreError error 0.)
+2026-11-06 13:39:21.508 xcodebuild[26605:76987] [MT] IDELaunchParametersSnapshot: no debugger version
+    t =     0.94s Set Up
+    t =     0.98s Open ai.openclawfoundation.app.debug
+    t =     0.98s     Launch ai.openclawfoundation.app.debug
+    t =    21.29s         Setting up automation session
+    t =    24.04s         Wait for ai.openclawfoundation.app.debug to idle
+    t =    41.85s Waiting 15.0s for "Continue" Button to exist
+    t =    42.91s     Checking `Expect predicate `existsNoRetry == 1` for object "Continue" Button`
+    t =    42.91s         Checking existence of `"Continue" Button`
+    t =    43.35s Tap "Continue" Button
+    t =    43.35s     Wait for ai.openclawfoundation.app.debug to idle
+    t =    43.36s     Find the "Continue" Button
+    t =    43.45s     Check for interrupting elements affecting "Continue" Button
+    t =    43.68s     Synthesize event
+    t =    46.01s     Wait for ai.openclawfoundation.app.debug to idle
+    t =    46.45s Waiting 10.0s for "Connect Manually" Button to exist
+    t =    47.51s     Checking `Expect predicate `existsNoRetry == 1` for object "Connect Manually" Button`
+    t =    47.52s         Checking existence of `"Connect Manually" Button`
+    t =    47.61s Tap "Connect Manually" Button
+    t =    47.61s     Wait for ai.openclawfoundation.app.debug to idle
+    t =    47.61s     Find the "Connect Manually" Button
+    t =    47.69s     Check for interrupting elements affecting "Connect Manually" Button
+    t =    47.76s     Synthesize event
+    t =    48.07s     Wait for ai.openclawfoundation.app.debug to idle
+    t =    50.46s Waiting 5.0s for "Enter setup code" TextField to exist
+    t =    51.50s     Checking `Expect predicate `existsNoRetry == 1` for object "Enter setup code" TextField`
+    t =    51.50s         Checking existence of `"Enter setup code" TextField`
+    t =    52.34s Tap "Enter setup code" TextField
+    t =    52.34s     Wait for ai.openclawfoundation.app.debug to idle
+    t =    52.35s     Find the "Enter setup code" TextField
+    t =    52.45s     Check for interrupting elements affecting "Enter setup code" TextField
+    t =    52.57s     Synthesize event
+    t =    52.88s     Wait for ai.openclawfoundation.app.debug to idle
+    t =    59.19s Type '{"url":"ws://127.0...' into "Enter setup code" TextField
+    t =    59.19s     Wait for ai.openclawfoundation.app.debug to idle
+    t =    59.60s     Find the "Enter setup code" TextField
+    t =    60.32s     Check for interrupting elements affecting "Enter setup code" TextField
+    t =    60.81s     Synthesize event
+    t =    62.16s     Wait for ai.openclawfoundation.app.debug to idle
+    t =    62.16s Tap "Apply" Button
+    t =    62.16s     Wait for ai.openclawfoundation.app.debug to idle
+    t =    62.16s     Find the "Apply" Button
+    t =    62.30s     Check for interrupting elements affecting "Apply" Button
+    t =    62.39s     Synthesize event
+    t =    62.70s     Wait for ai.openclawfoundation.app.debug to idle
+    t =    65.05s Waiting 60.0s for "You're connected" StaticText to exist
+    t =    66.06s     Checking `Expect predicate `existsNoRetry == 1` for object "You're connected" StaticText`
+    t =    66.06s         Checking existence of `"You're connected" StaticText`
+    t =    66.97s         Capturing element debug description
+    t =    67.09s     Checking `Expect predicate `existsNoRetry == 1` for object "You're connected" StaticText`
+    t =    67.09s         Checking existence of `"You're connected" StaticText`
+    t =    67.67s         Capturing element debug description
+    t =    68.09s     Checking `Expect predicate `existsNoRetry == 1` for object "You're connected" StaticText`
+    t =    68.09s         Checking existence of `"You're connected" StaticText`
+    t =    68.59s         Capturing element debug description
+    t =    69.10s     Checking `Expect predicate `existsNoRetry == 1` for object "You're connected" StaticText`
+    t =    69.11s         Checking existence of `"You're connected" StaticText`
+    t =    69.27s         Capturing element debug description
+    t =    70.13s     Checking `Expect predicate `existsNoRetry == 1` for object "You're connected" StaticText`
+    t =    70.13s         Checking existence of `"You're connected" StaticText`
+    t =    71.41s Tap "Go to Chat" Button
+    t =    71.41s     Wait for ai.openclawfoundation.app.debug to idle
+    t =    71.41s     Find the "Go to Chat" Button
+    t =    72.06s     Check for interrupting elements affecting "Go to Chat" Button
+    t =    72.48s     Synthesize event
+    t =    72.79s     Wait for ai.openclawfoundation.app.debug to idle
+    t =    73.28s Terminate ai.openclawfoundation.app.debug:29766
+    t =    74.47s Open ai.openclawfoundation.app.debug
+2026-11-06 13:40:32.655 xcodebuild[26605:76987] [MT] IDELaunchParametersSnapshot: The operation couldn’t be completed. (DebuggerLLDB.DebuggerVersionStore.StoreError error 0.)
+2026-11-06 13:40:32.655 xcodebuild[26605:76987] [MT] IDELaunchParametersSnapshot: no debugger version
+    t =    74.48s     Launch ai.openclawfoundation.app.debug
+    t =    76.77s         Setting up automation session
+    t =    80.01s         Wait for ai.openclawfoundation.app.debug to idle
+    t =    83.88s Waiting 10.0s for ScrollView (First Match) to exist
+    t =    84.95s     Checking `Expect predicate `existsNoRetry == 1` for object ScrollView (First Match)`
+    t =    84.95s         Checking existence of `ScrollView (First Match)`
+    t =    90.70s Waiting 20.0s for "199 sessions" StaticText to exist
+    t =    91.73s     Checking `Expect predicate `existsNoRetry == 1` for object "199 sessions" StaticText`
+    t =    91.73s         Checking existence of `"199 sessions" StaticText`
+    t =    96.18s Find the Target Application 'ai.openclawfoundation.app.debug'
+    t =   100.17s Added attachment named 'partial-roster'
+    t =   100.18s Waiting 10.0s for "Showing 200 sessions; 205 total. Refresh to load the rest." StaticText to exist
+    t =   101.23s     Checking `Expect predicate `existsNoRetry == 1` for object "Showing 200 sessions; 205 total. Refresh to load the rest." StaticText`
+    t =   101.23s         Checking existence of `"Showing 200 sessions; 205 total. Refresh to load the rest." StaticText`
+    t =   102.08s Checking existence of `Button (First Match)`
+    t =   102.71s Waiting 5.0s for "Refresh" Button to exist
+    t =   103.75s     Checking `Expect predicate `existsNoRetry == 1` for object "Refresh" Button`
+    t =   103.75s         Checking existence of `"Refresh" Button`
+    t =   104.68s Find the "Refresh" Button
+    t =   105.64s Find the "Sessions.PartialLoad.Refresh" Button
+    t =   106.45s Find the "Sessions.PartialLoad.Refresh" Button
+    t =   107.48s Tap "Sessions.PartialLoad.Refresh" Button
+    t =   107.48s     Wait for ai.openclawfoundation.app.debug to idle
+    t =   107.49s     Find the "Sessions.PartialLoad.Refresh" Button
+    t =   108.47s     Check for interrupting elements affecting "Sessions.PartialLoad.Refresh" Button
+    t =   108.90s     Synthesize event
+    t =   109.29s     Wait for ai.openclawfoundation.app.debug to idle
+    t =   109.61s Waiting 15.0s for "204 sessions" StaticText to exist
+    t =   110.66s     Checking `Expect predicate `existsNoRetry == 1` for object "204 sessions" StaticText`
+    t =   110.66s         Checking existence of `"204 sessions" StaticText`
+    t =   111.57s Waiting 5.0s for "Showing 200 sessions; 205 total. Refresh to load the rest." StaticText to not exist
+    t =   112.62s     Checking `Expect predicate `existsNoRetry == 0` for object "Showing 200 sessions; 205 total. Refresh to load the rest." StaticText`
+    t =   112.63s         Checking existence of `"Showing 200 sessions; 205 total. Refresh to load the rest." StaticText`
+    t =   113.39s Checking existence of `"Sessions.PartialLoad.Refresh" Button`
+    t =   114.13s Find the Target Application 'ai.openclawfoundation.app.debug'
+    t =   114.59s Added attachment named 'complete-roster'
+    t =   114.59s Added attachment named 'sessions-partial-roster-trace'
+    t =   114.59s Terminate ai.openclawfoundation.app.debug:32141
+    t =   115.60s Tear Down
+Test Case '-[OpenClawUITests.CommandSessionsPartialRosterUITests testPartialRosterNoticeRetainsRowsAndRefreshRecovers]' passed (115.915 seconds).
+Test Suite 'CommandSessionsPartialRosterUITests' passed at 2026-11-06 13:41:13.699.
+	 Executed 1 test, with 0 failures (0 unexpected) in 115.915 (115.918) seconds
+Test Suite 'OpenClawUITests.xctest' passed at 2026-11-06 13:41:13.700.
+	 Executed 1 test, with 0 failures (0 unexpected) in 115.915 (115.918) seconds
+Test Suite 'Selected tests' passed at 2026-11-06 13:41:13.700.
+	 Executed 1 test, with 0 failures (0 unexpected) in 115.915 (115.920) seconds
+2026-11-06 13:41:15.550 xcodebuild[26605:76987] [MT] IDETestOperationsObserverDebug: 162.971 elapsed -- Testing started completed.
+2026-11-06 13:41:15.550 xcodebuild[26605:76987] [MT] IDETestOperationsObserverDebug: 0.000 sec, +0.000 sec -- start
+2026-11-06 13:41:15.550 xcodebuild[26605:76987] [MT] IDETestOperationsObserverDebug: 162.971 sec, +162.971 sec -- end
+
+Test session results, code coverage, and logs:
+	/Users/runner/work/_temp/proof/head-green.xcresult
+
+** TEST EXECUTE SUCCEEDED **
+
+Testing started

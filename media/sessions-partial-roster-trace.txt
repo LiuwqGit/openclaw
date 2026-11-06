@@ -1,0 +1,6 @@
+launch arguments: --openclaw-initial-destination sessions --openclaw-ui-test-readiness --openclaw-appearance light -AppleLanguages (en) -AppleLocale en_US
+fixture: http://127.0.0.1:19876
+retained rows visible while final page failing: Synthetic session 1 … header "199 sessions"
+notice: Showing 200 sessions; 205 total. Refresh to load the rest.
+in-screen Refresh: label=Refresh; identifier=Sessions.PartialLoad.Refresh
+header count after recovery: 204 sessions

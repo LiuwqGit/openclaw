@@ -1,9 +1,10 @@
-host: 26.7.2 / Xcode 26.6 Build version 17F113
-head proven: b795c5cf53084ee2601154ab3d7861b08af6888a (PR head 8e25134a7200622232e655b30dd9c0f26cff3b10)
-base proven: upstream/main f15e8236a999a4d629814714371f49c586bb119a
-simulator: D26ED71E-9D97-4E79-B376-C104ABB9517A
-RESULT prepare: simulator booted, project generated
+host: 26.6.2 / Xcode 26.6 Build version 17F113
+head proven: 3375c90a657f5ba1a3a65862196c12ef0c321f15 (PR head 3723d9781e51d0830e9ac711fad37241c7889994)
+base proven: upstream/main d4ae77eae296fd8eb1f90f7a4ebb5d77fa2e6ad9
+fixture: http://127.0.0.1:19876/ -> {"requests":[],"connections":0,"partial":false,"documentDownloads":0}
+simulator: 1F0A9C4B-2DFC-444E-B162-696E5078A72B
+RESULT prepare: simulator booted, project generated, fixture listening
 RESULT head build-for-testing: SUCCEEDED
 RESULT head execution: GREEN (xcodebuild exit 0)
-RESULT base build-for-testing: SUCCEEDED (fix removed at upstream/main f15e8236a999a4d629814714371f49c586bb119a)
+RESULT base build-for-testing: SUCCEEDED (fix removed at upstream/main d4ae77eae296fd8eb1f90f7a4ebb5d77fa2e6ad9)
 RESULT base execution: RED (xcodebuild exit 65), as required
