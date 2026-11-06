@@ -1,0 +1,377 @@
+name: ios-partial-sessions-proof
+
+# Evidence run for openclaw/openclaw PR #193809 (issue #193789).
+# Executes the Sessions partial-load consumer regression on a real iOS simulator
+# in three legs:
+#   1. base    : upstream base product code + fixture/UI test only -> expect RED (bug reproduced)
+#   2. head    : PR head -> unit tests + UI test GREEN, before/after screenshots
+#   3. mutation: PR head with the CommandSessionsScreen wiring reverted -> expect RED
+# Artifacts: simulator screenshots, xcresult summaries, xcodebuild logs.
+
+on:
+  workflow_dispatch:
+    inputs:
+      head_ref:
+        description: PR head branch (in this fork)
+        default: feat/issue-193789-ios-sessions-incomplete-list
+      base_sha:
+        description: Upstream base commit of the PR
+        default: "195efadb71386518658d21e0b70c4fc9650b2f8b"
+
+permissions:
+  contents: read
+
+env:
+  DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+  NODE_VERSION: "24.22.1"
+
+jobs:
+  proof:
+    runs-on: macos-26
+    timeout-minutes: 360
+    steps:
+      - name: Check out evidence branch
+        uses: actions/checkout@v4
+        with:
+          ref: evidence/193789-ios-proof
+          fetch-depth: 0
+
+      - name: Fetch head and base revisions
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/openclaw/openclaw.git || true
+          git fetch --quiet origin "${{ inputs.head_ref }}"
+          git fetch --quiet upstream "${{ inputs.base_sha }}"
+          git rev-parse "origin/${{ inputs.head_ref }}" | tee /tmp/head_sha.txt
+          echo "${{ inputs.base_sha }}" > /tmp/base_sha.txt
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Enable pnpm
+        run: |
+          set -euo pipefail
+          corepack enable || npm install -g pnpm@12.15.0
+          pnpm --version
+
+      - name: Install toolchain (xcodegen, swift tools, rust)
+        run: |
+          set -euo pipefail
+          tools_dir="$RUNNER_TEMP/openclaw-swift-tools"
+          ./scripts/install-xcodegen.sh "$tools_dir"
+          ./scripts/install-swift-tools.sh "$tools_dir"
+          echo "$tools_dir" >> "$GITHUB_PATH"
+          "$tools_dir/xcodegen" --version
+          "$tools_dir/swiftformat" --version
+          "$tools_dir/swiftlint" version
+          export PATH="$HOME/.cargo/bin:$PATH"
+          watch_toolchain="$(awk -F '"' '/^channel =/ { print $2; exit }' apps/shared/OpenClawWatchRTC/rust-toolchain.toml)"
+          rustup toolchain install "$watch_toolchain" --profile minimal --component rust-src
+
+      - name: Install mermaid renderer dependencies
+        env:
+          CI: "true"
+        run: |
+          pnpm install --frozen-lockfile --prefer-offline --optional \
+            --filter '@openclaw/mermaid-renderer...' \
+            --config.ignore-scripts=false \
+            --config.engine-strict=false || \
+          pnpm install --frozen-lockfile --prefer-offline --config.engine-strict=false
+
+      - name: Select simulator
+        run: |
+          set -euo pipefail
+          udid="$(xcrun simctl list devices available --json |
+            python3 -c 'import json,sys
+          data=json.load(sys.stdin)
+          for runtime,devices in data["devices"].items():
+            if "iOS" not in runtime: continue
+            for d in devices:
+              if d.get("isAvailable") and d.get("name")=="iPhone 17":
+                print(d["udid"]); sys.exit(0)
+          sys.exit(1)')"
+          echo "IOS_SIMULATOR_ID=$udid" >> "$GITHUB_ENV"
+          xcrun simctl bootstatus "$udid" -b
+
+      - name: Build head leg for testing
+        run: |
+          set -euo pipefail
+          git checkout --quiet "$(cat /tmp/head_sha.txt)"
+          pnpm install --frozen-lockfile --prefer-offline --config.engine-strict=false --filter '@openclaw/mermaid-renderer...' || true
+          pnpm ios:gen
+          xcodebuild \
+            -project apps/ios/OpenClaw.xcodeproj \
+            -scheme OpenClaw \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,id=$IOS_SIMULATOR_ID" \
+            -clonedSourcePackagesDirPath "$PWD/apps/ios/build/SourcePackages" \
+            -derivedDataPath "$RUNNER_TEMP/dd-head" \
+            -parallel-testing-enabled NO \
+            build-for-testing 2>&1 | tee "$RUNNER_TEMP/head-build.log" | tail -5
+          exit "${PIPESTATUS[0]}"
+
+      - name: Run head unit tests (RootTabsPresentationTests + RootTabsSourceGuardTests)
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          xcodebuild \
+            -project apps/ios/OpenClaw.xcodeproj \
+            -scheme OpenClaw \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,id=$IOS_SIMULATOR_ID" \
+            -derivedDataPath "$RUNNER_TEMP/dd-head" \
+            -resultBundlePath "$RUNNER_TEMP/head-unit.xcresult" \
+            -parallel-testing-enabled NO \
+            -collect-test-diagnostics never \
+            -only-testing:OpenClawTests/RootTabsPresentationTests \
+            -only-testing:OpenClawTests/RootTabsSourceGuardTests \
+            test-without-building 2>&1 | tee evidence/head-unit-tests.log | tail -40
+          exit "${PIPESTATUS[0]}"
+
+      - name: Run head UI test (Sessions consumer regression)
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project apps/ios/OpenClaw.xcodeproj \
+            -scheme OpenClawUITests \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,id=$IOS_SIMULATOR_ID" \
+            -clonedSourcePackagesDirPath "$PWD/apps/ios/build/SourcePackages" \
+            -derivedDataPath "$RUNNER_TEMP/dd-head" \
+            -parallel-testing-enabled NO \
+            build-for-testing 2>&1 | tee "$RUNNER_TEMP/head-ui-build.log" | tail -5
+          exit "${PIPESTATUS[0]}"
+
+      - name: Execute head UI test
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project apps/ios/OpenClaw.xcodeproj \
+            -scheme OpenClawUITests \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,id=$IOS_SIMULATOR_ID" \
+            -derivedDataPath "$RUNNER_TEMP/dd-head" \
+            -resultBundlePath "$RUNNER_TEMP/head-ui.xcresult" \
+            -parallel-testing-enabled NO \
+            -collect-test-diagnostics never \
+            -only-testing:OpenClawUITests/SessionsPartialLoadUITests \
+            test-without-building 2>&1 | tee evidence/head-ui-test.log | tail -40
+          exit "${PIPESTATUS[0]}"
+
+      - name: Base leg - revert product code, keep fixture + UI test, expect RED
+        run: |
+          set -euo pipefail
+          base_sha="$(cat /tmp/base_sha.txt)"
+          head_sha="$(cat /tmp/head_sha.txt)"
+          git checkout --quiet "$base_sha" -- apps/ios apps/shared
+          git checkout --quiet "$head_sha" -- \
+            apps/ios/Sources/Chat/AppleReviewDemoChatTransport.swift \
+            apps/ios/UITests/SessionsPartialLoadUITests.swift
+          git status --short -- apps/ios apps/shared | head -20
+          pnpm ios:gen
+          set +e
+          xcodebuild \
+            -project apps/ios/OpenClaw.xcodeproj \
+            -scheme OpenClaw \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,id=$IOS_SIMULATOR_ID" \
+            -clonedSourcePackagesDirPath "$PWD/apps/ios/build/SourcePackages" \
+            -derivedDataPath "$RUNNER_TEMP/dd-base" \
+            -parallel-testing-enabled NO \
+            build-for-testing 2>&1 | tee "$RUNNER_TEMP/base-build.log" | tail -5
+          build_status="${PIPESTATUS[0]}"
+          if [[ "$build_status" != "0" ]]; then
+            echo "Base leg build failed (exit $build_status)" | tee evidence/base-ui-test.log
+            tail -2000 "$RUNNER_TEMP/base-build.log" > evidence/base-build-tail.log || true
+            exit "$build_status"
+          fi
+          set +e
+          xcodebuild \
+            -project apps/ios/OpenClaw.xcodeproj \
+            -scheme OpenClawUITests \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,id=$IOS_SIMULATOR_ID" \
+            -clonedSourcePackagesDirPath "$PWD/apps/ios/build/SourcePackages" \
+            -derivedDataPath "$RUNNER_TEMP/dd-base" \
+            -parallel-testing-enabled NO \
+            build-for-testing 2>&1 | tee -a "$RUNNER_TEMP/base-build.log" | tail -5
+          uitest_build_status="${PIPESTATUS[0]}"
+          if [[ "$uitest_build_status" != "0" ]]; then
+            echo "Base leg UI test bundle build failed (exit $uitest_build_status)" | tee -a evidence/base-ui-test.log
+            tail -2000 "$RUNNER_TEMP/base-build.log" > evidence/base-build-tail.log || true
+            exit "$uitest_build_status"
+          fi
+          xcodebuild \
+            -project apps/ios/OpenClaw.xcodeproj \
+            -scheme OpenClawUITests \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,id=$IOS_SIMULATOR_ID" \
+            -derivedDataPath "$RUNNER_TEMP/dd-base" \
+            -resultBundlePath "$RUNNER_TEMP/base-ui.xcresult" \
+            -parallel-testing-enabled NO \
+            -collect-test-diagnostics never \
+            -only-testing:OpenClawUITests/SessionsPartialLoadUITests \
+            test-without-building 2>&1 | tee evidence/base-ui-test.log | tail -60
+          status="${PIPESTATUS[0]}"
+          set -e
+          echo "base-leg-ui-test-exit=$status" >> "$GITHUB_ENV"
+          # RED is the expected outcome on base: the notice never appears.
+          if [[ "$status" == "0" ]]; then
+            echo "::error::Base leg unexpectedly PASSED - bug not reproduced"
+            exit 1
+          fi
+          echo "Base leg failed as expected (bug reproduced on base)."
+
+      - name: Mutation leg - head minus screen wiring, expect RED
+        run: |
+          set -euo pipefail
+          base_sha="$(cat /tmp/base_sha.txt)"
+          head_sha="$(cat /tmp/head_sha.txt)"
+          git checkout --quiet "$head_sha" -- apps/ios apps/shared
+          git checkout --quiet "$base_sha" -- apps/ios/Sources/Design/CommandCenterTab.swift
+          pnpm ios:gen
+          set +e
+          xcodebuild \
+            -project apps/ios/OpenClaw.xcodeproj \
+            -scheme OpenClaw \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,id=$IOS_SIMULATOR_ID" \
+            -clonedSourcePackagesDirPath "$PWD/apps/ios/build/SourcePackages" \
+            -derivedDataPath "$RUNNER_TEMP/dd-head" \
+            -parallel-testing-enabled NO \
+            build-for-testing 2>&1 | tee "$RUNNER_TEMP/mutation-build.log" | tail -5
+          build_status="${PIPESTATUS[0]}"
+          if [[ "$build_status" != "0" ]]; then
+            echo "Mutation leg build failed (exit $build_status)" | tee evidence/mutation-tests.log
+            exit "$build_status"
+          fi
+          xcodebuild \
+            -project apps/ios/OpenClaw.xcodeproj \
+            -scheme OpenClaw \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,id=$IOS_SIMULATOR_ID" \
+            -derivedDataPath "$RUNNER_TEMP/dd-head" \
+            -resultBundlePath "$RUNNER_TEMP/mutation-unit.xcresult" \
+            -parallel-testing-enabled NO \
+            -collect-test-diagnostics never \
+            -only-testing:OpenClawTests/RootTabsSourceGuardTests \
+            test-without-building 2>&1 | tee evidence/mutation-tests.log | tail -30
+          unit_status="${PIPESTATUS[0]}"
+          xcodebuild \
+            -project apps/ios/OpenClaw.xcodeproj \
+            -scheme OpenClawUITests \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,id=$IOS_SIMULATOR_ID" \
+            -clonedSourcePackagesDirPath "$PWD/apps/ios/build/SourcePackages" \
+            -derivedDataPath "$RUNNER_TEMP/dd-head" \
+            -parallel-testing-enabled NO \
+            build-for-testing 2>&1 | tee -a "$RUNNER_TEMP/mutation-build.log" | tail -5
+          mutation_uitest_build_status="${PIPESTATUS[0]}"
+          if [[ "$mutation_uitest_build_status" != "0" ]]; then
+            echo "Mutation leg UI test bundle build failed (exit $mutation_uitest_build_status)" | tee -a evidence/mutation-tests.log
+            exit "$mutation_uitest_build_status"
+          fi
+          xcodebuild \
+            -project apps/ios/OpenClaw.xcodeproj \
+            -scheme OpenClawUITests \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,id=$IOS_SIMULATOR_ID" \
+            -derivedDataPath "$RUNNER_TEMP/dd-head" \
+            -resultBundlePath "$RUNNER_TEMP/mutation-ui.xcresult" \
+            -parallel-testing-enabled NO \
+            -collect-test-diagnostics never \
+            -only-testing:OpenClawUITests/SessionsPartialLoadUITests \
+            test-without-building 2>&1 | tee -a evidence/mutation-tests.log | tail -30
+          ui_status="${PIPESTATUS[0]}"
+          set -e
+          echo "mutation-source-guard-exit=$unit_status mutation-ui-exit=$ui_status" | tee -a evidence/mutation-tests.log
+          if [[ "$unit_status" == "0" || "$ui_status" == "0" ]]; then
+            echo "::error::Mutation leg unexpectedly PASSED - regression does not pin the wiring"
+            exit 1
+          fi
+          echo "Mutation leg failed as expected (wiring removal is caught)."
+
+      - name: Export screenshots and summaries from xcresults
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          mkdir -p evidence/screenshots
+          python3 - <<'PY'
+          import json, os, subprocess, pathlib
+          runner_temp = os.environ["RUNNER_TEMP"]
+          out = pathlib.Path("evidence/screenshots")
+          def walk(node, refs):
+              if isinstance(node, dict):
+                  if "payloadRef" in node:
+                      refs.append((node.get("preferredFileName") or "attachment", node["payloadRef"].get("id")))
+                  for value in node.values():
+                      walk(value, refs)
+              elif isinstance(node, list):
+                  for value in node:
+                      walk(value, refs)
+          for bundle in ["head-unit", "head-ui", "base-ui", "mutation-unit", "mutation-ui"]:
+              path = os.path.join(runner_temp, f"{bundle}.xcresult")
+              if not os.path.exists(path):
+                  continue
+              meta = subprocess.run(
+                  ["xcrun", "xcresulttool", "get", "--path", path, "--format", "json"],
+                  capture_output=True, text=True, check=True).stdout
+              refs = []
+              walk(json.loads(meta), refs)
+              summary = subprocess.run(
+                  ["xcrun", "xcresulttool", "get", "test-results", "summary", "--path", path, "--format", "json"],
+                  capture_output=True, text=True).stdout
+              if summary.strip():
+                  (out / f"{bundle}-summary.json").write_text(summary)
+              seen = {}
+              for name, ref in refs:
+                  if not ref:
+                      continue
+                  if not (name.endswith(".png") or name.endswith(".jpeg") or "screenshot" in name.lower()
+                          or name.endswith(".txt") or "trace" in name.lower()):
+                      continue
+                  target_name = f"{bundle}-{name}"
+                  if target_name in seen:
+                      continue
+                  seen[target_name] = True
+                  target = out / target_name
+                  subprocess.run(
+                      ["xcrun", "xcresulttool", "export", "--path", path, "--id", ref,
+                       "--output", str(target)],
+                      capture_output=True, text=True, check=False)
+          print(sorted(p.name for p in out.iterdir()))
+          PY
+
+      - name: Restore head checkout state
+        if: ${{ !cancelled() }}
+        run: |
+          git checkout --quiet "$(cat /tmp/head_sha.txt)" -- apps/ || true
+
+      - name: Write evidence index
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          for log in head-build base-build mutation-build; do
+            [[ -f "$RUNNER_TEMP/$log.log" ]] && tail -3000 "$RUNNER_TEMP/$log.log" > "evidence/$log-tail.log" || true
+          done
+          {
+            echo "# PR #193809 iOS partial-sessions proof run"
+            echo "head_sha=$(cat /tmp/head_sha.txt)"
+            echo "base_sha=$(cat /tmp/base_sha.txt)"
+            echo "runner=$(sw_vers -productVersion) xcode=$(xcodebuild -version | head -1)"
+            echo "simulator=$IOS_SIMULATOR_ID"
+            ls -la evidence/screenshots 2>/dev/null || true
+          } > evidence/run-index.txt
+          cat evidence/run-index.txt
+
+      - name: Upload evidence artifacts
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-partial-sessions-proof
+          path: |
+            evidence/
+          if-no-files-found: warn
+          retention-days: 30
