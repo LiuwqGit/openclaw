@@ -1,0 +1,9 @@
+host: 26.7.2 / Xcode 26.6 Build version 17F113
+head proven: b795c5cf53084ee2601154ab3d7861b08af6888a (PR head 8e25134a7200622232e655b30dd9c0f26cff3b10)
+base proven: upstream/main f15e8236a999a4d629814714371f49c586bb119a
+simulator: D26ED71E-9D97-4E79-B376-C104ABB9517A
+RESULT prepare: simulator booted, project generated
+RESULT head build-for-testing: SUCCEEDED
+RESULT head execution: GREEN (xcodebuild exit 0)
+RESULT base build-for-testing: SUCCEEDED (fix removed at upstream/main f15e8236a999a4d629814714371f49c586bb119a)
+RESULT base execution: RED (xcodebuild exit 65), as required

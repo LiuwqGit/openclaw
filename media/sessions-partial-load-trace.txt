@@ -1,0 +1,5 @@
+launch arguments: --openclaw-initial-destination sessions --openclaw-screenshot-mode --openclaw-ui-test-readiness --openclaw-partial-sessions-fixture --openclaw-appearance light -AppleLanguages (en)
+retained rows visible while final page failing: Partial session 001 … header "200 sessions"
+notice: Showing 200 sessions; 201 total. Refresh to load the rest.
+in-screen refresh taps until recovery: 1
+header count after recovery: 201 sessions
