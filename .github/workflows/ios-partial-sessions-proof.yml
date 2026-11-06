@@ -109,6 +109,24 @@ jobs:
         run: |
           set -euo pipefail
           git checkout --quiet "$(cat /tmp/head_sha.txt)"
+          # Evidence-branch-only build shim (NOT part of the PR): the tree needs the
+          # iOS 27 SDK symbol `toolbarVerticalEdge`, absent from this runner's
+          # Xcode 26.6 SDK. Every call site is behind `@available(iOS 27.1, *)`,
+          # so the shim never executes on the iOS 26.5 simulator; the Sessions
+          # screen under test is untouched.
+          cat > apps/ios/Sources/EvidenceXcode26Shim.swift <<'SWIFT'
+          import SwiftUI
+
+          #if compiler(<7.0)
+          extension EnvironmentValues {
+              /// Evidence-run shim for the iOS 27 SDK symbol when building with Xcode 26.x.
+              var toolbarVerticalEdge: Int? {
+                  get { nil }
+                  set {}
+              }
+          }
+          #endif
+          SWIFT
           pnpm install --frozen-lockfile --prefer-offline --config.engine-strict=false --filter '@openclaw/mermaid-renderer...' || true
           pnpm ios:gen
           xcodebuild \
@@ -119,7 +137,7 @@ jobs:
             -clonedSourcePackagesDirPath "$PWD/apps/ios/build/SourcePackages" \
             -derivedDataPath "$RUNNER_TEMP/dd-head" \
             -parallel-testing-enabled NO \
-            build-for-testing 2>&1 | tee "$RUNNER_TEMP/head-build.log" | tail -5
+            build-for-testing 2>&1 | tee "$RUNNER_TEMP/head-build.log" | grep -E "error:|BUILD|\*\* " | tail -40
           exit "${PIPESTATUS[0]}"
 
       - name: Run head unit tests (RootTabsPresentationTests + RootTabsSourceGuardTests)
@@ -370,7 +388,8 @@ jobs:
             echo "# PR #193809 iOS partial-sessions proof run"
             echo "head_sha=$(cat /tmp/head_sha.txt)"
             echo "base_sha=$(cat /tmp/base_sha.txt)"
-            echo "runner=$(sw_vers -productVersion) xcode=$(xcodebuild -version | head -1)"
+            xcodebuild -version > /tmp/xcode-version.txt 2>&1 || true
+            echo "runner=$(sw_vers -productVersion) xcode=$(head -1 /tmp/xcode-version.txt)"
             echo "simulator=$IOS_SIMULATOR_ID"
             ls -la evidence/screenshots 2>/dev/null || true
           } > evidence/run-index.txt
