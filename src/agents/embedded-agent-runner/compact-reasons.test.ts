@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { COMPACTION_SUMMARY_FAILURE_PREFIX } from "../agent-compaction-constants.js";
 import { describeFailoverError, resolveFailoverReasonFromError } from "../failover-error.js";
 import {
   classifyCompactionReason,
@@ -55,6 +56,28 @@ it.each([
   ["Provider API error (429): too many requests", "provider_error_4xx"],
   ["OpenAI API error (500): upstream failed", "provider_error_5xx"],
 ])("classifies compaction failure %s", (reason, expected) => {
+  expect(classifyCompactionReason(reason)).toBe(expected);
+});
+
+// The safeguard wraps every non-refusal summarizer failure in one envelope whose prefix contains
+// "guard", so the wrapped provider/auth/timeout text must classify like the unwrapped text does.
+it.each([
+  ["Provider API error (429): too many requests", "provider_error_4xx"],
+  ["OpenAI API error (500): upstream failed", "provider_error_5xx"],
+  ['Authentication failed for "anthropic". Credentials may have expired.', "auth_failed"],
+  ["request timed out after 30000ms", "timeout"],
+])("classifies safeguard-wrapped compaction failure %s", (inner, expected) => {
+  expect(classifyCompactionReason(`${COMPACTION_SUMMARY_FAILURE_PREFIX}: ${inner}`)).toBe(expected);
+});
+
+it.each([
+  // A genuine quality-guard verdict keeps its class inside and outside the envelope.
+  [`${COMPACTION_SUMMARY_FAILURE_PREFIX}: quality guard rejected the summary`, "guard_blocked"],
+  ["Compaction safeguard: quality guard rejected the summary", "guard_blocked"],
+  // An inner reason the classifier cannot name keeps today's envelope classification.
+  [COMPACTION_SUMMARY_FAILURE_PREFIX, "guard_blocked"],
+  [`${COMPACTION_SUMMARY_FAILURE_PREFIX}: model exploded`, "guard_blocked"],
+])("keeps guard classification for %s", (reason, expected) => {
   expect(classifyCompactionReason(reason)).toBe(expected);
 });
 

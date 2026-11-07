@@ -6,6 +6,7 @@ import {
 import { isSummaryProviderError } from "../../packages/agent-core/src/harness/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { COMPACTION_SUMMARY_FAILURE_PREFIX } from "./agent-compaction-constants.js";
 import { setCompactionSafeguardCancellation } from "./agent-hooks/compaction-safeguard-runtime.js";
 
 const log = createSubsystemLogger("compaction-safeguard");
@@ -65,7 +66,7 @@ export function recoverCompactionSafeguardFailure(
   log.warn("Compaction summarization failed; cancelling compaction to preserve history.");
   setCompactionSafeguardCancellation(
     sessionManager,
-    `Compaction safeguard could not summarize the session: ${formatErrorMessage(error)}`,
+    `${COMPACTION_SUMMARY_FAILURE_PREFIX}: ${formatErrorMessage(error)}`,
     error,
   );
   return { cancel: true as const };

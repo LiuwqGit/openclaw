@@ -2,6 +2,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { isSummaryProviderError } from "../../../packages/agent-core/src/harness/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { extractErrorHttpStatus } from "../../shared/assistant-error-format.js";
+import { COMPACTION_SUMMARY_FAILURE_PREFIX } from "../agent-compaction-constants.js";
 import type { CompactionSafeguardCancellation } from "../agent-hooks/compaction-safeguard-runtime.js";
 import { hasModelFallbackStop } from "../failover-error.js";
 import { extractFailoverHttpStatus } from "../failover/retry-evidence.js";
@@ -24,6 +25,8 @@ const COMPACTION_TEXT_REASONS: ReadonlyArray<
   ["summary_failed", ["summary"]],
   ["timeout", ["timed out", "timeout"]],
 ];
+
+const COMPACTION_SUMMARY_FAILURE_PREFIX_LOWERCASE = COMPACTION_SUMMARY_FAILURE_PREFIX.toLowerCase();
 
 export const DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON =
   "deferred to background context-engine maintenance";
@@ -88,7 +91,39 @@ export function isSummaryTimeoutFailure(params: {
   return status === 408 || status === 504;
 }
 
+/**
+ * The safeguard cancellation envelope hides the summarizer's own error behind a prefix that
+ * contains "guard", and the anchored provider-status patterns never match mid-string. Return the
+ * wrapped detail so it classifies exactly like the unwrapped error does.
+ */
+function unwrapCompactionSummaryFailure(reason: string): string | undefined {
+  const trimmed = reason.trim();
+  if (
+    !normalizeLowercaseStringOrEmpty(trimmed).startsWith(
+      COMPACTION_SUMMARY_FAILURE_PREFIX_LOWERCASE,
+    )
+  ) {
+    return undefined;
+  }
+  const detail = trimmed.slice(COMPACTION_SUMMARY_FAILURE_PREFIX_LOWERCASE.length).trim();
+  return detail.replace(/^[:\s-]+/, "").trim() || undefined;
+}
+
 export function classifyCompactionReason(reason?: string): string {
+  if (!reason) {
+    return "unknown";
+  }
+  const wrapped = unwrapCompactionSummaryFailure(reason);
+  if (wrapped) {
+    const wrappedClassification = classifyCompactionReasonText(wrapped);
+    if (wrappedClassification !== "unknown") {
+      return wrappedClassification;
+    }
+  }
+  return classifyCompactionReasonText(reason);
+}
+
+function classifyCompactionReasonText(reason: string): string {
   const text = normalizeLowercaseStringOrEmpty(reason);
   if (!text) {
     return "unknown";

@@ -14,3 +14,11 @@ export function resolveEffectiveCompactionReserveTokens(params: {
 }
 
 export const MAX_OVERFLOW_COMPACTION_ATTEMPTS = 3;
+
+/**
+ * Envelope the compaction safeguard wraps around every non-refusal summarizer failure. The
+ * provider/auth/timeout detail lives after this prefix, and the prefix itself contains "guard",
+ * so consumers must unwrap before classifying the cause.
+ */
+export const COMPACTION_SUMMARY_FAILURE_PREFIX =
+  "Compaction safeguard could not summarize the session";
