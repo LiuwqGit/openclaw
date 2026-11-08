@@ -386,7 +386,6 @@ export async function prepareModelsListResult({
       const projectionSnapshot = decisions.snapshot;
       const accountCatalog = preparedProjectionOwner?.accountCatalog;
       const includeDetails = params.params.includeDetails;
-      const preserveUnknownAvailability = view === "provider-config" || includeDetails;
       const projectionIsCurrent =
         view === "provider-config" ? isCurrent : () => isCurrent() && decisions.isCurrent();
       const fastMode = createModelSpeedPolicyResolver({
@@ -480,10 +479,11 @@ export async function prepareModelsListResult({
           entries.set(runtimeKey, preparedEntry);
           prepared.set(entry, entries);
         }
+        // Legacy views require a boolean only for a verdict that was reached: unknown
+        // readiness without a reason (a keyless local profile, an unread secret ref)
+        // must not be published as confirmed unavailability.
         const projectedAvailability =
-          preserveUnknownAvailability || evaluation.runtimeAuth?.source === "native"
-            ? evaluation.availability
-            : (evaluation.availability ?? false);
+          evaluation.availability ?? (evaluation.unavailableReason ? false : undefined);
         const runtimeId = preparedEntry.agentRuntime.id;
         const speedPolicy = fastMode(entry, evaluation, runtimeId);
         const supportsFastMode = speedPolicy.supportsFastMode;

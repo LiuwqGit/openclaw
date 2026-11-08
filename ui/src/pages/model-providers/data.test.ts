@@ -327,6 +327,20 @@ it("distinguishes unknown and empty catalogs for saved models", () => {
   expect(choices([], saved)[0]).toMatchObject({ available: false });
 });
 
+it("counts unknown readiness separately from confirmed unavailability", () => {
+  const cards = build([provider("ollama")], {
+    models: [
+      model("glm-5.3:cloud", { provider: "ollama", available: undefined }),
+      model("qwen3:8b", { provider: "ollama", available: undefined }),
+      model("verified", { provider: "ollama", available: true }),
+      model("rejected", { provider: "ollama", available: false }),
+    ],
+  });
+  expect(cards).toMatchObject([
+    { id: "ollama", modelCount: 4, availableModelCount: 1, unknownModelCount: 2 },
+  ]);
+});
+
 it("keeps saved-selection additions out of the shared catalog", () => {
   const catalog = [model("ready", { available: true }), model("unavailable")];
   expect(choices(catalog, modelSelection("openai/saved")).map(modelCatalogRef)).toEqual([

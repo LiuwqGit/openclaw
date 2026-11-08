@@ -206,6 +206,27 @@ it("counts a provider's only unavailable model in the singular", () => {
   expect(text(container.querySelector(".provider-row__meta"))).toContain("2 of 3 models available");
 });
 
+it("does not report models with unknown readiness as unavailable", () => {
+  const container = mount(
+    props({
+      cards: [
+        card({
+          id: "ollama",
+          displayName: "Ollama",
+          modelCount: 4,
+          availableModelCount: 0,
+          unknownModelCount: 4,
+          catalogStatus: "ready",
+        }),
+      ],
+      configuredModels: [{ id: "ollama/glm-5.3:cloud", provider: "ollama", name: "glm-5.3:cloud" }],
+    }),
+  );
+  const meta = text(container.querySelector(".provider-row__meta"));
+  expect(meta).toContain("4 models");
+  expect(meta).not.toContain("0 of 4 models available");
+});
+
 it("hands the accent to an open API key form", () => {
   const editable = card({ id: "example", displayName: "Example", catalogStatus: "ready" });
   const viewProps = props({ cards: [editable], configuredModels: [] });
