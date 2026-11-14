@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { afterEach, expect, it, vi } from "vitest";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -12,6 +13,7 @@ import {
 import { readTranscriptEventMessage } from "../config/sessions/session-accessor.sqlite-read.js";
 import { resolveSessionWorkStartError } from "../config/sessions/session-work-start.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { deleteAgentConfigEntry } from "../gateway/server-methods/agents-config-mutations.js";
 import { completeAgentOnboarding } from "../gateway/server-methods/agents-onboarding.js";
 import type { GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";
 import { createGatewaySession } from "../gateway/session-create-service.js";
@@ -19,9 +21,13 @@ import { beginSessionEffect } from "../sessions/session-controller.lifecycle.js"
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { withResolvedClawHubSource } from "./clawhub-source.js";
-import { applyTemplateAddForGateway } from "./gateway-add-apply.js";
+import {
+  applyTemplateAddForGateway,
+  TemplateGatewayPlanBlockedError,
+} from "./gateway-add-apply.js";
 import { buildGatewayTemplateAddPlan, projectGatewayTemplateAddPlan } from "./gateway-add-plan.js";
 import { readTemplateManifestFile } from "./reader.js";
+import type { TemplateAddPlan } from "./types.js";
 
 const { resolveSource } = vi.hoisted(() => ({ resolveSource: vi.fn() }));
 afterEach(async () => {
@@ -497,5 +503,135 @@ it("publishes the ordinary durable agent and empty canonical chat before resolvi
     });
     expect((await readConfigFileSnapshot()).config.agents?.entries).toHaveProperty("fixture-first");
     expect(prepareAgentChat).toHaveBeenCalledOnce();
+  });
+});
+
+it("refuses a blocked reviewed plan without keeping the agent this request admitted", async () => {
+  await withOpenClawTestState({ label: "template-blocked-reviewed-plan" }, async (state) => {
+    const root = state.path("blocked-source");
+    await fs.mkdir(root);
+    await fs.writeFile(
+      path.join(root, "package.json"),
+      JSON.stringify({
+        name: "@fixture/template-blocked",
+        version: "1.0.0",
+        openclaw: { template: "CLAW.md" },
+      }),
+    );
+    await fs.writeFile(
+      path.join(root, "CLAW.md"),
+      "---\n" +
+        JSON.stringify({
+          schemaVersion: 1,
+          agent: { id: "fixture-blocked", name: "Blocked Fixture" },
+          mcpServers: { fixture: { command: "node", args: ["fixture-mcp.mjs"] } },
+        }) +
+        "\n---\n",
+    );
+    const blockedSource = await readTemplateManifestFile(root);
+    if (!blockedSource.ok) {
+      throw new Error(`Invalid fixture manifest: ${blockedSource.error.message}`);
+    }
+    blockedSource.source = {
+      ...blockedSource.source,
+      kind: "package",
+      name: "@fixture/template-blocked",
+      version: "1.0.0",
+      integrityKind: "artifact",
+    };
+    const trust = {
+      riskAcknowledgementRequired: false,
+      trustRecord: {
+        clawhubTrustDisposition: "clean",
+        clawhubTrustCheckedAt: "2026-11-14T00:00:00.000Z",
+      },
+    } as const;
+    resolveSource.mockImplementation(
+      async (input: Parameters<typeof withResolvedClawHubSource>[0]) => ({
+        value: await input.run(blockedSource, trust, async () => blockedSource),
+      }),
+    );
+    let config: OpenClawConfig = {
+      gateway: { controlUi: { experimental: { templates: true } } },
+      agents: {
+        entries: { main: { workspace: state.path("existing-workspace") } },
+        defaults: { model: "ollama/test-model" },
+      },
+    };
+    await state.writeConfig(config);
+    setRuntimeConfigSnapshot(config);
+    // The host already runs a different server under the declared name, so the
+    // reviewed plan carries a blocker before apply is ever allowed to mutate.
+    const sourceMcpServers = async () => ({
+      fixture: { command: "node", args: ["host-mcp.mjs"] },
+    });
+    const reviewed = projectGatewayTemplateAddPlan(
+      await buildGatewayTemplateAddPlan(blockedSource, { config, sourceMcpServers }),
+      blockedSource,
+      trust,
+      config,
+    );
+    expect(reviewed.blockers.map((blocker) => blocker.code)).toContain("mcp_server_collision");
+    const sessionKey = "agent:fixture-blocked:main";
+    const prepareAgentChat = vi.fn(
+      async (agentId: string, prospective: OpenClawConfig, pending?: Record<string, unknown>) => {
+        const prepared = await completeAgentOnboarding(
+          {
+            req: { type: "req", id: "template-blocked", method: "templates.add.apply" },
+            context: { getRuntimeConfig: () => config },
+            client: { connect: { client: { mode: "ui" }, scopes: ["operator.admin"] } },
+            respond: vi.fn(),
+          } as unknown as GatewayRequestHandlerOptions,
+          agentId,
+          { config: prospective, ...(pending as { initializationPending: true }) },
+        );
+        if (prepared.status !== "completed" || !prepared.rollback) {
+          throw new Error("Session preparation failed");
+        }
+        return prepared.rollback;
+      },
+    );
+    const onAgentAdmitted = vi.fn(async () => {});
+    const rollbackNewAgent = vi.fn(
+      async (agentId: string, expectedAgentConfig: TemplateAddPlan["agent"]["config"]) => {
+        await deleteAgentConfigEntry({
+          agentId,
+          assertCurrent: () => {},
+          validate: (agent) => {
+            if (!isDeepStrictEqual(agent, expectedAgentConfig)) {
+              throw new Error("New agent changed during Template Add; rollback left it intact.");
+            }
+          },
+        });
+      },
+    );
+    const applying = applyTemplateAddForGateway({
+      source: { packageName: "@fixture/template-blocked", version: "1.0.0" },
+      agentId: "fixture-blocked",
+      planIntegrity: reviewed.planIntegrity,
+      getPlanningContext: async () => ({
+        config: (await readConfigFileSnapshot()).config,
+        sourceMcpServers,
+      }),
+      policyConfig: { configPath: state.configPath, env: state.env },
+      assertCurrent: () => {},
+      prepareAgentChat,
+      waitForAgentRuntime: async () => {
+        config = (await readConfigFileSnapshot()).config;
+        setRuntimeConfigSnapshot(config);
+        return "applied";
+      },
+      onAgentAdmitted,
+      rollbackNewAgent,
+    });
+
+    await expect(applying).rejects.toBeInstanceOf(TemplateGatewayPlanBlockedError);
+    // Admission really ran first, so the refusal has to undo what it created.
+    expect(onAgentAdmitted).toHaveBeenCalledOnce();
+    expect(rollbackNewAgent).toHaveBeenCalledOnce();
+    expect((await readConfigFileSnapshot()).config.agents?.entries).not.toHaveProperty(
+      "fixture-blocked",
+    );
+    expect(loadSessionEntryReadOnly({ agentId: "fixture-blocked", sessionKey })).toBeUndefined();
   });
 });

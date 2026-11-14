@@ -24,6 +24,7 @@ import { TemplateAddMutationError } from "./add.js";
 import { withResolvedClawHubSource, type ClawHubCoordinate } from "./clawhub-source.js";
 import type { TemplateCronGateway, PersistedTemplateCronRef } from "./cron.js";
 import { digestTemplateValue } from "./digest.js";
+import { releaseBlockedTemplateAdmission } from "./gateway-add-admission-rollback.js";
 import {
   templateInitializationCheckpoints,
   type AdmittedTemplateAgent,
@@ -111,6 +112,7 @@ export async function applyTemplateAddForGateway(
   let settledResult: GatewayTemplateAddApplyResult | undefined;
   let readySessionKey: string | undefined;
   let admitted: AdmittedTemplateAgent | undefined;
+  let admittedByThisRequest = false;
   let initialized = false;
   const withoutAdmission = (config: OpenClawConfig): OpenClawConfig => {
     if (!admitted) {
@@ -130,6 +132,18 @@ export async function applyTemplateAddForGateway(
       config: withoutAdmission(context.config),
       ...(admitted ? { admittedWorkspace: admitted.workspace } : {}),
     };
+  };
+  // A blocked reviewed plan can never be applied, so the agent this request just admitted
+  // would be an unusable dead end whose Retry resubmits the same blocked review. Undo that
+  // admission; agents retained by an earlier request keep their documented recovery path, and
+  // a rollback that cannot prove the agent is untouched keeps the retained-agent result.
+  const rejectBlockedPlan = async (message: string): Promise<never> => {
+    const created = admitted && admittedByThisRequest ? admitted : undefined;
+    if (created && (await releaseBlockedTemplateAdmission(created, input, stateContext))) {
+      admitted = undefined;
+      readySessionKey = undefined;
+    }
+    throw new TemplateGatewayPlanBlockedError(message);
   };
   try {
     // A reviewed UI target is an ordinary creation request, not trust in Template bytes.
@@ -235,6 +249,7 @@ export async function applyTemplateAddForGateway(
                       workspaceIdentity: identity,
                       config: structuredClone(result.config.agents!.entries![agentId]!),
                     };
+                    admittedByThisRequest = true;
                     readySessionKey = resolveAgentMainSessionKey({ cfg: result.config, agentId });
                   },
                 },
@@ -309,12 +324,12 @@ export async function applyTemplateAddForGateway(
               throw new TemplateGatewayPlanChangedError();
             }
             if (initialPlan.blockers.some((blocker) => blocker.code === "skill_preflight_failed")) {
-              throw new TemplateGatewayPlanBlockedError(
+              await rejectBlockedPlan(
                 "A required skill is unavailable from ClawHub. The publisher must fix this Template before it can be added.",
               );
             }
             if (initialProjection.blockers.length > 0 || initialPlan.blockers.length > 0) {
-              throw new TemplateGatewayPlanBlockedError(
+              await rejectBlockedPlan(
                 initialProjection.blockers[0]?.message ??
                   "This Template cannot be added right now.",
               );
