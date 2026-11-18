@@ -172,6 +172,20 @@ describe("diagnostic support redaction", () => {
     );
   });
 
+  const tempAncestorRefusal = (directory: string) =>
+    `Temp workspace ancestor ${JSON.stringify(directory)} is group/world writable without sticky protection; have its owner run chmod +t '${directory.replaceAll("'", "'\\''")}' for a shared temp directory or chmod go-w '${directory.replaceAll("'", "'\\''")}' for a private ancestor.`;
+  const TEMP_ANCESTOR_PROJECTION =
+    "Temp workspace ancestor is group/world writable without sticky protection; have its owner run chmod +t for a shared temp directory or chmod go-w for a private ancestor.";
+
+  it.each([
+    tempAncestorRefusal(tempDir),
+    `No safe OpenClaw temp root is available. Default root: Error: ${tempAncestorRefusal(`${tempDir}/.cache`)} State fallback ${JSON.stringify(tempDir)}: Error: ${tempAncestorRefusal(`${tempDir}/tmp`)}`,
+  ])("keeps the temp-ancestor permission cause and chmod guidance: %s", (source) => {
+    expect(redactPublicSupportDiagnosticLine(source, { env: {}, stateDir: tempDir })).toBe(
+      TEMP_ANCESTOR_PROJECTION,
+    );
+  });
+
   it.each([
     "EACCES",
     "EPERM",

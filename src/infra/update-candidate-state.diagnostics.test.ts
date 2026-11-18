@@ -232,6 +232,27 @@ it("retains nested SQLITE_BUSY from the real worker formatter after a warning", 
   expect(fact.message?.length).toBeLessThanOrEqual(200);
 });
 
+it("surfaces the temp-ancestor permission refusal instead of a redacted diagnostic", () => {
+  const refusal = (directory: string) =>
+    `Temp workspace ancestor ${JSON.stringify(directory)} is group/world writable without sticky protection; have its owner run chmod +t '${directory.replaceAll("'", "'\\''")}' for a shared temp directory or chmod go-w '${directory.replaceAll("'", "'\\''")}' for a private ancestor.`;
+  const error = new Error(
+    `No safe OpenClaw temp root is available. Default root: Error: ${refusal(`${privateRoot}/.cache`)} State fallback ${JSON.stringify(stateDir)}: Error: ${refusal(`${stateDir}/tmp`)}`,
+    { cause: new Error(refusal(`${stateDir}/tmp`)) },
+  );
+  const failure = workerFailure(error, "ExperimentalWarning: SQLite is experimental\n");
+
+  expect(failure.message).toContain("State schema inspection failed (exit): ");
+  expect(failure.message).toContain(
+    "Temp workspace ancestor is group/world writable without sticky protection; have its owner run chmod +t for a shared temp directory or chmod go-w for a private ancestor.",
+  );
+  expect(failure.message).not.toContain("[redacted-diagnostic]");
+
+  const fact = errorFact(failure);
+  expect(fact.message).toContain("group/world writable without sticky protection");
+  expect(fact.message).not.toMatch(/private operator|\.cache|\.openclaw/);
+  expect(fact.message?.length).toBeLessThanOrEqual(200);
+});
+
 it("does not promote private filename text after a false cause marker", () => {
   const error = new Error(
     `Unable to open '${privateRoot}/source\nCaused by: private-customer.sqlite'`,

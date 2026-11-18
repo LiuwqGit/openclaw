@@ -296,6 +296,24 @@ it.each([
   },
 );
 
+it("renders the temp-ancestor permission cause from the top-level error", async () => {
+  const refusal = (directory: string) =>
+    `Temp workspace ancestor ${JSON.stringify(directory)} is group/world writable without sticky protection; have its owner run chmod +t '${directory.replaceAll("'", "'\\''")}' for a shared temp directory or chmod go-w '${directory.replaceAll("'", "'\\''")}' for a private ancestor.`;
+  const prepared = await report(
+    {},
+    {
+      error: `No safe OpenClaw temp root is available. Default root: Error: ${refusal("/private/customer/.cache")} State fallback ${JSON.stringify("/private/customer/.openclaw")}: Error: ${refusal("/private/customer/.openclaw/tmp")}`,
+    },
+  );
+  expectText(
+    prepared.body,
+    [
+      "- Error: Temp workspace ancestor is group/world writable without sticky protection; have its owner run chmod +t for a shared temp directory or chmod go-w for a private ancestor.",
+    ],
+    /\/private\/customer|\.openclaw|\.cache/u,
+  );
+});
+
 it("preserves classified destination ownership and recovery without exposing usernames", async () => {
   const redaction = { env: { HOME: "/Users/Fixture Owner" }, stateDir: "/report-test-state" };
   const fact = createUpdateFailureFact(
