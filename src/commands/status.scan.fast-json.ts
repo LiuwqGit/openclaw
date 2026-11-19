@@ -1,5 +1,6 @@
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../config/bundled-channel-config-metadata.generated.js";
 import type { OpenClawConfig } from "../config/types.js";
+import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { isRecord } from "../utils.js";
 import type { StatusGatewayProbeBudget } from "./status.gateway-probe-budget.js";
@@ -66,11 +67,12 @@ export async function scanStatusJsonFast(
     includeLocalStatusRpcFallback: opts.all === true,
     gatewaySnapshot: online.gatewaySnapshot,
   });
-  const pluginCompatibility = opts.all
+  // null (not collected) instead of [] keeps fast JSON from implying a clean compatibility check.
+  const pluginCompatibility: PluginCompatibilityNotice[] | null = opts.all
     ? await import("../plugins/status.js").then(({ buildPluginCompatibilitySnapshotNotices }) =>
         buildPluginCompatibilitySnapshotNotices({ config: overview.cfg }),
       )
-    : [];
+    : null;
   return await executeStatusScanFromOverview({
     overview,
     includeMemory: opts.all,

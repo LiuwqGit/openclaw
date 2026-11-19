@@ -107,10 +107,11 @@ Deep health also warns when a context engine is quarantined or configuration hot
 reload is disabled. Healthy auxiliary components do not add warning rows.
 
 Plain `openclaw status` stays on the fast read-only path and marks memory as
-`not checked` instead of unavailable when it skips memory inspection. Heavy
-security audit, plugin compatibility, and memory-vector checks are left to
-`openclaw status --all`, `openclaw status --deep`, `openclaw security audit`,
-and `openclaw memory status --deep`.
+`not checked` instead of unavailable when it skips memory inspection. Plugin
+compatibility is only collected by `openclaw status --all`; plain `status` and
+`status --deep` report it as `not checked (use --all)`. Heavy security audit and
+memory-vector checks are left to `openclaw status --all`, `openclaw status
+--deep`, `openclaw security audit`, and `openclaw memory status --deep`.
 
 Local agent ownership checks read schema and owner metadata from one consistent
 SQLite snapshot, including committed WAL changes. They do not copy the entire

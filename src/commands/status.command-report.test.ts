@@ -23,6 +23,12 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
+it("omits the plugin compatibility section and does not crash when the scan did not collect it", async () => {
+  const params = createStatusCommandReportDataParams({ pluginCompatibility: null });
+  const lines = await buildStatusCommandReportLines(params);
+  expect(lines.filter((line) => line.startsWith("# "))).not.toContain("# Plugin compatibility");
+});
+
 it.each([true, false])("orders and trims report sections (full=%s)", async (full) => {
   const params = createStatusCommandReportDataParams({ opts: { deep: true, verbose: false } });
   params.summary.queuedSystemEvents = full ? ["one", "two", "three", "four", "five", "six"] : [];

@@ -147,16 +147,17 @@ export async function buildStatusCommandReportLines(
     ];
   }
   const width = params.tableWidth;
+  const pluginCompatibilityNotices = params.pluginCompatibility ?? [];
   const pluginCompatibilityLines =
-    params.pluginCompatibility.length === 0
+    pluginCompatibilityNotices.length === 0
       ? []
       : [
-          ...params.pluginCompatibility.slice(0, 8).map((notice) => {
+          ...pluginCompatibilityNotices.slice(0, 8).map((notice) => {
             const label = notice.severity === "warn" ? theme.warn("WARN") : theme.muted("INFO");
             return `  ${label} ${formatPluginCompatibilityNotice(notice)}`;
           }),
-          ...(params.pluginCompatibility.length > 8
-            ? [theme.muted(`  … +${params.pluginCompatibility.length - 8} more`)]
+          ...(pluginCompatibilityNotices.length > 8
+            ? [theme.muted(`  … +${pluginCompatibilityNotices.length - 8} more`)]
             : []),
         ];
   const pairingRecoveryLines = params.pairingRecovery

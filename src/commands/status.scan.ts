@@ -42,9 +42,11 @@ export async function scanStatus(
       });
 
       progress.setLabel("Checking memory and sessions…");
+      // Plugin compatibility notices are only collected by `status --all`; null keeps
+      // text status honest about the skipped check instead of a green "none".
       const result = await executeStatusScanFromOverview({
         overview,
-        pluginCompatibility: [],
+        pluginCompatibility: null,
       });
       progress.tick();
 

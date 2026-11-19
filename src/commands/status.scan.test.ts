@@ -189,6 +189,16 @@ describe("status scans", () => {
     },
   );
 
+  it.each([false, true])(
+    "marks plugin compatibility as not collected on text status (deep=%s)",
+    async (deep) => {
+      mocks.probeGateway.mockResolvedValue(reachableProbe);
+      const result = await scanStatus({ ...createStatusGatewayProbeBudget(5000), deep });
+      expect(result.pluginCompatibility).toBeNull();
+      expect(mocks.buildPluginCompatibilityNotices).not.toHaveBeenCalled();
+    },
+  );
+
   it("skips gateway and update probes on cold-start text status", async () => {
     applyStatusScanDefaults(mocks, {
       sourceConfig: createStatusScanConfig({ plugins: { enabled: false } }),

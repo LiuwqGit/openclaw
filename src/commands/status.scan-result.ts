@@ -38,7 +38,8 @@ export type StatusScanResult<
     summary: StatusSummary;
     memory: MemoryStatusSnapshot | null;
     memoryPlugin: MemoryPluginStatus;
-    pluginCompatibility: PluginCompatibilityNotice[];
+    /** null marks the plugin compatibility check as not collected (text status without --all). */
+    pluginCompatibility: PluginCompatibilityNotice[] | null;
     agentStatus: AgentStatus;
     collection?: {
       source: "gateway";

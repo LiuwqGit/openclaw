@@ -154,7 +154,9 @@ export async function scanStatusJsonGateway(
     summary,
     memory: null,
     memoryPlugin: cliProjection?.memoryPlugin ?? resolveMemoryPluginStatus(cfg),
-    pluginCompatibility: [],
+    // Local plugin inspection is not collected in online status; null keeps the
+    // JSON projection honest via the collected:false fallback.
+    pluginCompatibility: null,
     collection: {
       source: "gateway",
       notCollected: [
