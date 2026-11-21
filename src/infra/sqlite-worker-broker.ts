@@ -146,42 +146,42 @@ export class SqliteWorkerBroker {
         await this.inputAdmission.joinOpens();
         return await this.lifecycle.settleGeneration(generation);
       });
+      const reusable = reserved
+        ? findReusableSqliteWorkerClient(this.stores.values(), snapshot.databasePath)
+        : undefined;
+      let preparation: Awaited<ReturnType<typeof prepareSqliteWorkerDatabaseAdmission>> | undefined;
+      return this.inputAdmission
+        .open(
+          sqliteWorkerRequestBytes(snapshot.input, snapshot.stateContext, snapshot.preparation),
+          snapshot.databasePath,
+          async () => {
+            if (!reserved) {
+              await reclaimSqliteWorkerClient(
+                snapshot,
+                this.stores.values(),
+                () =>
+                  reserveSqliteWorkerClient(this.clients, this.stores.values(), MAX_STORES, client),
+                () => this.draining !== undefined,
+              );
+            }
+            return this.openAdmitted<Operations>(snapshot, client, undefined, preparation);
+          },
+          snapshot.signal,
+          reusable ? () => this.openAdmitted<Operations>(snapshot, client, reusable) : undefined,
+          snapshot.carrierClass,
+          async () => {
+            preparation = await prepareSqliteWorkerDatabaseAdmission(snapshot);
+            return { readIdentities: new Map([[snapshot.databasePath, preparation.identity]]) };
+          },
+        )
+        .catch((error: unknown) => {
+          this.clients.delete(client);
+          throw error;
+        });
     } catch (error) {
       this.clients.delete(client);
       return Promise.reject(toErrorObject(error, "SQLite worker input could not be serialized"));
     }
-    const reusable = reserved
-      ? findReusableSqliteWorkerClient(this.stores.values(), snapshot.databasePath)
-      : undefined;
-    let preparation: Awaited<ReturnType<typeof prepareSqliteWorkerDatabaseAdmission>> | undefined;
-    return this.inputAdmission
-      .open(
-        sqliteWorkerRequestBytes(snapshot.input, snapshot.stateContext, snapshot.preparation),
-        snapshot.databasePath,
-        async () => {
-          if (!reserved) {
-            await reclaimSqliteWorkerClient(
-              snapshot,
-              this.stores.values(),
-              () =>
-                reserveSqliteWorkerClient(this.clients, this.stores.values(), MAX_STORES, client),
-              () => this.draining !== undefined,
-            );
-          }
-          return this.openAdmitted<Operations>(snapshot, client, undefined, preparation);
-        },
-        snapshot.signal,
-        reusable ? () => this.openAdmitted<Operations>(snapshot, client, reusable) : undefined,
-        snapshot.carrierClass,
-        async () => {
-          preparation = await prepareSqliteWorkerDatabaseAdmission(snapshot);
-          return { readIdentities: new Map([[snapshot.databasePath, preparation.identity]]) };
-        },
-      )
-      .catch((error: unknown) => {
-        this.clients.delete(client);
-        throw error;
-      });
   }
 
   private async openAdmitted<Operations extends SqliteWorkerOperations>(

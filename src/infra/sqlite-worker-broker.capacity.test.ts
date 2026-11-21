@@ -34,6 +34,7 @@ import {
 import * as workerIdentity from "./sqlite-worker-identity.js";
 import { SqliteWorkerInputAdmission } from "./sqlite-worker-input-admission.js";
 import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
+import type { SqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 import type { FixtureOperations } from "./sqlite-worker-store.test-support.js";
 
 function inputAdmission() {
@@ -250,6 +251,36 @@ it("settles cold admission filesystem failures before draining the broker", asyn
     }),
   ).rejects.toBe(failure);
   await broker.close();
+});
+
+it("rejects synchronous request accounting failures without consuming client capacity", async () => {
+  const broker = new SqliteWorkerBroker();
+  const accountingFailure = new Error("SQLite worker state accounting failed");
+  // captureSqliteWorkerStateContext copies this reference; JSON.stringify inside
+  // sqliteWorkerRequestBytes invokes the getter synchronously at the open boundary.
+  const stateContext = {
+    environment: { OPENCLAW_STATE_DIR: "/tmp" },
+    databaseEngineSelection: {
+      get selected(): never {
+        throw accountingFailure;
+      },
+    },
+  } as unknown as SqliteWorkerStateContext;
+  const options = {
+    moduleUrl: new URL("./sqlite-worker-store.test-support.ts", import.meta.url),
+    databasePath: databasePath(),
+    input: undefined,
+  };
+  try {
+    // Each rejected open must release its reserved client: capacity survives one more
+    // synchronous accounting failure than the full store budget.
+    for (let attempt = 0; attempt <= 64; attempt++) {
+      const opening = broker.open(options, stateContext);
+      await expect(opening).rejects.toBe(accountingFailure);
+    }
+  } finally {
+    await broker.close();
+  }
 });
 
 it.for(["shared-state", "agent", "external"] as const)(
