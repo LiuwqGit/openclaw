@@ -34,6 +34,8 @@ import {
 import * as durability from "./directory-durability.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import * as sqliteCopy from "./sqlite-file-copy.js";
+import * as filesystem from "./sqlite-wal-filesystem.js";
+import * as sqliteWal from "./sqlite-wal.js";
 import {
   discoverUpdateStateSchemaInspectionInProcess,
   readUpdateDatabaseGenerationsIsolated,
@@ -806,6 +808,95 @@ it.each([
     });
   },
 );
+
+it("restores each database's filesystem journal policy after verified publication", async () => {
+  await withFixture(async (fixture) => {
+    await fixture.close();
+    const credentialStorePath = resolveClientCredentialStorePath(fixture.state.env);
+    const sqlitePaths = fixture.backup.databases
+      .filter((entry) => entry.engine !== "postgres" && entry.path !== credentialStorePath)
+      .map((entry) => entry.path);
+    expect(sqlitePaths.length).toBeGreaterThan(0);
+    expect(await fixture.restore()).not.toBeNull();
+    for (const pathname of sqlitePaths) {
+      using restored = new DatabaseSync(pathname);
+      expect(restored.prepare("PRAGMA journal_mode").get()).toEqual({ journal_mode: "wal" });
+      expect(restored.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+    }
+  });
+});
+
+it("keeps the restored state database writable beside an open reader after rollback", async () => {
+  await withFixture(async (fixture) => {
+    await fixture.close();
+    const displaced = await fixture.restore();
+    expect(displaced).not.toBeNull();
+    // A reader the updater keeps open must not block the next maintenance lease write.
+    using reader = new DatabaseSync(fixture.shared.path);
+    reader.exec("BEGIN");
+    reader.prepare("SELECT value FROM restore_witness").all();
+    using writer = new DatabaseSync(fixture.shared.path);
+    // DELETE mode would throw SQLITE_BUSY here; WAL admits the maintenance lease write.
+    expect(() => writer.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE; COMMIT;")).not.toThrow();
+  });
+});
+
+it("refuses a restore onto an unsupported filesystem before moving any live database", async () => {
+  await withFixture(async (fixture) => {
+    await fixture.close();
+    const assertUnchanged = await unchangedFiles(fixture);
+    const policy = vi.spyOn(filesystem, "resolvePathJournalPolicy").mockReturnValue("unsupported");
+    try {
+      await expect(fixture.restore()).rejects.toThrow("SSHFS");
+    } finally {
+      policy.mockRestore();
+    }
+    await assertUnchanged();
+  });
+});
+
+it("keeps restored databases in rollback journaling where the filesystem policy requires it", async () => {
+  await withFixture(async (fixture) => {
+    await fixture.close();
+    const policy = vi.spyOn(filesystem, "resolvePathJournalPolicy").mockReturnValue("rollback");
+    try {
+      expect(await fixture.restore()).not.toBeNull();
+    } finally {
+      policy.mockRestore();
+    }
+    for (const owner of [fixture.shared, fixture.agent]) {
+      using restored = new DatabaseSync(owner.path);
+      expect(restored.prepare("PRAGMA journal_mode").get()).toEqual({ journal_mode: "delete" });
+      expect(restored.prepare("SELECT value FROM restore_witness").all()).toEqual([
+        { value: "baseline" },
+      ]);
+    }
+  });
+});
+
+it("keeps restored data and records a warning when journal reconciliation fails", async () => {
+  await withFixture(async (fixture) => {
+    await fixture.close();
+    const reconcile = vi.spyOn(sqliteWal, "reconcileRestoredSqliteJournalMode");
+    reconcile.mockImplementation(() => {
+      throw new Error("restored database could not enable WAL; SQLite kept journal_mode=delete.");
+    });
+    try {
+      const displaced = await fixture.restore();
+      expect(displaced).not.toBeNull();
+    } finally {
+      reconcile.mockRestore();
+    }
+    expect(fixture.backup.warnings.length).toBeGreaterThan(0);
+    for (const warning of fixture.backup.warnings) {
+      expect(warning).toContain("Restored database kept its snapshot journal mode");
+    }
+    using restored = new DatabaseSync(fixture.shared.path);
+    expect(restored.prepare("SELECT value FROM restore_witness").all()).toEqual([
+      { value: "baseline" },
+    ]);
+  });
+});
 
 it("rechecks authority after awaited snapshot verification before moving files", async () => {
   await withFixture(async (fixture) => {

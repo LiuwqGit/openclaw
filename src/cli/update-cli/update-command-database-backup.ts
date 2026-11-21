@@ -423,6 +423,7 @@ export async function restoreFailedUpdateDatabases(params: {
     return await refuse("Migration receipt belongs to a different database backup");
   }
   let liveMutationStarted = false;
+  const restoreWarningsBefore = params.backup.warnings.length;
   try {
     // Every restore path, including a settled Doctor failure before finalization,
     // must retain this run's matching recovery pair in the restored database.
@@ -457,6 +458,7 @@ export async function restoreFailedUpdateDatabases(params: {
       exitCode: 0,
       diagnostics: [
         `Restored pre-migration databases from ${params.backup.directory}.`,
+        ...params.backup.warnings.slice(restoreWarningsBefore),
         ...migratedPaths.map(
           (file) => `Migrated database file retained for manual recovery: ${file}`,
         ),

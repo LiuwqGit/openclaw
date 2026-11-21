@@ -274,6 +274,46 @@ function refuseUnsupportedFilesystem(options: SqliteWalMaintenanceOptions): neve
   );
 }
 
+/**
+ * Resolve the journal policy a restored SQLite database must return to. The
+ * filesystem owns the policy, not the snapshot's captured DELETE mode, so
+ * standalone snapshots restore back into WAL where the volume demands it.
+ */
+export function resolveRestoredSqliteJournalPolicy(options: {
+  databasePath: string;
+  databaseLabel?: string;
+}): "wal" | "rollback" {
+  const journalPolicy = resolvePathJournalPolicy(options.databasePath);
+  if (journalPolicy === "unsupported") {
+    refuseUnsupportedFilesystem(options);
+  }
+  return journalPolicy;
+}
+
+/**
+ * Reconcile a published restore output with its filesystem journal policy while
+ * the restore owner still holds exclusion. Verified snapshot bytes precede this
+ * step, so the journal change never bypasses the content check.
+ */
+export function reconcileRestoredSqliteJournalMode(
+  db: DatabaseSync,
+  journalPolicy: "wal" | "rollback",
+  options: SqliteWalMaintenanceOptions = {},
+): void {
+  if (options.busyTimeoutMs !== undefined) {
+    setSqliteBusyTimeout(db, options.busyTimeoutMs);
+  }
+  if (journalPolicy === "rollback") {
+    requireRollbackJournalMode(db, options);
+    return;
+  }
+  if (!enableWalJournalMode(db, options.busyTimeoutMs ?? 0, options)) {
+    const label = options.databaseLabel ?? "sqlite database";
+    const location = options.databasePath ? ` at ${options.databasePath}` : "";
+    throw new Error(`${label}${location} cannot use WAL after restore.`);
+  }
+}
+
 /** Configure safe journaling pragmas and return a handle for checkpoint/close maintenance. */
 export function configureSqliteWalMaintenance(
   db: DatabaseSync,

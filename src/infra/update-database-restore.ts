@@ -10,6 +10,7 @@ import { drainAgentDatabaseResources } from "../state/openclaw-agent-db-resource
 import { prepareOpenClawStateDatabaseRemoval } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
+import { resolveClientCredentialStorePath } from "./client-credential-paths.js";
 import {
   getPublishFileExclusiveFailureDetails,
   publishFileExclusive,
@@ -18,6 +19,7 @@ import {
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "./disk-space.js";
 import { ignoreMissingPath } from "./errno.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
 import {
   adoptPreparedLocation,
@@ -25,6 +27,10 @@ import {
 } from "./sqlite-readonly-location-cleanup.js";
 import { createSqliteSnapshotStagingDirectory } from "./sqlite-snapshot-staging.js";
 import { prepareVerifiedSqliteFile } from "./sqlite-snapshot.js";
+import {
+  reconcileRestoredSqliteJournalMode,
+  resolveRestoredSqliteJournalPolicy,
+} from "./sqlite-wal.js";
 import {
   parseUpdateStateInspectionWorker,
   runUpdateStateInspectionWorker,
@@ -152,6 +158,27 @@ export async function restoreUpdateDatabaseBackup(params: {
       [...new Set([...backup.sourcePaths, ...paths])],
       assertCurrent,
       async (assertOwned) => {
+        assertOwned();
+        // Resolve every SQLite restore target's journal policy before any live
+        // database, restore output, or PostgreSQL namespace changes; an
+        // unsupported volume refuses while the whole family is still untouched.
+        // The client credential store is not filesystem-policy-owned: its
+        // exclusive custody contract requires DELETE journal mode by design.
+        const credentialStorePath = resolveClientCredentialStorePath(params.env);
+        const journalPolicies = new Map<string, "wal" | "rollback">();
+        for (const entry of backup.databases) {
+          if (entry.engine === "postgres" || entry.path === credentialStorePath) {
+            continue;
+          }
+          journalPolicies.set(
+            entry.path,
+            resolveRestoredSqliteJournalPolicy({
+              databasePath: entry.path,
+              databaseLabel: "Restored database",
+            }),
+          );
+          assertOwned();
+        }
         if (params.expectedGenerations) {
           assertOwned();
           const generations = await readUpdateDatabaseGenerationsIsolated(paths, {
@@ -344,6 +371,34 @@ export async function restoreUpdateDatabaseBackup(params: {
           assertOwned();
           retainPreparedCopy = true;
           await output.publish();
+          assertOwned();
+        }
+        // Publication verified the snapshot bytes; restore each database's
+        // filesystem journal policy while exclusion still covers the family.
+        // Snapshots publish standalone DELETE files, and the next updater keeps
+        // reader connections that would otherwise block later WAL conversion.
+        for (const entry of sources) {
+          const journalPolicy = journalPolicies.get(entry.path);
+          if (journalPolicy === undefined) {
+            continue;
+          }
+          assertOwned();
+          let restored: ReturnType<typeof openNodeSqliteDatabase> | undefined;
+          try {
+            restored = openNodeSqliteDatabase(entry.path);
+            reconcileRestoredSqliteJournalMode(restored, journalPolicy, {
+              databasePath: entry.path,
+              databaseLabel: "Restored database",
+              busyTimeoutMs: 5_000,
+            });
+          } catch (error) {
+            // The restored data stays published; report the unreconciled mode
+            // instead of failing the completed rollback.
+            const message = error instanceof Error ? error.message : String(error);
+            backup.warnings.push(`Restored database kept its snapshot journal mode: ${message}`);
+          } finally {
+            restored?.close();
+          }
           assertOwned();
         }
         restoreClientCredentials?.();
