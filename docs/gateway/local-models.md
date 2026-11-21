@@ -350,7 +350,84 @@ Setup's connection check sends a short prompt without tools, so it can pass on a
 
 4. **Disable tools entirely as a last resort** by setting `models.providers.<provider>.models[].compat.supportsTools: false` for that model - the agent then runs without tool calls.
 
-5. **Inspect the failing request and server logs.** Check the chat template, context window, memory pressure, and server errors. A successful text-only check does not prove that the model can reliably complete a multi-step agent task.
+5. **Inspect the failing request and server logs.** Check the chat template, context window, memory pressure, and server errors. A successful text-only check does not prove that the model can reliably complete a multi-step agent task. To test that before making a model your default, run the [two-step tool task check](#verify-a-two-step-tool-task) below.
+
+## Verify a two-step tool task
+
+A model can pass both text-only checks and still fail real agent work: it emits a correct first tool call, receives the result, then stops instead of making the dependent second call. Use this recipe to test two-step tool use before making a local model your default. It runs entirely in a disposable workspace with a disposable config; nothing touches your ordinary setup.
+
+1. **Create two synthetic files** in a throwaway directory. `catalog.json` maps a name to a record file, and the record file holds an opaque value the model can only return by chaining both reads:
+
+   ```bash
+   mkdir -p /tmp/two-step-check && cd /tmp/two-step-check
+   echo '{"widget": {"recordFile": "record-42.json"}}' > catalog.json
+   echo '{"token": "ZB7-VERIFY-42"}' > record-42.json
+   ```
+
+2. **Pin a disposable config** that offers only `read`, with no fallback model, so a failure cannot be masked by another model or another tool. Save it as `/tmp/two-step-check/openclaw.json5` (replace the provider block with your local server's URL, API, and model ref):
+
+   ```json5
+   {
+     agents: {
+       defaults: {
+         model: { primary: "local/my-local-model", fallbacks: [] },
+       },
+     },
+     models: {
+       providers: {
+         local: {
+           baseUrl: "http://127.0.0.1:8080/v1",
+           apiKey: "sk-local",
+           models: [
+             {
+               id: "my-local-model",
+               name: "Local model under test",
+               input: ["text"],
+               cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+               contextWindow: 32768,
+               maxTokens: 2048,
+             },
+           ],
+         },
+       },
+     },
+     tools: {
+       allow: ["read"],
+       // `read` also permits skills_read; deny it so the run stays on the two files.
+       deny: ["skills_read"],
+       toolSearch: false,
+     },
+   }
+   ```
+
+3. **Run one isolated turn** with [`openclaw agent exec`](/cli/agent#agent-exec). `--config` pins exactly this file, `--cwd` scopes the agent and its filesystem tools to the fixture directory, and the temporary run state is removed afterwards:
+
+   ```bash
+   openclaw agent exec "Read catalog.json, find the record file for 'widget', read that file, and reply with only its token value." \
+     --cwd /tmp/two-step-check \
+     --config /tmp/two-step-check/openclaw.json5 \
+     --json
+   ```
+
+4. **Check the result.** A passing run returns the opaque token (`ZB7-VERIFY-42`) as the final text, and the JSON envelope shows both reads:
+
+   ```json
+   {
+     "ok": true,
+     "final": "ZB7-VERIFY-42",
+     "toolSummary": { "calls": 2, "tools": ["read"] }
+   }
+   ```
+
+   A run that stops after the first read returns prose instead of the token and shows `"calls": 1`.
+
+5. **Tell a transport problem from a model limit.** When the run stops after the first tool call, compare what OpenClaw received with what your local server logged:
+
+   - Capture OpenClaw's side with raw assistant-stream logging (`OPENCLAW_RAW_STREAM=1`; see [Raw stream logging](/help/debugging#raw-stream-logging)). Keep captures local and scrub secrets before sharing them.
+   - If the server log shows **no follow-up request carrying the first tool result**, the result never reached the server: suspect the chat template, tool-call parser, or a stream that closed mid-turn.
+   - If the server received the tool result and the assistant stream then **ended without a second tool call**, the model got the result and stopped: this is a model capability limit, not an OpenClaw or transport defect. Choose a stronger model, or keep this one for text-only turns.
+
+Delete the fixture directory when you are done.
 
 ## Output budgets and repetition stops
 
